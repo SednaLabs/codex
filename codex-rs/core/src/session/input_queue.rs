@@ -203,10 +203,8 @@ impl InputQueue {
             return;
         }
         let communication_count = communications.len();
-        self.mailbox_pending_mails
-            .lock()
-            .await
-            .extend(communications);
+        let mut pending = self.mailbox_pending_mails.lock().await;
+        pending.extend(communications);
         let mut sequences = self.mailbox_sequences.lock().await;
         sequences.extend(
             (0..communication_count)
@@ -312,7 +310,8 @@ impl InputQueue {
     }
 
     pub(crate) async fn drain_mailbox_communications(&self) -> Vec<InterAgentCommunication> {
-        let communications = self.mailbox_pending_mails.lock().await.drain(..).collect();
+        let mut pending = self.mailbox_pending_mails.lock().await;
+        let communications = pending.drain(..).collect();
         self.mailbox_sequences.lock().await.clear();
         communications
     }
