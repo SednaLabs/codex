@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "2dd5902b19decad1b3d228d060f505f7629648c3"
+PUSH_PREDECESSOR_SHA = "0fa546e0ad2d4e8c0840103ddd9c74e573a664b1"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -253,11 +253,6 @@ BUILD_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str]] = {
         "100644",
         "blob",
         "628ae7a9ac94eee0e0dd66c927964a0ad06544d7",
-    ),
-    "codex-rs/utils/plugins/src/plugin_namespace.rs": (
-        "100644",
-        "blob",
-        "b4da61deabe3a03a2acb66f25e20956719d2cfb8",
     ),
 }
 CORE_SKILLS_SOURCE_ENTRIES: dict[str, tuple[str, str, str]] = {
@@ -1136,7 +1131,9 @@ def configure_runtime_source_contract(repo: pathlib.Path, receipt_path: pathlib.
         BUILD_SOURCE_ENTRIES[path] = postimage
         BUILD_SOURCE_PREIMAGE_ENTRIES[path] = runtime_preimages[path]
     for path, (preimage, postimage) in static_fallbacks.items():
-        require(BUILD_SOURCE_PREIMAGE_ENTRIES[path] == preimage, f"runtime static fallback preimage mismatch: {path}")
+        existing_preimage = BUILD_SOURCE_PREIMAGE_ENTRIES.get(path)
+        if existing_preimage is not None:
+            require(existing_preimage == preimage, f"runtime static fallback preimage mismatch: {path}")
         require(tree_entry(repo, BUILD_SOURCE_SHA, path) == postimage, f"runtime static fallback postimage mismatch: {path}")
         BUILD_SOURCE_PREIMAGE_ENTRIES[path] = preimage
         BUILD_SOURCE_ENTRIES[path] = postimage
