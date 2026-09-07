@@ -891,10 +891,10 @@ mod tests {
     use codex_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
-    use codex_app_server_protocol::ThreadStartParams;
-    use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
     use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
+    use codex_app_server_protocol::ThreadStartParams;
+    use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnItemsView;
