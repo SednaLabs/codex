@@ -2,8 +2,11 @@ use core_test_support::test_codex::local_selections;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
 
 use codex_core::CodexThread;
+use codex_core::StartThreadOptions;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_extension_items::ExtensionItem;
 use codex_extension_items::sleep::SleepItem;
@@ -46,7 +49,27 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::from_slice;
 use serde_json::json;
+use std::io::Write;
 use tokio::sync::oneshot;
+use tracing::Level;
+use tracing_subscriber::fmt;
+
+#[derive(Clone)]
+struct NativeWaitLogWriter(Arc<Mutex<Vec<u8>>>);
+
+impl Write for NativeWaitLogWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| std::io::Error::other("trace buffer lock"))?
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
     serde_json::json!({
@@ -457,6 +480,131 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
     );
 
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_wait_rearms_without_intermediate_provider_request() {
+    const WAIT_CALL_ID: &str = "native-wait-call";
+    const INITIAL_PROMPT: &str = "wait natively for an agent";
+    const MULTI_AGENT_V2_NAMESPACE: &str = "agents";
+    const RENEWAL_MARKER: &str = "native_wait_lease_renewed call_id=native-wait-call";
+
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let writer_output = Arc::clone(&output);
+    let subscriber = fmt()
+        .with_ansi(false)
+        .with_max_level(Level::TRACE)
+        .with_writer(move || NativeWaitLogWriter(Arc::clone(&writer_output)))
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            config.multi_agent_v2.min_wait_timeout_ms = 1;
+            config.multi_agent_v2.max_wait_timeout_ms = 5;
+            config.multi_agent_v2.default_wait_timeout_ms = 5;
+        })
+        .build(&server)
+        .await
+        .expect("build Codex test session");
+    let target = test
+        .thread_manager
+        .start_thread(StartThreadOptions::new(test.config.clone()))
+        .await
+        .expect("start pending target thread");
+    let wait_args = serde_json::json!({
+        "targets": [target.thread_id.to_string()],
+        "timeout_ms": 5,
+        "native_event_wait": true,
+    })
+    .to_string();
+    responses::mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            String::from_utf8_lossy(&request.body).contains(INITIAL_PROMPT)
+        },
+        responses::sse(vec![
+            ev_response_created("native-resp-1"),
+            ev_function_call_with_namespace(
+                WAIT_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "wait_agent",
+                &wait_args,
+            ),
+            ev_completed("native-resp-1"),
+        ]),
+    )
+    .await;
+    responses::mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| String::from_utf8_lossy(&request.body).contains(WAIT_CALL_ID),
+        responses::sse(vec![
+            ev_response_created("native-resp-2"),
+            ev_completed("native-resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_user_input(&test.codex, INITIAL_PROMPT).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::CollabWaitingBegin(begin) if begin.call_id == WAIT_CALL_ID)
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let marker_count = String::from_utf8_lossy(&output.lock().expect("trace buffer"))
+                .matches(RENEWAL_MARKER)
+                .count();
+            if marker_count >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("native wait should emit two causal renewal markers");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("mock requests")
+            .len(),
+        1
+    );
+
+    target
+        .thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown should complete target wait");
+    let mut waiting_end_count = 0;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::CollabWaitingEnd(end) if end.call_id == WAIT_CALL_ID => {
+                waiting_end_count += 1;
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(waiting_end_count, 1);
+
+    let requests = server.received_requests().await.expect("mock requests");
+    assert_eq!(requests.len(), 2);
+    let second: Value = from_slice(&requests[1].body).expect("parse terminal request");
+    let output = function_call_output_text(&second, WAIT_CALL_ID).expect("wait output");
+    let output = serde_json::from_str::<Value>(output).expect("parse wait output");
+    assert_eq!(output.get("timed_out"), Some(&json!(false)));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

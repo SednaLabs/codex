@@ -262,6 +262,7 @@ impl Handler {
                 completion_rule,
                 &mut final_statuses,
                 wake_on_mailbox,
+                &call_id,
                 native_event_wait,
                 lease_timer_enabled(native_event_wait, timeout_ms),
                 Instant::now() + Duration::from_millis(timeout_ms as u64),
@@ -575,6 +576,7 @@ async fn wait_for_wake_source(
     completion_rule: CompletionRule,
     final_statuses: &mut HashMap<ThreadId, AgentStatus>,
     wake_on_mailbox: bool,
+    call_id: &str,
     native_event_wait: bool,
     lease_timer_enabled: bool,
     mut deadline: Instant,
@@ -710,6 +712,10 @@ async fn wait_for_wake_source(
             }
             _ = &mut timer => {
                 if native_event_wait {
+                    tracing::trace!(
+                        target: "codex.native_wait",
+                        "native_wait_lease_renewed call_id={call_id}"
+                    );
                     #[cfg(test)]
                     if let Some(observer) = lease_observer.as_deref_mut() {
                         observer();
@@ -756,6 +762,7 @@ mod tests {
                 CompletionRule::new(ReturnWhen::Any),
                 &mut final_statuses,
                 /*wake_on_mailbox*/ false,
+                "test-native-wait-call",
                 /*native_event_wait*/ true,
                 /*lease_timer_enabled*/ true,
                 Instant::now() + Duration::from_millis(5),
