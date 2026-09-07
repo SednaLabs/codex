@@ -385,8 +385,12 @@ async fn mailbox_notifications(session: &Session) -> Vec<AgentNotificationSummar
                     .chars()
                     .take(MAX_NOTIFICATION_PREVIEW_CHARS)
                     .collect::<String>();
-                let truncated =
-                    communication.content.chars().count() > MAX_NOTIFICATION_PREVIEW_CHARS;
+                let mut bounded = communication.content.chars();
+                let _ = bounded
+                    .by_ref()
+                    .take(MAX_NOTIFICATION_PREVIEW_CHARS)
+                    .count();
+                let truncated = bounded.next().is_some();
                 AgentNotificationContent::PlaintextPreview {
                     text: preview,
                     truncated,

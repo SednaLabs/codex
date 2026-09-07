@@ -1380,8 +1380,9 @@ pub enum AgentNotificationOrigin {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+#[ts(tag = "type")]
 pub enum AgentNotificationContent {
     PlaintextPreview { text: String, truncated: bool },
     SenderSummary { text: String, truncated: bool },

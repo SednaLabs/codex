@@ -222,10 +222,13 @@ impl InputQueue {
         }
         let mut pending = self.mailbox_pending_mails.lock().await;
         let mut sequences = self.mailbox_sequences.lock().await;
-        let queued = communications.into_iter().map(|communication| {
-            let sequence = self.next_mailbox_sequence.fetch_add(1, Ordering::Relaxed);
-            (communication, sequence)
-        });
+        let queued: Vec<_> = communications
+            .into_iter()
+            .map(|communication| {
+                let sequence = self.next_mailbox_sequence.fetch_add(1, Ordering::Relaxed);
+                (communication, sequence)
+            })
+            .collect();
         for (communication, sequence) in queued.rev() {
             pending.push_front(communication);
             sequences.push_front(sequence);
