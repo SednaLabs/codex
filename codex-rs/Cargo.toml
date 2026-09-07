@@ -94,7 +94,6 @@ members = [
     "process-hardening",
     "protocol",
     "realtime-webrtc",
-    "voice-host",
     "prompts",
     "rollout",
     "rollout-trace",
