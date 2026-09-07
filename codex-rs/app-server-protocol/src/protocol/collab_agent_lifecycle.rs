@@ -66,11 +66,13 @@ pub(crate) fn merge_collab_agent_lifecycle(
                 ThreadItem::CollabAgentToolCall {
                     prompt: terminal_prompt,
                     agents_states: terminal_agents_states,
+                    wake_notifications: None,
                     ..
                 },
                 ThreadItem::CollabAgentToolCall {
                     prompt: started_prompt,
                     agents_states: started_agents_states,
+                    wake_notifications: None,
                     ..
                 },
             ) = (&mut terminal, &incoming)

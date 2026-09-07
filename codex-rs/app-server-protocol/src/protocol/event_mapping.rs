@@ -95,6 +95,7 @@ pub fn item_event_to_server_notification(
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+                wake_notifications: None,
             };
             ServerNotification::ItemStarted(ItemStartedNotification {
                 thread_id,
@@ -167,6 +168,7 @@ pub fn item_event_to_server_notification(
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+                wake_notifications: None,
             };
             ServerNotification::ItemStarted(ItemStartedNotification {
                 thread_id,
@@ -199,6 +201,7 @@ pub fn item_event_to_server_notification(
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: [(receiver_id, received_status)].into_iter().collect(),
+                wake_notifications: None,
             };
             ServerNotification::ItemCompleted(ItemCompletedNotification {
                 thread_id,
@@ -243,6 +246,7 @@ pub fn item_event_to_server_notification(
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+                wake_notifications: None,
             };
             ServerNotification::ItemStarted(ItemStartedNotification {
                 thread_id,
@@ -311,6 +315,7 @@ pub fn item_event_to_server_notification(
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+                wake_notifications: None,
             };
             ServerNotification::ItemStarted(ItemStartedNotification {
                 thread_id,
@@ -371,6 +376,7 @@ pub fn item_event_to_server_notification(
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+                wake_notifications: None,
             };
             ServerNotification::ItemStarted(ItemStartedNotification {
                 thread_id,
@@ -635,6 +641,7 @@ mod tests {
                     effective_model: None,
                     effective_reasoning_effort: None,
                     agents_states: HashMap::new(),
+                    wake_notifications: None,
                 },
             },
         );
@@ -668,6 +675,7 @@ mod tests {
                     requested_model: Some(requested_model.clone()),
                     requested_reasoning_effort: Some(requested_reasoning_effort.clone()),
                     agents_states: HashMap::new(),
+                    wake_notifications: None,
                 }),
             }),
             "thread-phase-compatible",
@@ -719,6 +727,7 @@ mod tests {
                     agents_states: [(receiver_thread_id, AgentStatus::Completed(None))]
                         .into_iter()
                         .collect(),
+                    wake_notifications: None,
                 }),
             }),
             "thread-phase-compatible",
@@ -822,6 +831,7 @@ mod tests {
                         codex_protocol::openai_models::ReasoningEffort::High,
                     ),
                     agents_states: HashMap::new(),
+                    wake_notifications: None,
                 }),
             }),
             "thread-unknown-terminal",
@@ -898,6 +908,7 @@ mod tests {
                     )]
                     .into_iter()
                     .collect(),
+                    wake_notifications: None,
                 },
             },
         );
@@ -928,6 +939,7 @@ mod tests {
                 agents_states: [(receiver_thread_id, AgentStatus::Completed(None))]
                     .into_iter()
                     .collect(),
+                wake_notifications: None,
             }),
         };
 
@@ -977,6 +989,7 @@ mod tests {
                     )]
                     .into_iter()
                     .collect(),
+                    wake_notifications: None,
                 },
             },
         );
@@ -1010,6 +1023,7 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+                wake_notifications: None,
             }),
         };
 
@@ -1059,6 +1073,7 @@ mod tests {
                     )]
                     .into_iter()
                     .collect(),
+                    wake_notifications: None,
                 },
             },
         );
