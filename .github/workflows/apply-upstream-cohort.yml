@@ -455,7 +455,7 @@ jobs:
           path: ${{ runner.temp }}/w13825-sdk-input
           merge-multiple: true
 
-      - name: Probe exact SDK rmcp preimage
+      - name: Probe exact SDK code-mode preimage
         shell: bash
         run: |
           set -euo pipefail
