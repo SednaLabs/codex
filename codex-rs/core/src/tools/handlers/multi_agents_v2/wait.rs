@@ -541,6 +541,7 @@ async fn collect_current_wait_statuses(
     statuses
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn emit_wait_completion(
     session: &Session,
     turn: &TurnContext,

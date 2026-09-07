@@ -449,8 +449,10 @@ pub enum ThreadItem {
         agents_states: HashMap<String, CollabAgentState>,
         /// Safe mailbox notifications observed by a native wait.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional = false)]
         wake_notifications: Option<Vec<AgentNotificationSummary>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional = false)]
         completion_reason: Option<codex_protocol::protocol::CollabWaitingCompletionReason>,
     },
     #[serde(rename_all = "camelCase")]
