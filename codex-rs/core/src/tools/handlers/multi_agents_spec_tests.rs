@@ -427,7 +427,7 @@ fn followup_task_tool_requires_message_and_describes_model_receipt() {
     assert_eq!(name, "followup_task");
     assert_eq!(
         description,
-        "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
+        "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes. The receipt's effective_* identity fields describe the recipient agent named by target, never the sending agent."
     );
     assert_eq!(
         parameters.schema_type,
