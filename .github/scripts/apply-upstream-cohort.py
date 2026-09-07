@@ -2378,7 +2378,15 @@ def verify_build_source_checkout(repo: pathlib.Path) -> None:
     require(changed == BUILD_SOURCE_DIFF_PATHS, "build source diff is not the exact declared source cohort")
     require(path_digest(changed) == BUILD_SOURCE_DIFF_PATHS_SHA256, "build source diff path-set digest mismatch")
     for path, expected in OVERLAY_SOURCE_ENTRIES.items():
-        require(tree_entry(repo, BUILD_SOURCE_SHA, path) == expected, f"build source tuple mismatch: {path}")
+        source_entry = tree_entry(repo, BUILD_SOURCE_SHA, path)
+        if path == CODE_MODE_PROTOCOL_LIB_PATH:
+            require(
+                source_entry == CODE_MODE_PROTOCOL_LIB_BUILD_SOURCE,
+                f"code-mode compatibility source tuple mismatch: {path}",
+            )
+            require(code_mode_protocol_compatibility_bytes(repo), "empty code-mode compatibility output")
+        else:
+            require(source_entry == expected, f"build source tuple mismatch: {path}")
 
 
 def expected_sdk_dispositions(repo: pathlib.Path) -> list[dict[str, Any]]:
