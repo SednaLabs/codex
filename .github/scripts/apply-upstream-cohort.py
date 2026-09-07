@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "b77c115d523761426a1464f031714d6b189661d0"
+PUSH_PREDECESSOR_SHA = "2fa3066b6f7da924f4987693afd39a025d345fbb"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -79,13 +79,13 @@ COMMON_PROVENANCE_SHA256 = "afbf269c8593c978ed706c9f2fddc0031383350fe216d88512ec
 COMMON_STAGED_PATCH_SHA256 = "dd4b59d9be8c2727d08de673085b36a1c61f6cee617855f210706412a5bfc66c"
 COMMON_STAGED_PATHS_SHA256 = "90b44134bb538a07fa03dfd674e96f08de4ba04a40252f6dc9f5c740dd5bb1ae"
 
-BUILD_SOURCE_SHA = "5de836bbd93d4d62f01d7860d8bfed5d635b533c"
-BUILD_SOURCE_TREE = "954e3e5ab099d247a1b641d74d6df19154a4be9a"
-BUILD_SOURCE_PARENT = "b8c1a1a176d30bec1c9265cae3d36c66a5dd3841"
+BUILD_SOURCE_SHA = "b2d5fb6c7b63ad47375d61608f730dd62648ef43"
+BUILD_SOURCE_TREE = "f5f4837b2a58c2d50aa67eb620e5d1e3b630542c"
+BUILD_SOURCE_PARENT = "5de836bbd93d4d62f01d7860d8bfed5d635b533c"
 BUILD_SOURCE_BRANCH = "worker/w13825-build-source-authoring-20260907"
 VOICE_HOST_DEFERRAL_BASELINE_SHA = "22a0c45ee711dc5ce47847dc04cbc5e7e76507c0"
 VOICE_HOST_DEFERRAL_BASELINE_ROOT_ENTRY = ("100644", "blob", "7bd8c144e52b169b907928bcf743363949d12cb2")
-BUILD_PATHS_SHA256 = "52ef6b8ac2325fc482bf2e20fe09b1032ad671338d76272e2b9faa63085ce137"
+BUILD_PATHS_SHA256 = "791ff4dca00400de1fdc42f10c87158666558d82f1f3b254be6b2ebe59d64746"
 BUILD_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     ".github/workflows/bazel.yml": (
         "100644",
@@ -130,6 +130,7 @@ BUILD_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     "codex-rs/http-client/src/lib.rs": ("100644", "blob", "e200f61af40f4c8464d819cb8c4d017f85fcd4ba"),
     "codex-rs/http-client/src/tls_backend_fallback.rs": ("100644", "blob", "760df1824ad752fe8d4b5f3f2b0d0e3e848c0144"),
     "codex-rs/http-client/src/tls_backend_fallback_tests.rs": ("100644", "blob", "c7ca0adceb94a6729d8657c7a7feb4e066044f68"),
+    "codex-rs/network-proxy/src/proxy.rs": ("100644", "blob", "2ff3dcf97e0ba78632ff09af252dea235c501b4f"),
     "codex-rs/realtime-webrtc/BUILD.bazel": (
         "100644",
         "blob",
@@ -190,6 +191,7 @@ BUILD_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str]] = {
     "codex-rs/http-client/src/lib.rs": ("100644", "blob", "837d1dc27e2409f41d27c84a1cab638c71e47bbc"),
     "codex-rs/http-client/src/tls_backend_fallback.rs": ("100644", "blob", "760df1824ad752fe8d4b5f3f2b0d0e3e848c0144"),
     "codex-rs/http-client/src/tls_backend_fallback_tests.rs": ("100644", "blob", "c7ca0adceb94a6729d8657c7a7feb4e066044f68"),
+    "codex-rs/network-proxy/src/proxy.rs": ("100644", "blob", "7d823f480f3ea5787babfee2bf7d788b574c21c3"),
     "codex-rs/realtime-webrtc/BUILD.bazel": (
         "100644",
         "blob",
@@ -384,13 +386,13 @@ OVERLAY_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     }.items())
 )
 OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
-OVERLAY_PATHS_SHA256 = "b608dcd757e604dbdd7da294c074ac346d3801765c0f8a46c73e89b327987e7f"
+OVERLAY_PATHS_SHA256 = "6c744f580ea7e7e9e373f85f115bd56852ba9d130db56e39a796af4d607fda8a"
 OVERLAY_CHANGED_PATHS = [
     path
     for path in OVERLAY_PATHS
     if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]
 ]
-OVERLAY_CHANGED_PATHS_SHA256 = "5de67fc1154adfc0375de5e04a23dfef3e34c6229005fb56f1d57e2aa0fd6e70"
+OVERLAY_CHANGED_PATHS_SHA256 = "4d79f15ed15f1fe4298dd627ff3b9788354c614af06afcefbaeff8f2f9469645"
 
 PATCH_DEPENDENCIES: dict[str, tuple[str, str, str]] = {
     "patches/rules_rs_windows_msvc_linker.patch": (
@@ -839,7 +841,7 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
     changed = sorted([*operations["A"], *operations["M"], *operations["D"]])
     require(changed == OVERLAY_CHANGED_PATHS, "overlay changed path set mismatch")
     require(len(operations["A"]) == 36, "overlay addition count mismatch")
-    require(len(operations["M"]) == 12, "overlay modification count mismatch")
+    require(len(operations["M"]) == 13, "overlay modification count mismatch")
     require(not operations["D"], "unexpected current overlay deletion")
     require(len(operations["E"]) == 12, "overlay exact-retention count mismatch")
     return {
