@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "e016e6ba58424f9f223bd30946c3796251a34217"
+PUSH_PREDECESSOR_SHA = "3d48fa70e132f5fd1ff3b8b19f896c496a93af99"
 DIAGNOSTIC_TAIL_LINES = 80
 DIAGNOSTIC_LINE_LIMIT = 4096
 DIAGNOSTIC_BYTE_LIMIT = 131072
@@ -89,9 +89,9 @@ COMMON_PROVENANCE_SHA256 = "afbf269c8593c978ed706c9f2fddc0031383350fe216d88512ec
 COMMON_STAGED_PATCH_SHA256 = "dd4b59d9be8c2727d08de673085b36a1c61f6cee617855f210706412a5bfc66c"
 COMMON_STAGED_PATHS_SHA256 = "90b44134bb538a07fa03dfd674e96f08de4ba04a40252f6dc9f5c740dd5bb1ae"
 
-BUILD_SOURCE_SHA = "cb3c6b5abd9b08d93f38aec0a959703a5915c6dd"
-BUILD_SOURCE_TREE = "97459288bcebe0fbcff352778293d95ed79aeef1"
-BUILD_SOURCE_PARENT = "c56b0290e019a536da55cc4ae902ac4db55676c5"
+BUILD_SOURCE_SHA = "b1f542e7efa662eab4525c6d3673ffa655532412"
+BUILD_SOURCE_TREE = "c68eece6e8809ecd95e090bfb80af44b2720298f"
+BUILD_SOURCE_PARENT = "cb3c6b5abd9b08d93f38aec0a959703a5915c6dd"
 DIAGNOSTIC_PREDECESSOR_SOURCE_SHA = "b593ff0ba02ff08d0c44f6db95840c6cc59f0598"
 DIAGNOSTIC_PREDECESSOR_SOURCE_TREE = "8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47"
 DIAGNOSTIC_PREDECESSOR_SOURCE_PARENT = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
@@ -113,8 +113,18 @@ RUNTIME_SOURCE_STATIC_FALLBACK_POSTIMAGE = ("100644", "blob", "c00642ab13089e20e
 RUNTIME_SOURCE_PLUGIN_FALLBACK_PATH = "codex-rs/utils/plugins/src/plugin_namespace.rs"
 RUNTIME_SOURCE_PLUGIN_FALLBACK_PREIMAGE = ("100644", "blob", "b4da61deabe3a03a2acb66f25e20956719d2cfb8")
 RUNTIME_SOURCE_PLUGIN_FALLBACK_POSTIMAGE = ("100644", "blob", "b76739e9a8c4eef8132cb920d394e3651f0caf56")
-RUNTIME_SOURCE_UNION_PATH_COUNT = 165
-RUNTIME_SOURCE_UNION_PATH_SET_SHA256 = "4f388365ec4f785a71ebbf600e713166c33537940d6fcb7c9de79cea08b59e2f"
+RUNTIME_SOURCE_FALLBACK_ENTRIES = {
+    "codex-rs/model-provider/src/amazon_bedrock/mantle.rs": (("100644", "blob", "d9f9ac48848d7ca7456cffb78da839483e383d02"), ("100644", "blob", "df232a980cfc66c74acd566a36ff70ea5b59e3b6")),
+    "codex-rs/model-provider/src/amazon_bedrock/mod.rs": (("100644", "blob", "3ece38fc43b0dfb889c638dc05300b9a5be53177"), ("100644", "blob", "1240a0af277123bc6f9521e6d991e0247120054d")),
+    "codex-rs/model-provider/src/auth.rs": (("100644", "blob", "254ab92ce1077d3fb5bf10600dd2aaf3c265caa2"), ("100644", "blob", "ee987409acb21f60787436accedd624cded164bb")),
+    "codex-rs/model-provider/src/provider.rs": (("100644", "blob", "56e72362d5388db04b194b25f82fdae3ecfb081f"), ("100644", "blob", "60be34ec7332003ea5721298c862e3dff17acd5d")),
+    "codex-rs/rmcp-client/src/auth_status.rs": (("100644", "blob", "0db4b2fa0cf1bd45b48d0e23b0dbecfbccd9168c"), ("100644", "blob", "d7846f3925be3b0ed4722171d39aa385643a2f71")),
+    "codex-rs/rmcp-client/src/http_client_adapter.rs": (("100644", "blob", "56ffe6741341e146b5a625141a3438a2884bd602"), ("100644", "blob", "8bfc0e5524021ccc8afe5f16b723b7cf8ef3ffa0")),
+    "codex-rs/rmcp-client/src/oauth_http_client.rs": (("100644", "blob", "a3f23d4cf40d37ddcaf2b8874c6ae1d534a7f303"), ("100644", "blob", "ed35a924f7e1ffeb7f9d401aa06367145f96c184")),
+    "codex-rs/rmcp-client/src/stdio_server_launcher.rs": (("100644", "blob", "4a2c52a40fb03da30e0c2e2eb7293a918a0e0a6d"), ("100644", "blob", "604ae65f9feb0b96861543c4a06bf35052d70b53")),
+}
+RUNTIME_SOURCE_UNION_PATH_COUNT = 173
+RUNTIME_SOURCE_UNION_PATH_SET_SHA256 = "ac50592158931dbb392733924db62c0fdf05af1cec5e1dc66c65d89732251972"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID = "10021647248"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_NAME = "sdk-runtime-surfaces-preimage-diagnostic-34129864201-1"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_SIZE = 6658
@@ -303,52 +313,16 @@ CORE_SKILLS_EXACT_SHA256 = "6b58a39c530f7d9c02138d51e85860aec1b36892d806028d55f8
 
 BUILD_PATHS = list(BUILD_SOURCE_ENTRIES)
 BUILD_SOURCE_DIFF_PATHS = [
-    ".github/workflows/bazel.yml",
-    ".github/workflows/blob-size-policy.yml",
-    ".github/workflows/rust-ci-full.yml",
-    ".github/workflows/rust-ci.yml",
-    ".github/workflows/v8-canary.yml",
-    "MODULE.bazel",
-    "codex-rs/Cargo.lock",
-    "codex-rs/Cargo.toml",
-    "codex-rs/codex-api/src/endpoint/responses.rs",
-    "codex-rs/codex-api/src/sse/responses.rs",
-    "codex-rs/http-client/src/lib.rs",
-    "codex-rs/http-client/src/tls_backend_fallback.rs",
-    "codex-rs/http-client/src/tls_backend_fallback_tests.rs",
-    "codex-rs/network-proxy/src/proxy.rs",
-    "codex-rs/otel/src/events/session_telemetry.rs",
-    "codex-rs/otel/src/tool_result.rs",
-    "codex-rs/protocol/src/legacy_events.rs",
-    "codex-rs/realtime-webrtc/BUILD.bazel",
-    "codex-rs/sandboxing/BUILD.bazel",
-    "codex-rs/sandboxing/Cargo.toml",
-    "codex-rs/sandboxing/src/denial.rs",
-    "codex-rs/sandboxing/src/landlock.rs",
-    "codex-rs/sandboxing/src/landlock_tests.rs",
-    "codex-rs/sandboxing/src/lib.rs",
-    "codex-rs/sandboxing/src/manager.rs",
-    "codex-rs/sandboxing/src/manager_tests.rs",
-    "codex-rs/sandboxing/src/policy_transforms.rs",
-    "codex-rs/sandboxing/src/policy_transforms_tests.rs",
-    "codex-rs/sandboxing/src/restricted_read_only_platform_defaults.sbpl",
-    "codex-rs/sandboxing/src/seatbelt.rs",
-    "codex-rs/sandboxing/src/seatbelt_base_policy.sbpl",
-    "codex-rs/sandboxing/src/seatbelt_preferences_policy.sbpl",
-    "codex-rs/sandboxing/src/seatbelt_read_only_platform_defaults.sbpl",
-    "codex-rs/sandboxing/src/seatbelt_tests.rs",
-    "codex-rs/sandboxing/src/spawn.rs",
-    "codex-rs/sandboxing/src/terminal_queries.rs",
-    "codex-rs/sandboxing/src/terminal_queries_tests.rs",
-    "codex-rs/sandboxing/src/violation.rs",
-    "codex-rs/sandboxing/src/violation_tests.rs",
-    "codex-rs/sandboxing/src/windows.rs",
-    "codex-rs/sandboxing/src/windows_mxc.rs",
-    "codex-rs/websocket-client/src/lib.rs",
-    "patches/BUILD.bazel",
-    "third_party/v8/rusty_v8_150_4_0.sha256",
+    "codex-rs/model-provider/src/amazon_bedrock/mantle.rs",
+    "codex-rs/model-provider/src/amazon_bedrock/mod.rs",
+    "codex-rs/model-provider/src/auth.rs",
+    "codex-rs/model-provider/src/provider.rs",
+    "codex-rs/rmcp-client/src/auth_status.rs",
+    "codex-rs/rmcp-client/src/http_client_adapter.rs",
+    "codex-rs/rmcp-client/src/oauth_http_client.rs",
+    "codex-rs/rmcp-client/src/stdio_server_launcher.rs",
 ]
-BUILD_SOURCE_DIFF_PATHS_SHA256 = "297950d9003ea76efeee9a6c4dfea603c671a3d8a7fd4a22485e996d5c854b10"
+BUILD_SOURCE_DIFF_PATHS_SHA256 = "d071d48976e0d4f32f2d20e1ff8e7f5f02f14a78e95e4486b20eb5ed3cb0adf2"
 
 RESTORE_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     "codex-rs/config/src/profile_toml.rs": (
@@ -488,9 +462,9 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES["codex-rs/config/src/profile_toml.rs"] = (
 )
 RESTORE_SOURCE_ENTRIES.update({
     "codex-rs/model-provider/src/amazon_bedrock/catalog.rs": ("100644", "blob", "1d93f3f636de843b69c97ed9674336b0b46e32c0"),
-    "codex-rs/model-provider/src/amazon_bedrock/mantle.rs": ("100644", "blob", "d9f9ac48848d7ca7456cffb78da839483e383d02"),
-    "codex-rs/model-provider/src/auth.rs": ("100644", "blob", "254ab92ce1077d3fb5bf10600dd2aaf3c265caa2"),
-    "codex-rs/model-provider/src/provider.rs": ("100644", "blob", "56e72362d5388db04b194b25f82fdae3ecfb081f"),
+    "codex-rs/model-provider/src/amazon_bedrock/mantle.rs": ("100644", "blob", "df232a980cfc66c74acd566a36ff70ea5b59e3b6"),
+    "codex-rs/model-provider/src/auth.rs": ("100644", "blob", "ee987409acb21f60787436accedd624cded164bb"),
+    "codex-rs/model-provider/src/provider.rs": ("100644", "blob", "60be34ec7332003ea5721298c862e3dff17acd5d"),
     "codex-rs/models-manager/src/cache.rs": ("100644", "blob", "903f70b9b234569a24b37480d2ec74ac93eccd29"),
     "codex-rs/models-manager/src/model_info.rs": ("100644", "blob", "f8c2ee3ecc0dc3ba5ea01572be70c13830faab92"),
     "codex-rs/models-manager/src/manager.rs": ("100644", "blob", "a0a0348e4e509f1e2c5f7d1d0d83deda09ba572a"),
@@ -560,14 +534,14 @@ RESTORE_SOURCE_ENTRIES.update({
     'codex-rs/rmcp-client/src/oauth_callback_tests.rs': None,
     'codex-rs/rmcp-client/src/oauth_client_registration.rs': None,
     'codex-rs/rmcp-client/src/oauth_client_registration_tests.rs': None,
-    'codex-rs/rmcp-client/src/oauth_http_client.rs': ('100644', 'blob', 'a3f23d4cf40d37ddcaf2b8874c6ae1d534a7f303'),
+    'codex-rs/rmcp-client/src/oauth_http_client.rs': ('100644', 'blob', 'ed35a924f7e1ffeb7f9d401aa06367145f96c184'),
     'codex-rs/rmcp-client/src/oauth_http_client_security_tests.rs': None,
     'codex-rs/rmcp-client/src/oauth_refresh_mode.rs': None,
     'codex-rs/rmcp-client/src/perform_oauth_login.rs': ('100644', 'blob', 'd9019e28fa95d7afad1bd01643e4ec5baa4c5205'),
     'codex-rs/rmcp-client/src/program_resolver.rs': ('100644', 'blob', '395b330d7df6e150d0348279a00f971069907a84'),
     'codex-rs/rmcp-client/src/protocol_mode.rs': None,
     'codex-rs/rmcp-client/src/service_error.rs': None,
-    'codex-rs/rmcp-client/src/stdio_server_launcher.rs': ('100644', 'blob', '4a2c52a40fb03da30e0c2e2eb7293a918a0e0a6d'),
+    'codex-rs/rmcp-client/src/stdio_server_launcher.rs': ('100644', 'blob', '604ae65f9feb0b96861543c4a06bf35052d70b53'),
     'codex-rs/rmcp-client/tests/mcp_2026_discovery.rs': None,
     'codex-rs/rmcp-client/tests/mcp_2026_message_limits.rs': None,
     'codex-rs/rmcp-client/tests/mcp_2026_mrtr.rs': None,
@@ -691,7 +665,7 @@ RESTORE_SOURCE_ENTRIES = dict(sorted(RESTORE_SOURCE_ENTRIES.items()))
 RESTORE_SOURCE_PREIMAGE_ENTRIES = dict(sorted(RESTORE_SOURCE_PREIMAGE_ENTRIES.items()))
 RESTORE_PATHS = list(RESTORE_SOURCE_ENTRIES)
 RESTORE_PATHS_SHA256 = "74063c29a08f26250793f7850e02f3ad24e0fb5b8b807cd529d57fe16fca6f77"
-RESTORE_ENTRIES_SHA256 = "639d01807aadcfbc3a0576ec7c02c2e6fbd64e1642acd467e0c2247388025701"
+RESTORE_ENTRIES_SHA256 = "da66e12107e43b7fc1730705ae04005cef441b397cac3a77931648703f021dd3"
 
 OVERLAY_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items())
@@ -1329,6 +1303,7 @@ def configure_runtime_source_contract(repo: pathlib.Path, receipt_path: pathlib.
             RUNTIME_SOURCE_PLUGIN_FALLBACK_PREIMAGE,
             RUNTIME_SOURCE_PLUGIN_FALLBACK_POSTIMAGE,
         ),
+        **RUNTIME_SOURCE_FALLBACK_ENTRIES,
     }
     require(not set(paths) & set(static_fallbacks), "runtime-surface receipt unexpectedly contains static fallback path")
     union_paths = sorted(set(paths) | set(static_fallbacks))
