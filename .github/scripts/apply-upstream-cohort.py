@@ -1069,7 +1069,12 @@ def configure_runtime_source_contract(repo: pathlib.Path, receipt_path: pathlib.
     require(isinstance(provider, dict), "runtime-surface provider receipt is unavailable")
     require(provider.get("artifact_id") == SDK_INPUT_ARTIFACT_ID, "runtime-surface provider artifact mismatch")
     require(provider.get("artifact_digest") == f"sha256:{SDK_INPUT_ARCHIVE_SHA256}" and provider.get("run_id") == SDK_INPUT_RUN_ID, "runtime-surface provider identity mismatch")
-    require(provider.get("target_helper_sha") == TARGET_HELPER_SHA and provider.get("target_helper_tree") == TARGET_HELPER_TREE, "runtime-surface helper proof mismatch")
+    require(
+        provider.get("target_helper_sha") == TARGET_HELPER_SHA
+        and provider.get("target_helper_tree") == TARGET_HELPER_TREE
+        and provider.get("target_helper_parent") == TARGET_HELPER_PARENT,
+        "runtime-surface helper proof mismatch",
+    )
     paths = [entry.get("path") for entry in receipt.get("entries", [])]
     require(paths == sorted(paths) and len(paths) == RUNTIME_SURFACES_PREIMAGE_PATH_COUNT, "runtime-surface receipt path set mismatch")
     require(path_digest(paths) == RUNTIME_SURFACES_PREIMAGE_PATH_SET_SHA256, "runtime-surface receipt path digest mismatch")
