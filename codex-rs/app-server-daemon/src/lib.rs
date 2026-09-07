@@ -751,13 +751,9 @@ impl Daemon {
             if managed_release.sedna_auto_update.is_some() && updater_is_running {
                 #[cfg(unix)]
                 {
-                    let managed_identity =
-                        executable_identity(&managed_release.executable).await?;
+                    let managed_identity = executable_identity(&managed_release.executable).await?;
                     updater
-                        .is_running_from_executable(
-                            &managed_release.executable,
-                            &managed_identity,
-                        )
+                        .is_running_from_executable(&managed_release.executable, &managed_identity)
                         .await?
                 }
                 #[cfg(not(unix))]
