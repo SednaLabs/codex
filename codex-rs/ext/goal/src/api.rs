@@ -274,6 +274,9 @@ impl GoalService {
         if objective.is_some() {
             fill_empty_thread_preview_if_possible(state_db, thread_id, &goal).await;
         }
+        if let Some(runtime) = runtime.as_ref() {
+            runtime.invalidate_goal_notification();
+        }
         Ok(GoalSetOutcome {
             goal: protocol_goal_from_state(goal.clone()),
             state_goal: goal,
@@ -312,6 +315,9 @@ impl GoalService {
                 GoalServiceError::Internal(format!("failed to clear thread goal: {err}"))
             })?;
         let cleared = cleared_goal.is_some();
+        if let Some(runtime) = runtime.as_ref() {
+            runtime.invalidate_goal_notification();
+        }
         drop(goal_state_permit);
         drop(runtime);
 

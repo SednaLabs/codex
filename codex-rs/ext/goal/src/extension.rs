@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use codex_analytics::AnalyticsEventsClient;
+use codex_core::GoalNotificationStore;
 use codex_core::ThreadManager;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
@@ -116,6 +117,15 @@ where
             let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
                 return;
             };
+            let parent_thread_id = match input.session_source {
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id, ..
+                }) => Some(*parent_thread_id),
+                _ => None,
+            };
+            let notification_store = input
+                .thread_store
+                .get_or_init(GoalNotificationStore::default);
             let runtime = input.thread_store.get_or_init::<GoalRuntimeHandle>(|| {
                 GoalRuntimeHandle::new(
                     thread_id,
@@ -128,6 +138,8 @@ where
                         analytics: self.analytics.clone(),
                         enabled,
                         tools_available_for_thread,
+                        parent_thread_id,
+                        notification_store,
                     },
                 )
             });
@@ -207,6 +219,15 @@ where
                 return;
             }
 
+            let _goal_state_permit = if runtime.continuation_launch_in_progress() {
+                None
+            } else {
+                match runtime.goal_state_permit().await {
+                    Ok(permit) => Some(permit),
+                    Err(_) => return,
+                }
+            };
+
             if let Err(err) = self
                 .state_dbs
                 .thread_goals()
@@ -244,6 +265,7 @@ where
                         | codex_state::ThreadGoalStatus::BudgetLimited
                 )
             {
+                runtime.bind_goal_notification_turn(input.turn_store, input.turn_id, &goal.goal_id);
                 accounting.mark_turn_goal_active(input.turn_id, goal.goal_id);
             }
         })
@@ -258,7 +280,22 @@ where
                 return;
             }
 
+            let Ok(_goal_state_permit) = runtime.goal_state_permit().await else {
+                return;
+            };
+
             let turn_id = input.turn_store.level_id();
+            match self
+                .state_dbs
+                .thread_goals()
+                .get_thread_goal(runtime.thread_id())
+                .await
+            {
+                Ok(Some(goal)) => {
+                    runtime.publish_goal_notification_turn(input.turn_store, goal.status)
+                }
+                Ok(None) | Err(_) => runtime.invalidate_goal_notification(),
+            }
             if let Err(err) = runtime
                 .account_active_goal_progress(
                     turn_id,
@@ -271,9 +308,21 @@ where
                 tracing::warn!(
                     "failed to account active goal progress at turn stop for {turn_id}: {err}"
                 );
+                runtime.invalidate_goal_notification();
                 return;
             }
             runtime.accounting_state().finish_turn(turn_id);
+            match self
+                .state_dbs
+                .thread_goals()
+                .get_thread_goal(runtime.thread_id())
+                .await
+            {
+                Ok(Some(goal)) => {
+                    runtime.publish_goal_notification_turn(input.turn_store, goal.status)
+                }
+                Ok(None) | Err(_) => runtime.invalidate_goal_notification(),
+            }
         })
     }
 
@@ -287,6 +336,10 @@ where
             }
 
             let turn_id = input.turn_store.level_id();
+            runtime.publish_goal_notification_turn(
+                input.turn_store,
+                codex_state::ThreadGoalStatus::Blocked,
+            );
             if let Err(err) = runtime
                 .account_active_goal_progress(
                     turn_id,
@@ -302,6 +355,7 @@ where
                 return;
             }
             runtime.accounting_state().finish_turn(turn_id);
+            runtime.invalidate_goal_notification();
         })
     }
 
@@ -319,6 +373,10 @@ where
                 // with compaction errors.
                 _ => ActiveGoalStopReason::TurnError,
             };
+            runtime.publish_goal_notification_turn(
+                input.turn_store,
+                codex_state::ThreadGoalStatus::Blocked,
+            );
             if let Err(err) = runtime
                 .stop_active_goal_for_turn(input.turn_id, reason)
                 .await
@@ -436,6 +494,7 @@ where
                 self.analytics.clone(),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
+                Arc::clone(&runtime),
             )),
             Arc::new(GoalToolExecutor::create(
                 runtime.thread_id(),
@@ -444,6 +503,7 @@ where
                 self.analytics.clone(),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
+                Arc::clone(&runtime),
             )),
             Arc::new(GoalToolExecutor::update(
                 runtime.thread_id(),
@@ -452,6 +512,7 @@ where
                 self.analytics.clone(),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
+                Arc::clone(&runtime),
             )),
         ]
     }

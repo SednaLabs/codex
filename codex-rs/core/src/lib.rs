@@ -29,16 +29,17 @@ mod compact_remote;
 mod compact_remote_v2;
 mod compact_token_budget;
 mod config_lock;
+pub use agent::goal_notifications::{
+    GoalNotificationBinding, GoalNotificationClassification, GoalNotificationInput,
+    GoalNotificationPhase, GoalNotificationProjection, GoalNotificationSnapshot,
+    GoalNotificationStore, GoalNotificationTurnToken,
+};
 pub use codex_thread::BackgroundTerminalInfo;
 pub use codex_thread::CodexThread;
 pub use codex_thread::CodexThreadSettingsOverrides;
 pub use codex_thread::ThreadConfigSnapshot;
 pub use codex_thread::TryStartTurnIfIdleError;
 pub use codex_thread::TryStartTurnIfIdleRejectionReason;
-pub use agent::goal_notifications::{
-    GoalNotificationBinding, GoalNotificationClassification, GoalNotificationInput,
-    GoalNotificationPhase, GoalNotificationProjection, GoalNotificationSnapshot,
-};
 pub use codex_thread::automatic_turn_context_fingerprint;
 pub use session::turn_context::TurnContext;
 mod agent;

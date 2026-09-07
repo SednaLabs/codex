@@ -20,6 +20,7 @@ use crate::analytics::GoalAnalytics;
 use crate::analytics::GoalEventAttribution;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
+use crate::runtime::GoalRuntimeHandle;
 use crate::spec::CREATE_GOAL_TOOL_NAME;
 use crate::spec::GET_GOAL_TOOL_NAME;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
@@ -36,6 +37,7 @@ pub(crate) struct GoalToolExecutor {
     analytics: GoalAnalytics,
     event_emitter: GoalEventEmitter,
     metrics: GoalMetrics,
+    runtime: Arc<GoalRuntimeHandle>,
 }
 
 #[derive(Clone, Copy)]
@@ -80,6 +82,7 @@ impl GoalToolExecutor {
         analytics: GoalAnalytics,
         event_emitter: GoalEventEmitter,
         metrics: GoalMetrics,
+        runtime: Arc<GoalRuntimeHandle>,
     ) -> Self {
         Self {
             kind: GoalToolKind::Get,
@@ -89,6 +92,7 @@ impl GoalToolExecutor {
             analytics,
             event_emitter,
             metrics,
+            runtime,
         }
     }
 
@@ -99,6 +103,7 @@ impl GoalToolExecutor {
         analytics: GoalAnalytics,
         event_emitter: GoalEventEmitter,
         metrics: GoalMetrics,
+        runtime: Arc<GoalRuntimeHandle>,
     ) -> Self {
         Self {
             kind: GoalToolKind::Create,
@@ -108,6 +113,7 @@ impl GoalToolExecutor {
             analytics,
             event_emitter,
             metrics,
+            runtime,
         }
     }
 
@@ -118,6 +124,7 @@ impl GoalToolExecutor {
         analytics: GoalAnalytics,
         event_emitter: GoalEventEmitter,
         metrics: GoalMetrics,
+        runtime: Arc<GoalRuntimeHandle>,
     ) -> Self {
         Self {
             kind: GoalToolKind::Update,
@@ -127,6 +134,7 @@ impl GoalToolExecutor {
             analytics,
             event_emitter,
             metrics,
+            runtime,
         }
     }
 }
@@ -186,6 +194,11 @@ impl GoalToolExecutor {
         validate_thread_goal_objective(&request.objective)
             .map_err(FunctionCallError::RespondToModel)?;
         validate_goal_budget(request.token_budget).map_err(FunctionCallError::RespondToModel)?;
+        let _goal_state_permit = self
+            .runtime
+            .goal_state_permit()
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
 
         let goal = self
             .state_db
@@ -204,6 +217,7 @@ impl GoalToolExecutor {
                         .to_string(),
                 )
             })?;
+        self.runtime.invalidate_goal_notification();
         fill_empty_thread_preview_if_possible(self.state_db.as_ref(), self.thread_id, &goal).await;
         let turn_id = self
             .accounting_state
@@ -232,6 +246,11 @@ impl GoalToolExecutor {
                     .to_string(),
             ));
         }
+        let _goal_state_permit = self
+            .runtime
+            .goal_state_permit()
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
 
         self.account_active_goal_progress(
             match args.status {
@@ -270,6 +289,7 @@ impl GoalToolExecutor {
                     "cannot update goal because this thread has no goal".to_string(),
                 )
             })?;
+        self.runtime.invalidate_goal_notification();
         self.metrics
             .record_terminal_if_status_changed(previous_status, &goal);
         self.analytics.status_changed(
