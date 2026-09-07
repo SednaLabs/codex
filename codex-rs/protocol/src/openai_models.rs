@@ -820,9 +820,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.models[0].base_instructions, template);
-        assert_eq!(response.models[0].get_model_instructions(None), template);
+        assert_eq!(
+            response.models[0].get_model_instructions(/*personality*/ None),
+            template
+        );
         assert_eq!(response.models[1].base_instructions, "base");
-        assert_eq!(response.models[1].get_model_instructions(None), "base");
+        assert_eq!(
+            response.models[1].get_model_instructions(/*personality*/ None),
+            "base"
+        );
     }
 
     #[test]
@@ -837,7 +843,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(response.models[0].base_instructions, "base");
-        assert_eq!(response.models[0].get_model_instructions(None), "canonical");
+        assert_eq!(
+            response.models[0].get_model_instructions(/*personality*/ None),
+            "canonical"
+        );
 
         let mut fallback = serde_json::to_value(test_model(/*spec*/ None)).unwrap();
         fallback["model_messages"] = serde_json::json!({
@@ -850,7 +859,7 @@ mod tests {
         .unwrap();
         assert_eq!(fallback_response.models[0].base_instructions, "base");
         assert_eq!(
-            fallback_response.models[0].get_model_instructions(None),
+            fallback_response.models[0].get_model_instructions(/*personality*/ None),
             "base"
         );
 
