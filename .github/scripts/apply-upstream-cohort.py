@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "2fb74ea615cccbc67e3721c740608bb2dd4578d9"
+PUSH_PREDECESSOR_SHA = "ebca2375b526b90ef84c827bbf3714e0b7701340"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -68,10 +68,10 @@ SDK_INPUT_RECEIPT_SHA256 = "811992f09b22f610b8ab01983a01da0950ed090931813c67e91f
 SDK_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
 SDK_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
 SDK_CANDIDATE_PARENT = MATERIALIZED_SHA
-DIAGNOSTIC_SOURCE_SHA = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
-DIAGNOSTIC_SOURCE_TREE = "1179ce52f138e92e2aedfdeffc31d28f29992000"
-DIAGNOSTIC_SOURCE_PARENT = "5628fffa86a9e9a7dcc0cfd8d18f4cc09906ad39"
-DIAGNOSTIC_HELPER_SHA = "809f0c9c5ddf1da876a99c028e7f36bb7277283b"
+DIAGNOSTIC_SOURCE_SHA = "b593ff0ba02ff08d0c44f6db95840c6cc59f0598"
+DIAGNOSTIC_SOURCE_TREE = "8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47"
+DIAGNOSTIC_SOURCE_PARENT = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
+DIAGNOSTIC_HELPER_SHA = "80e0e192172f9fc998a635915f17a6011af6cbd6"
 
 COMMON_SOURCE_RUN_ID = "34035744523"
 COMMON_SOURCE_RUN_ATTEMPT = "1"
@@ -461,10 +461,32 @@ GENERATED_PATHS = [
 SDK_GENERATED_PATHS = GENERATED_PATHS[3:]
 SDK_BUNDLE_PROBE_PATHS = sorted(
     [
-        "codex-rs/config/src/profile_toml.rs",
+        "codex-rs/sandboxing/BUILD.bazel",
+        "codex-rs/sandboxing/Cargo.toml",
+        "codex-rs/sandboxing/src/denial.rs",
+        "codex-rs/sandboxing/src/landlock.rs",
+        "codex-rs/sandboxing/src/landlock_tests.rs",
+        "codex-rs/sandboxing/src/lib.rs",
+        "codex-rs/sandboxing/src/manager.rs",
+        "codex-rs/sandboxing/src/manager_tests.rs",
+        "codex-rs/sandboxing/src/policy_transforms.rs",
+        "codex-rs/sandboxing/src/policy_transforms_tests.rs",
+        "codex-rs/sandboxing/src/restricted_read_only_platform_defaults.sbpl",
+        "codex-rs/sandboxing/src/seatbelt.rs",
+        "codex-rs/sandboxing/src/seatbelt_base_policy.sbpl",
+        "codex-rs/sandboxing/src/seatbelt_preferences_policy.sbpl",
+        "codex-rs/sandboxing/src/seatbelt_read_only_platform_defaults.sbpl",
+        "codex-rs/sandboxing/src/seatbelt_tests.rs",
+        "codex-rs/sandboxing/src/spawn.rs",
+        "codex-rs/sandboxing/src/terminal_queries.rs",
+        "codex-rs/sandboxing/src/terminal_queries_tests.rs",
+        "codex-rs/sandboxing/src/violation.rs",
+        "codex-rs/sandboxing/src/violation_tests.rs",
+        "codex-rs/sandboxing/src/windows.rs",
+        "codex-rs/sandboxing/src/windows_mxc.rs",
     ]
 )
-SDK_BUNDLE_PROBE_PATHS_SHA256 = "d895dc944ef4b5032bb157f441aea02cdb3833cdd1aba088c890096dcaa75449"
+SDK_BUNDLE_PROBE_PATHS_SHA256 = "017139984c58749594a88c98b0e409fc0781741499cb3749b5037874b1f3b3ac"
 SDK_BUNDLE_ROUTE_WITNESS = ("100644", "blob", "29705e44eb66f235adee5a8932264ee778f98ced")
 ALLOWED_MUTABLE_PATHS = sorted(set(OVERLAY_CHANGED_PATHS) | set(GENERATED_PATHS))
 
@@ -2250,7 +2272,7 @@ def emit_sdk_bundle_path_receipt(repo: pathlib.Path, diagnostics: pathlib.Path) 
     return receipt
 
 
-def emit_codex_api_preimage_receipt(
+def emit_sandboxing_preimage_receipt(
     repo: pathlib.Path,
     output: pathlib.Path,
     provider_receipt: pathlib.Path,
@@ -2258,7 +2280,7 @@ def emit_codex_api_preimage_receipt(
     workflow_tree: str,
 ) -> dict[str, Any]:
     require(SDK_BUNDLE_PROBE_PATHS == sorted(SDK_BUNDLE_PROBE_PATHS), "diagnostic paths are not sorted")
-    require(len(SDK_BUNDLE_PROBE_PATHS) == 1, "diagnostic path scope is not exactly one path")
+    require(len(SDK_BUNDLE_PROBE_PATHS) == 23, "diagnostic path scope is not exactly 23 paths")
     require(path_digest(SDK_BUNDLE_PROBE_PATHS) == SDK_BUNDLE_PROBE_PATHS_SHA256, "diagnostic path-set digest mismatch")
     entries = [
         {"path": path, "entry": tuple_json(tree_entry(repo, SDK_CANDIDATE_SHA, path))}
@@ -2266,7 +2288,7 @@ def emit_codex_api_preimage_receipt(
     ]
     require(all(item["entry"] is not None for item in entries), "diagnostic path is missing")
     receipt = {
-        "schema": "sdk-config-preimage-diagnostic",
+        "schema": "sdk-sandboxing-preimage-diagnostic",
         "version": 1,
         "repository": REPOSITORY,
         "workflow_sha": workflow_sha,
@@ -3483,7 +3505,7 @@ def main() -> None:
             import_sdk_bundle(repo, files["bundle"], temp)
             verify_imported_sdk_objects(repo)
         output = absolute_argument(args.output_dir, "output-dir", must_exist=False)
-        emission = emit_codex_api_preimage_receipt(
+        emission = emit_sandboxing_preimage_receipt(
             repo,
             output,
             provider_receipt,
