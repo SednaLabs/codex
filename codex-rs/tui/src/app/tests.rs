@@ -1815,6 +1815,42 @@ async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Res
 }
 
 #[tokio::test]
+async fn replayed_root_activity_registers_native_v2_descendant() {
+    let mut app = make_test_app().await;
+    let primary_thread_id = ThreadId::new();
+    let child_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(primary_thread_id);
+    app.active_thread_id = Some(primary_thread_id);
+
+    app.handle_thread_event_replay(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: primary_thread_id.to_string(),
+            turn_id: "turn-replay".to_string(),
+            started_at_ms: 0,
+            item: ThreadItem::SubAgentActivity {
+                id: "activity-replay".to_string(),
+                kind: codex_app_server_protocol::SubAgentActivityKind::Started,
+                agent_thread_id: child_thread_id.to_string(),
+                agent_path: "/root/restarted-child".to_string(),
+                model: None,
+                reasoning_effort: None,
+            },
+        }),
+    ));
+
+    assert_eq!(
+        app.agent_navigation
+            .get(&child_thread_id)
+            .and_then(|entry| entry.agent_path.as_deref()),
+        Some("/root/restarted-child")
+    );
+    assert!(app
+        .agent_navigation
+        .get(&child_thread_id)
+        .is_some_and(|entry| entry.is_running && !entry.is_closed));
+}
+
+#[tokio::test]
 async fn open_agent_picker_preserves_running_hints_until_observed_completion() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(

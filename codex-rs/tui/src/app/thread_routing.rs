@@ -1663,9 +1663,15 @@ impl App {
 
     pub(super) fn handle_thread_event_replay(&mut self, event: ThreadBufferedEvent) {
         match event {
-            ThreadBufferedEvent::Notification(notification) => self
-                .chat_widget
-                .handle_server_notification(notification, Some(ReplayKind::ThreadSnapshot)),
+            ThreadBufferedEvent::Notification(notification) => {
+                // Replay is the first view of a resumed root thread after a restart.  Register
+                // embedded native-V2 activity before rendering it; live delivery does the same
+                // in `handle_thread_event_now`, and omitting it here leaves `/agent` with no
+                // path-backed descendant even though the snapshot contains one.
+                self.cache_collab_receiver_threads_for_notification(&notification);
+                self.chat_widget
+                    .handle_server_notification(notification, Some(ReplayKind::ThreadSnapshot));
+            }
             ThreadBufferedEvent::Request(request) => self
                 .chat_widget
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
