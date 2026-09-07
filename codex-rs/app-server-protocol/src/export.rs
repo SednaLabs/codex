@@ -2162,6 +2162,7 @@ mod tests {
     use anyhow::Result;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeSet;
+    use std::collections::HashMap;
     use std::path::Path;
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -2433,6 +2434,70 @@ mod tests {
             "Generated TypeScript has optional nullable fields outside *Params types (disallowed '?: T | null'):\n{optional_nullable_offenders:?}"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn collab_wait_required_nullable_contract_is_consistent() -> Result<()> {
+        let item = v2::ThreadItem::CollabAgentToolCall {
+            id: "call-wait".to_string(),
+            tool: v2::CollabAgentTool::Wait,
+            status: v2::CollabAgentToolCallStatus::Completed,
+            sender_thread_id: "sender".to_string(),
+            receiver_thread_ids: Vec::new(),
+            prompt: None,
+            model: None,
+            reasoning_effort: None,
+            requested_model: None,
+            requested_reasoning_effort: None,
+            effective_model: None,
+            effective_reasoning_effort: None,
+            agents_states: HashMap::new(),
+            wake_notifications: None,
+            completion_reason: None,
+        };
+        let wire = serde_json::to_value(item)?;
+        assert_eq!(wire["wakeNotifications"], Value::Null);
+        assert_eq!(wire["completionReason"], Value::Null);
+
+        let schema_root = schema_root()?;
+        let bundle =
+            read_json_value(&schema_root.join("json/codex_app_server_protocol.v2.schemas.json"))?;
+        let thread_item = &bundle["definitions"]["ThreadItem"];
+        let collab = thread_item["oneOf"]
+            .as_array()
+            .and_then(|variants| {
+                variants
+                    .iter()
+                    .find(|variant| variant["properties"]["type"]["const"] == "collabAgentToolCall")
+            })
+            .context("collabAgentToolCall schema variant should exist")?;
+        let required = collab["required"]
+            .as_array()
+            .context("collab schema required list should exist")?;
+        assert!(required.iter().any(|field| field == "wakeNotifications"));
+        assert!(required.iter().any(|field| field == "completionReason"));
+        assert!(
+            collab["properties"]["wakeNotifications"]["type"]
+                .as_array()
+                .is_some_and(|types| types.iter().any(|ty| ty == "null"))
+        );
+        assert!(
+            collab["properties"]["completionReason"]["anyOf"]
+                .as_array()
+                .is_some_and(|variants| variants.iter().any(|variant| variant["type"] == "null"))
+        );
+
+        let thread_item_ts = std::str::from_utf8(
+            &read_schema_fixture_subtree(&schema_root, "typescript")?
+                [Path::new("v2/ThreadItem.ts")],
+        )?;
+        assert!(!thread_item_ts.contains("wakeNotifications?:"));
+        assert!(!thread_item_ts.contains("completionReason?:"));
+        assert!(
+            thread_item_ts.contains("wakeNotifications: Array<AgentNotificationSummary> | null")
+        );
+        assert!(thread_item_ts.contains("completionReason: CollabWaitingCompletionReason | null"));
         Ok(())
     }
 

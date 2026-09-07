@@ -94,6 +94,38 @@ impl JsonSchema for RequiredNullableReasoningEffortSchema {
     }
 }
 
+struct RequiredNullableAgentNotificationSummarySchema;
+
+impl JsonSchema for RequiredNullableAgentNotificationSummarySchema {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> Cow<'static, str> {
+        "RequiredNullableAgentNotificationSummary".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        Option::<Vec<AgentNotificationSummary>>::json_schema(generator)
+    }
+}
+
+struct RequiredNullableCompletionReasonSchema;
+
+impl JsonSchema for RequiredNullableCompletionReasonSchema {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> Cow<'static, str> {
+        "RequiredNullableCompletionReason".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        Option::<codex_protocol::protocol::CollabWaitingCompletionReason>::json_schema(generator)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -449,12 +481,12 @@ pub enum ThreadItem {
         agents_states: HashMap<String, CollabAgentState>,
         /// Safe mailbox notifications observed by a native wait.
         #[serde(default)]
-        #[schemars(with = "Option<Vec<AgentNotificationSummary>>", !default)]
+        #[schemars(with = "RequiredNullableAgentNotificationSummarySchema", !default)]
         #[ts(optional = false)]
         wake_notifications: Option<Vec<AgentNotificationSummary>>,
         #[serde(default)]
         #[schemars(
-            with = "Option<codex_protocol::protocol::CollabWaitingCompletionReason>",
+            with = "RequiredNullableCompletionReasonSchema",
             !default
         )]
         #[ts(optional = false)]
