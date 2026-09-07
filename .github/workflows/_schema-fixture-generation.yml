@@ -1,0 +1,76 @@
+name: _schema-fixture-generation
+
+on:
+  push:
+    branches:
+      - repair/w13867-mailbox-visibility
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: Generate app-server schema fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CANDIDATE_REF: 820a38b57d742e80b779bef4b74650a126c9a683
+      BASE_REF: 324b985697f7429b4eb6375120e4e0d32951d753
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.CANDIDATE_REF }}
+          fetch-depth: 0
+      - name: Verify exact candidate and base inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_REF" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "$BASE_REF" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$(printf '%s' "$CANDIDATE_REF" | tr '[:upper:]' '[:lower:]')"
+          git cat-file -e "$BASE_REF^{commit}"
+      - name: Install just
+        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
+        with:
+          tool: just
+      - name: Generate schema fixtures
+        shell: bash
+        run: just write-app-server-schema
+      - name: Collect generated schema changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          schema_root='codex-rs/app-server-protocol/schema'
+          artifact_root="$RUNNER_TEMP/schema-fixture-artifact"
+          rm -rf "$artifact_root"
+          mkdir -p "$artifact_root"
+          mapfile -t changed_paths < <(
+            {
+              git diff --name-only "$BASE_REF" -- "$schema_root"
+              git ls-files --others --exclude-standard -- "$schema_root"
+            } | sort -u
+          )
+          mapfile -t all_changes < <(git status --porcelain=v1 | sed -E 's/^.. //')
+          for path in "${all_changes[@]}"; do
+            [[ "$path" == "$schema_root"/* ]] || { echo "unexpected change: $path" >&2; exit 1; }
+          done
+          ((${#changed_paths[@]} > 0)) || { echo 'no generated schema changes' >&2; exit 1; }
+          for path in "${changed_paths[@]}"; do
+            [[ "$path" == "$schema_root"/* ]] || { echo "artifact path escaped schema subtree: $path" >&2; exit 1; }
+            mkdir -p "$artifact_root/$(dirname "$path")"
+            cp -- "$path" "$artifact_root/$path"
+          done
+          {
+            printf 'repository=%s\n' "$(git remote get-url origin)"
+            printf 'head=%s\n' "$(git rev-parse HEAD)"
+            printf 'base=%s\n' "$(git rev-parse "$BASE_REF^{commit}")"
+            printf 'command=just write-app-server-schema\npaths:\n'
+            printf '  %s\n' "${changed_paths[@]}"
+          } > "$artifact_root/manifest.txt"
+      - name: Upload generated schema fixtures
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: app-server-schema-fixtures-${{ env.CANDIDATE_REF }}
+          path: ${{ runner.temp }}/schema-fixture-artifact
+          if-no-files-found: error
