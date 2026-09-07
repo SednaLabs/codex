@@ -224,9 +224,13 @@ impl InputQueue {
         }
         let mut pending = self.mailbox_pending_mails.lock().await;
         let mut sequences = self.mailbox_sequences.lock().await;
-        for communication in communications.into_iter().rev() {
+        let queued = communications.into_iter().map(|communication| {
+            let sequence = self.next_mailbox_sequence.fetch_add(1, Ordering::Relaxed);
+            (communication, sequence)
+        });
+        for (communication, sequence) in queued.rev() {
             pending.push_front(communication);
-            sequences.push_front(self.next_mailbox_sequence.fetch_add(1, Ordering::Relaxed));
+            sequences.push_front(sequence);
         }
         drop(pending);
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
