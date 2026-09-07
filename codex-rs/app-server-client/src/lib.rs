@@ -2690,17 +2690,26 @@ mod tests {
         })
         .await
         .unwrap();
-        timeout(Duration::from_secs(1), client._test_pending_required_event.notified())
-            .await
-            .expect("second required event should enter custody");
+        timeout(
+            Duration::from_secs(1),
+            client._test_pending_required_event.notified(),
+        )
+        .await
+        .expect("second required event should enter custody");
         let request_handle = client.request_handle();
         let request_task = tokio::spawn(async move {
             request_handle
-                .request_typed::<GetAccountResponse>(remote_get_account_request(92))
+                .request_typed::<GetAccountResponse>(remote_get_account_request(
+                    /*request_id*/ 92,
+                ))
                 .await
         });
-        assert!(matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued"));
-        assert!(matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "pending"));
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued")
+        );
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "pending")
+        );
         let request = timeout(Duration::from_secs(1), request_task)
             .await
             .expect("request control should remain responsive")
@@ -2729,15 +2738,18 @@ mod tests {
             let _ = websocket.next().await;
         })
         .await;
-        let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+        let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
             channel_capacity: 1,
             ..test_remote_connect_args(websocket_url)
         })
         .await
         .unwrap();
-        timeout(Duration::from_secs(1), client._test_pending_required_event.notified())
-            .await
-            .expect("second required event should enter custody");
+        timeout(
+            Duration::from_secs(1),
+            client._test_pending_required_event.notified(),
+        )
+        .await
+        .expect("second required event should enter custody");
         timeout(Duration::from_secs(1), client.shutdown())
             .await
             .expect("shutdown should not wait for pending event")
@@ -2768,21 +2780,30 @@ mod tests {
         })
         .await
         .unwrap();
-        timeout(Duration::from_secs(1), client._test_pending_required_event.notified())
-            .await
-            .expect("second required event should enter custody");
+        timeout(
+            Duration::from_secs(1),
+            client._test_pending_required_event.notified(),
+        )
+        .await
+        .expect("second required event should enter custody");
         client.close_stream_for_test().await.unwrap();
         let request_error = timeout(
             Duration::from_secs(1),
-            client.request(remote_get_account_request(93)),
+            client.request(remote_get_account_request(/*request_id*/ 93)),
         )
         .await
         .expect("failed request write should settle promptly")
         .expect_err("request should receive terminal transport error");
         assert_eq!(request_error.kind(), ErrorKind::BrokenPipe);
-        assert!(matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued"));
-        assert!(matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "pending"));
-        assert!(matches!(client.next_event().await, Some(AppServerEvent::Disconnected { message }) if message.contains("write failed")));
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued")
+        );
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "pending")
+        );
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::Disconnected { message }) if message.contains("write failed"))
+        );
         client.shutdown().await.unwrap();
     }
 
@@ -2794,8 +2815,7 @@ mod tests {
                 &mut websocket,
                 JSONRPCMessage::Notification(
                     serde_json::from_value(
-                        serde_json::to_value(remote_thread_closed_notification("queued"))
-                            .unwrap(),
+                        serde_json::to_value(remote_thread_closed_notification("queued")).unwrap(),
                     )
                     .unwrap(),
                 ),
@@ -2805,8 +2825,10 @@ mod tests {
                 &mut websocket,
                 JSONRPCMessage::Notification(
                     serde_json::from_value(
-                        serde_json::to_value(command_execution_output_delta_notification("dropped"))
-                            .unwrap(),
+                        serde_json::to_value(command_execution_output_delta_notification(
+                            "dropped",
+                        ))
+                        .unwrap(),
                     )
                     .unwrap(),
                 ),
@@ -2827,15 +2849,23 @@ mod tests {
         client.close_stream_for_test().await.unwrap();
         let request_error = timeout(
             Duration::from_secs(1),
-            client.request(remote_get_account_request(94)),
+            client.request(remote_get_account_request(/*request_id*/ 94)),
         )
         .await
         .expect("failed request write should settle promptly")
         .expect_err("request should receive terminal transport error");
         assert_eq!(request_error.kind(), ErrorKind::BrokenPipe);
-        assert!(matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued"));
-        assert!(matches!(client.next_event().await, Some(AppServerEvent::Lagged { skipped: 1 })));
-        assert!(matches!(client.next_event().await, Some(AppServerEvent::Disconnected { .. })));
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued")
+        );
+        assert!(matches!(
+            client.next_event().await,
+            Some(AppServerEvent::Lagged { skipped: 1 })
+        ));
+        assert!(matches!(
+            client.next_event().await,
+            Some(AppServerEvent::Disconnected { .. })
+        ));
         client.shutdown().await.unwrap();
     }
 

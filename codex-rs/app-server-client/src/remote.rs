@@ -76,7 +76,11 @@ const INBOUND_SERVER_REQUEST_ID_ENTRY_OVERHEAD_BYTES: usize = 256;
 const UDS_WEBSOCKET_HANDSHAKE_URL: &str = "ws://localhost/rpc";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InboundServerRequestState { Pending, Responded, Rejected }
+enum InboundServerRequestState {
+    Pending,
+    Responded,
+    Rejected,
+}
 
 #[derive(Debug)]
 struct InboundServerRequestLedger {
@@ -87,30 +91,81 @@ struct InboundServerRequestLedger {
 
 impl InboundServerRequestLedger {
     fn new(channel_capacity: usize) -> Self {
-        let max_entries = channel_capacity.saturating_mul(4).clamp(1, MAX_INBOUND_SERVER_REQUEST_IDS);
-        Self { entries: HashMap::with_capacity(max_entries), retained_string_id_bytes: 0, max_entries }
+        let max_entries = channel_capacity
+            .saturating_mul(4)
+            .clamp(1, MAX_INBOUND_SERVER_REQUEST_IDS);
+        Self {
+            entries: HashMap::with_capacity(max_entries),
+            retained_string_id_bytes: 0,
+            max_entries,
+        }
     }
     fn claim(&mut self, request_id: &RequestId) -> IoResult<()> {
-        if self.entries.contains_key(request_id) { return Err(IoError::new(ErrorKind::InvalidData, "duplicate inbound server request ID on this connection")); }
-        if self.entries.len() >= self.max_entries { return Err(IoError::new(ErrorKind::InvalidData, "inbound server request ID ledger is exhausted")); }
+        if self.entries.contains_key(request_id) {
+            return Err(IoError::new(
+                ErrorKind::InvalidData,
+                "duplicate inbound server request ID on this connection",
+            ));
+        }
+        if self.entries.len() >= self.max_entries {
+            return Err(IoError::new(
+                ErrorKind::InvalidData,
+                "inbound server request ID ledger is exhausted",
+            ));
+        }
         if let RequestId::String(value) = request_id {
-            if value.len() > MAX_INBOUND_SERVER_REQUEST_ID_STRING_BYTES { return Err(IoError::new(ErrorKind::InvalidData, format!("inbound server request ID is longer than {MAX_INBOUND_SERVER_REQUEST_ID_STRING_BYTES} bytes (received {} bytes)", value.len()))); }
-            let retained = value.len().saturating_add(INBOUND_SERVER_REQUEST_ID_ENTRY_OVERHEAD_BYTES);
-            let Some(next) = self.retained_string_id_bytes.checked_add(retained) else { return Err(IoError::new(ErrorKind::InvalidData, "inbound server request ID byte ledger is exhausted")); };
-            if next > INBOUND_SERVER_REQUEST_ID_BYTES { return Err(IoError::new(ErrorKind::InvalidData, "inbound server request ID byte ledger is exhausted")); }
+            if value.len() > MAX_INBOUND_SERVER_REQUEST_ID_STRING_BYTES {
+                return Err(IoError::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "inbound server request ID is longer than {MAX_INBOUND_SERVER_REQUEST_ID_STRING_BYTES} bytes (received {} bytes)",
+                        value.len()
+                    ),
+                ));
+            }
+            let retained = value
+                .len()
+                .saturating_add(INBOUND_SERVER_REQUEST_ID_ENTRY_OVERHEAD_BYTES);
+            let Some(next) = self.retained_string_id_bytes.checked_add(retained) else {
+                return Err(IoError::new(
+                    ErrorKind::InvalidData,
+                    "inbound server request ID byte ledger is exhausted",
+                ));
+            };
+            if next > INBOUND_SERVER_REQUEST_ID_BYTES {
+                return Err(IoError::new(
+                    ErrorKind::InvalidData,
+                    "inbound server request ID byte ledger is exhausted",
+                ));
+            }
             self.retained_string_id_bytes = next;
         }
-        self.entries.insert(request_id.clone(), InboundServerRequestState::Pending); Ok(())
+        self.entries
+            .insert(request_id.clone(), InboundServerRequestState::Pending);
+        Ok(())
     }
     fn finish(&mut self, request_id: &RequestId, state: InboundServerRequestState) -> IoResult<()> {
         match self.entries.get_mut(request_id) {
-            Some(slot @ InboundServerRequestState::Pending) => { *slot = state; Ok(()) }
-            Some(_) => Err(IoError::new(ErrorKind::InvalidData, "inbound server request is no longer pending")),
-            None => Err(IoError::new(ErrorKind::InvalidData, "unknown inbound server request ID")),
+            Some(slot @ InboundServerRequestState::Pending) => {
+                *slot = state;
+                Ok(())
+            }
+            Some(_) => Err(IoError::new(
+                ErrorKind::InvalidData,
+                "inbound server request is no longer pending",
+            )),
+            None => Err(IoError::new(
+                ErrorKind::InvalidData,
+                "unknown inbound server request ID",
+            )),
         }
     }
-    fn respond(&mut self, id: &RequestId) -> IoResult<()> { self.finish(id, InboundServerRequestState::Responded) }
-    fn reject(&mut self, id: &RequestId) -> IoResult<()> { self.finish(id, InboundServerRequestState::Rejected) }
+    fn respond(&mut self, id: &RequestId) -> IoResult<()> {
+        self.finish(id, InboundServerRequestState::Responded)
+    }
+    fn reject(&mut self, id: &RequestId) -> IoResult<()> {
+        self.finish(id, InboundServerRequestState::Rejected)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
