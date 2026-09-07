@@ -203,6 +203,22 @@ provider mutation, so a partial batch cannot silently reset its retry budget.
 python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py --pr <number-or-url> --once
 ```
 
+### GitHub App installation observer
+
+When a separately governed broker has supplied a short-lived GitHub App
+installation token, opt into the read-only observer path explicitly:
+
+```bash
+python3 .codex/skills/babysit-pr/scripts/gh_pr_watch.py \
+  --pr <number-or-url> --installation-observer --once
+```
+
+This mode does not call `gh api user` because installation tokens have no
+`/user` endpoint. Review filtering remains conservative when identity is
+unbound: `OWNER`, `MEMBER`, `COLLABORATOR`, and approved Codex bots are
+actionable, while untrusted/`NONE` authors remain ignored. It does not mint,
+print, or persist tokens and does not broaden the watcher's read-only scope.
+
 ## CI Failure Classification
 Use `gh` commands to inspect failed runs before deciding to rerun.
 
