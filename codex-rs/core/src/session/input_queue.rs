@@ -223,6 +223,18 @@ impl InputQueue {
         !self.mailbox_pending_mails.lock().await.is_empty()
     }
 
+    /// Nondestructive mailbox read used by native wait reporting. The delivery
+    /// queue remains untouched so model delivery ordering and ownership are
+    /// preserved.
+    pub(crate) async fn snapshot_mailbox_communications(&self) -> Vec<InterAgentCommunication> {
+        self.mailbox_pending_mails
+            .lock()
+            .await
+            .iter()
+            .cloned()
+            .collect()
+    }
+
     pub(crate) async fn enqueue_terminal_completion(
         &self,
         mut completion: TerminalCompletionNotification,

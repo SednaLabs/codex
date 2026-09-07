@@ -712,6 +712,10 @@ impl AgentControl {
         )))
     }
 
+    pub(crate) fn agent_id_for_path(&self, agent_path: &AgentPath) -> Option<ThreadId> {
+        self.state.agent_id_for_path(agent_path)
+    }
+
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
     pub(crate) async fn subscribe_status(
         &self,

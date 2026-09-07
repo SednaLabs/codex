@@ -5858,6 +5858,7 @@ mod tests {
                 requested_model: Some("gpt-requested".into()),
                 requested_reasoning_effort: Some(ReasoningEffortConfig::High),
                 agents_states: Default::default(),
+                wake_notifications: None,
             }),
         };
         let completed = ItemCompletedEvent {
@@ -5877,6 +5878,7 @@ mod tests {
                 requested_model: None,
                 requested_reasoning_effort: None,
                 agents_states: Default::default(),
+                wake_notifications: None,
             }),
         };
 
@@ -5941,6 +5943,7 @@ mod tests {
                 requested_model: None,
                 requested_reasoning_effort: None,
                 agents_states: Default::default(),
+                wake_notifications: None,
             }),
         };
         let historic_legacy_started = historic_started
@@ -5998,6 +6001,7 @@ mod tests {
                 requested_model: None,
                 requested_reasoning_effort: Some(ReasoningEffortConfig::Medium),
                 agents_states: Default::default(),
+                wake_notifications: None,
             }),
         };
         let current_omitted = ItemStartedEvent {
@@ -6017,6 +6021,7 @@ mod tests {
                 requested_model: None,
                 requested_reasoning_effort: None,
                 agents_states: Default::default(),
+                wake_notifications: None,
             }),
         };
 

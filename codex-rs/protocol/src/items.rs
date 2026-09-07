@@ -330,6 +330,40 @@ pub struct CollabAgentToolCallItem {
     pub requested_reasoning_effort: Option<ReasoningEffortConfig>,
     #[serde(default)]
     pub agents_states: HashMap<ThreadId, AgentStatus>,
+    /// Safe, bounded notifications observed while waiting. Encrypted payloads are
+    /// represented by their availability marker and are never copied here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wake_notifications: Option<Vec<AgentNotificationSummary>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentNotificationOrigin {
+    ExplicitMessage,
+    TurnResult,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum AgentNotificationContent {
+    PlaintextPreview { text: String, truncated: bool },
+    SenderSummary { text: String, truncated: bool },
+    EncryptedUnavailable,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct AgentNotificationSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub communication_id: Option<ResponseItemId>,
+    pub origin: AgentNotificationOrigin,
+    pub sender_agent_path: AgentPath,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sender_thread_id: Option<ThreadId>,
+    pub content: AgentNotificationContent,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]

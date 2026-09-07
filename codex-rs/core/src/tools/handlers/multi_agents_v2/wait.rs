@@ -11,6 +11,9 @@ use crate::tools::tool_runtime_capabilities::ToolRuntimeCapabilities;
 use crate::tools::tool_runtime_capabilities::registered_tool_runtime_capabilities;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::items::AgentNotificationContent;
+use codex_protocol::items::AgentNotificationOrigin;
+use codex_protocol::items::AgentNotificationSummary;
 use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabWaitingCompletionReason;
 use codex_tools::ToolSpec;
@@ -196,6 +199,7 @@ impl Handler {
                     requested_model: None,
                     requested_reasoning_effort: None,
                     agents_states: Default::default(),
+                    wake_notifications: None,
                 }),
             )
             .await;
@@ -226,6 +230,7 @@ impl Handler {
                         receiver_agents.clone(),
                         agents_states,
                         CollabWaitingCompletionReason::SubscriptionLoss,
+                        mailbox_notifications(session.as_ref()).await,
                     )
                     .await;
                     return Err(collab_agent_error(*id, err));
@@ -294,6 +299,7 @@ impl Handler {
             receiver_thread_ids.clone(),
             pending_thread_ids,
             completion_reason,
+            mailbox_notifications(session.as_ref()).await,
         );
 
         emit_wait_completion(
@@ -304,6 +310,7 @@ impl Handler {
             receiver_agents,
             statuses_by_id,
             completion_reason,
+            result.wake_notifications.clone(),
         )
         .await;
 
@@ -349,6 +356,49 @@ pub(crate) struct WaitAgentResult {
     pub(crate) pending_ids: Vec<ThreadId>,
     pub(crate) completion_reason: CollabWaitingCompletionReason,
     pub(crate) timed_out: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) wake_notifications: Option<Vec<AgentNotificationSummary>>,
+}
+
+const MAX_NOTIFICATION_PREVIEW_CHARS: usize = 240;
+
+async fn mailbox_notifications(session: &Session) -> Vec<AgentNotificationSummary> {
+    session
+        .input_queue
+        .snapshot_mailbox_communications()
+        .await
+        .into_iter()
+        .map(|communication| {
+            let sender_thread_id = session
+                .services
+                .agent_control
+                .agent_id_for_path(&communication.author);
+            let content = if communication.encrypted_content.is_some() {
+                AgentNotificationContent::EncryptedUnavailable
+            } else if communication.content.is_empty() {
+                AgentNotificationContent::Unavailable
+            } else {
+                let preview = communication
+                    .content
+                    .chars()
+                    .take(MAX_NOTIFICATION_PREVIEW_CHARS)
+                    .collect::<String>();
+                let truncated =
+                    communication.content.chars().count() > MAX_NOTIFICATION_PREVIEW_CHARS;
+                AgentNotificationContent::PlaintextPreview {
+                    text: preview,
+                    truncated,
+                }
+            };
+            AgentNotificationSummary {
+                communication_id: communication.id,
+                origin: AgentNotificationOrigin::ExplicitMessage,
+                sender_agent_path: communication.author,
+                sender_thread_id,
+                content,
+            }
+        })
+        .collect()
 }
 
 async fn ready_wake_source(
@@ -391,6 +441,7 @@ impl WaitAgentResult {
         requested_ids: Vec<ThreadId>,
         pending_ids: Vec<ThreadId>,
         completion_reason: CollabWaitingCompletionReason,
+        notifications: Vec<AgentNotificationSummary>,
     ) -> Self {
         let message = match completion_reason {
             CollabWaitingCompletionReason::Terminal => "Wait completed.",
@@ -406,6 +457,7 @@ impl WaitAgentResult {
             pending_ids,
             completion_reason,
             timed_out: matches!(completion_reason, CollabWaitingCompletionReason::Timeout),
+            wake_notifications: (!notifications.is_empty()).then_some(notifications),
         }
     }
 
@@ -424,6 +476,9 @@ impl WaitAgentResult {
                 "completion_reason".to_string(),
                 json!(self.completion_reason),
             );
+        }
+        if let Some(notifications) = &self.wake_notifications {
+            output.insert("wake_notifications".to_string(), json!(notifications));
         }
         JsonValue::Object(output)
     }
@@ -483,6 +538,7 @@ async fn emit_wait_completion(
     receiver_agents: Vec<CollabAgentRef>,
     agents_states: HashMap<ThreadId, AgentStatus>,
     completion_reason: CollabWaitingCompletionReason,
+    notifications: Vec<AgentNotificationSummary>,
 ) {
     let status = if completion_reason == CollabWaitingCompletionReason::SubscriptionLoss
         // Subscription loss is an unsuccessful lifecycle outcome even when
@@ -514,6 +570,7 @@ async fn emit_wait_completion(
                 requested_model: None,
                 requested_reasoning_effort: None,
                 agents_states,
+                wake_notifications: (!notifications.is_empty()).then_some(notifications),
             }),
         )
         .await;
