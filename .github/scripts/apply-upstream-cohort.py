@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "88c06eebaf1354517447268f63cd900885131f3a"
+PUSH_PREDECESSOR_SHA = "c989b54e24385559d8be2243a3fd9c1756cb598b"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -340,7 +340,7 @@ BUILD_SOURCE_DIFF_PATHS = [
 ]
 BUILD_SOURCE_DIFF_PATHS_SHA256 = "297950d9003ea76efeee9a6c4dfea603c671a3d8a7fd4a22485e996d5c854b10"
 
-RESTORE_SOURCE_ENTRIES: dict[str, tuple[str, str, str]] = {
+RESTORE_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     "codex-rs/config/src/profile_toml.rs": (
         "100644",
         "blob",
@@ -507,6 +507,138 @@ RESTORE_SOURCE_ENTRIES.update({
     "codex-rs/sandboxing/src/windows.rs": ("100644", "blob", "b69168ca98a0bdbc9d41a24b4bb1c7cf9e0d6a21"),
     "codex-rs/sandboxing/src/windows_mxc.rs": ("100644", "blob", "97b32a2f0dd73ed1ca1968d5b5281a5d95095f8d"),
 })
+RESTORE_SOURCE_ENTRIES.update({
+    'codex-rs/rmcp-client/src/bin/rmcp_test_server.rs': ('100644', 'blob', '6911afb21168b65e21b7277925f338cd433d91b5'),
+    'codex-rs/rmcp-client/src/bin/test_mcp_2026_discovery_stdio_server.rs': None,
+    'codex-rs/rmcp-client/src/bin/test_mcp_2026_stdio_server.rs': None,
+    'codex-rs/rmcp-client/src/bin/test_stdio_server.rs': ('100644', 'blob', '38944ab44bae3bc302c7064bebdce58573918d27'),
+    'codex-rs/rmcp-client/src/bounded_stdio_transport.rs': None,
+    'codex-rs/rmcp-client/src/elicitation_client_service.rs': ('100644', 'blob', '2be699f156b7a3949b3c5421bd1043cd150a4522'),
+    'codex-rs/rmcp-client/src/ema_auth_policy.rs': None,
+    'codex-rs/rmcp-client/src/ema_auth_policy_tests.rs': None,
+    'codex-rs/rmcp-client/src/ema_claims.rs': None,
+    'codex-rs/rmcp-client/src/ema_exchange.rs': None,
+    'codex-rs/rmcp-client/src/ema_exchange_tests.rs': None,
+    'codex-rs/rmcp-client/src/ema_identity.rs': None,
+    'codex-rs/rmcp-client/src/ema_identity_tests.rs': None,
+    'codex-rs/rmcp-client/src/event_notification_transport.rs': None,
+    'codex-rs/rmcp-client/src/executor_process_transport.rs': ('100644', 'blob', '3ac78a4c450b329fb5680326b551a90dd221aca3'),
+    'codex-rs/rmcp-client/src/executor_process_transport_tests.rs': ('100644', 'blob', '5b5b7e5e821dbec70fbfe3a5277c1576601ea8c3'),
+    'codex-rs/rmcp-client/src/http_client_adapter/www_authenticate.rs': ('100644', 'blob', '3c122c3bb7860481ee1cb7b92256f9c6a3b51479'),
+    'codex-rs/rmcp-client/src/http_client_adapter/www_authenticate_tests.rs': ('100644', 'blob', '6696655d8842a4e1350dbc7e2a76a2eb4631c513'),
+    'codex-rs/rmcp-client/src/http_client_adapter_tests.rs': None,
+    'codex-rs/rmcp-client/src/http_client_redirect.rs': None,
+    'codex-rs/rmcp-client/src/http_client_redirect_tests.rs': None,
+    'codex-rs/rmcp-client/src/http_headers.rs': None,
+    'codex-rs/rmcp-client/src/http_headers_tests.rs': None,
+    'codex-rs/rmcp-client/src/local_child.rs': None,
+    'codex-rs/rmcp-client/src/local_stdio_transport.rs': None,
+    'codex-rs/rmcp-client/src/logging_client_handler.rs': ('100644', 'blob', '50faa268e2329fa2a434c50c3b8f9c268cb899c8'),
+    'codex-rs/rmcp-client/src/macos_stdio.rs': None,
+    'codex-rs/rmcp-client/src/macos_stdio_tests.rs': None,
+    'codex-rs/rmcp-client/src/oauth/credential_store.rs': None,
+    'codex-rs/rmcp-client/src/oauth/ema_identity.rs': None,
+    'codex-rs/rmcp-client/src/oauth/ema_identity_tests.rs': None,
+    'codex-rs/rmcp-client/src/oauth/issuer_binding.rs': None,
+    'codex-rs/rmcp-client/src/oauth/refresh_lock.rs': ('100644', 'blob', '124d56beb1a002c24460c858bbe009ce1e487788'),
+    'codex-rs/rmcp-client/src/oauth/runtime.rs': None,
+    'codex-rs/rmcp-client/src/oauth/store_lock.rs': ('100644', 'blob', 'b053f4e5ae25708bf73558b7ff0ef4ea359e24e1'),
+    'codex-rs/rmcp-client/src/oauth/test_support.rs': ('100644', 'blob', '6ca2f510f5faf2d6b87ef1a3cb3c1dfcf8f1eea8'),
+    'codex-rs/rmcp-client/src/oauth/tests/credential_store_tests.rs': None,
+    'codex-rs/rmcp-client/src/oauth/tests/store_lock_tests.rs': ('100644', 'blob', '685c9d569e4e523652c37c60e2509359a6f0b6f1'),
+    'codex-rs/rmcp-client/src/oauth_callback.rs': None,
+    'codex-rs/rmcp-client/src/oauth_callback_tests.rs': None,
+    'codex-rs/rmcp-client/src/oauth_client_registration.rs': None,
+    'codex-rs/rmcp-client/src/oauth_client_registration_tests.rs': None,
+    'codex-rs/rmcp-client/src/oauth_http_client.rs': ('100644', 'blob', 'a3f23d4cf40d37ddcaf2b8874c6ae1d534a7f303'),
+    'codex-rs/rmcp-client/src/oauth_http_client_security_tests.rs': None,
+    'codex-rs/rmcp-client/src/oauth_refresh_mode.rs': None,
+    'codex-rs/rmcp-client/src/perform_oauth_login.rs': ('100644', 'blob', 'd9019e28fa95d7afad1bd01643e4ec5baa4c5205'),
+    'codex-rs/rmcp-client/src/program_resolver.rs': ('100644', 'blob', '395b330d7df6e150d0348279a00f971069907a84'),
+    'codex-rs/rmcp-client/src/protocol_mode.rs': None,
+    'codex-rs/rmcp-client/src/service_error.rs': None,
+    'codex-rs/rmcp-client/src/stdio_server_launcher.rs': ('100644', 'blob', '4a2c52a40fb03da30e0c2e2eb7293a918a0e0a6d'),
+    'codex-rs/rmcp-client/tests/mcp_2026_discovery.rs': None,
+    'codex-rs/rmcp-client/tests/mcp_2026_message_limits.rs': None,
+    'codex-rs/rmcp-client/tests/mcp_2026_mrtr.rs': None,
+    'codex-rs/rmcp-client/tests/mcp_2026_oauth_discovery.rs': None,
+    'codex-rs/rmcp-client/tests/mcp_2026_sse_discovery.rs': None,
+    'codex-rs/rmcp-client/tests/mcp_2026_stdio.rs': None,
+    'codex-rs/rmcp-client/tests/mcp_2026_stdio_discovery.rs': None,
+    'codex-rs/rmcp-client/tests/mcp_events.rs': None,
+    'codex-rs/rmcp-client/tests/process_group_cleanup.rs': ('100644', 'blob', 'ac446233f81cd37a4464daaca2b1441078ce5e00'),
+    'codex-rs/rmcp-client/tests/resources.rs': ('100644', 'blob', 'ef7c2f7cdf86ac5c7f3c6a11f51f13a7432d65cc'),
+    'codex-rs/rmcp-client/tests/stdio_message_limits.rs': None,
+    'codex-rs/rmcp-client/tests/streamable_http_oauth_store_pinning.rs': ('100644', 'blob', 'd92df03dd25368c47830d95e125f1d389125c723'),
+    'codex-rs/rmcp-client/tests/streamable_http_recovery.rs': ('100644', 'blob', '1af90bc0587623c1712de2efd64db1d493ebcbfb'),
+    'codex-rs/rmcp-client/tests/streamable_http_remote.rs': ('100644', 'blob', '0d4690a8255f5735bb2951fc1f0357518bb6f087'),
+})
+RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
+    'codex-rs/rmcp-client/src/bin/rmcp_test_server.rs': ('100644', 'blob', 'a2ab794f5ab76dc5745c6c74a0822091ff82ccf0'),
+    'codex-rs/rmcp-client/src/bin/test_mcp_2026_discovery_stdio_server.rs': ('100644', 'blob', 'fc3af65944258d18731493994fcf0a18e5f8ce1a'),
+    'codex-rs/rmcp-client/src/bin/test_mcp_2026_stdio_server.rs': ('100644', 'blob', '3f6afd99f3691e27cb3e24b570698218a5009221'),
+    'codex-rs/rmcp-client/src/bin/test_stdio_server.rs': ('100644', 'blob', '79a2e1c066c849aa3fd1cd91090e6c1ef11730a5'),
+    'codex-rs/rmcp-client/src/bounded_stdio_transport.rs': ('100644', 'blob', 'fdde9f698ef29e4a8c0183e4b32ab2d835df8e74'),
+    'codex-rs/rmcp-client/src/elicitation_client_service.rs': ('100644', 'blob', '7381786aa4b36b11034cde3259b470513b267245'),
+    'codex-rs/rmcp-client/src/ema_auth_policy.rs': ('100644', 'blob', '42057b1f78733dac3718355246ba44d2316b5bfe'),
+    'codex-rs/rmcp-client/src/ema_auth_policy_tests.rs': ('100644', 'blob', '3bdaed367dab65f12445ff2d13abf85719f1d758'),
+    'codex-rs/rmcp-client/src/ema_claims.rs': ('100644', 'blob', '886f148a32a45d80c6cd61b049721d8129d6501b'),
+    'codex-rs/rmcp-client/src/ema_exchange.rs': ('100644', 'blob', '7b6131653a9727c4a667c3a086557199bd33f595'),
+    'codex-rs/rmcp-client/src/ema_exchange_tests.rs': ('100644', 'blob', '46717907108c60e540e660028afa457341f0ebf9'),
+    'codex-rs/rmcp-client/src/ema_identity.rs': ('100644', 'blob', '2fac801ab1faaddcd1925a6a6a82b99d167808cc'),
+    'codex-rs/rmcp-client/src/ema_identity_tests.rs': ('100644', 'blob', '8e0abb7babd2b369caf76c895daf47e5c3e16fd8'),
+    'codex-rs/rmcp-client/src/event_notification_transport.rs': ('100644', 'blob', 'f997376b4cf4be989a400679c24e2d2728c2d6fa'),
+    'codex-rs/rmcp-client/src/executor_process_transport.rs': ('100644', 'blob', 'b1fddbdf7518862ff3b2b853fd7ddb16a970d181'),
+    'codex-rs/rmcp-client/src/executor_process_transport_tests.rs': ('100644', 'blob', '82fdaddcc93616a65c13ea644dea54f7d54c86d4'),
+    'codex-rs/rmcp-client/src/http_client_adapter/www_authenticate.rs': None,
+    'codex-rs/rmcp-client/src/http_client_adapter/www_authenticate_tests.rs': None,
+    'codex-rs/rmcp-client/src/http_client_adapter_tests.rs': ('100644', 'blob', 'c3effd99831abccd3fbf8b6665a6af38555f0f10'),
+    'codex-rs/rmcp-client/src/http_client_redirect.rs': ('100644', 'blob', '5d8cfee05f889421aa003bc37bae074d4c1a1475'),
+    'codex-rs/rmcp-client/src/http_client_redirect_tests.rs': ('100644', 'blob', '966fcfcfcbc87cda084bdcd27b05cc3dced44ccc'),
+    'codex-rs/rmcp-client/src/http_headers.rs': ('100644', 'blob', 'd0b2d28c989be47b2f992f54e0423c544c882cdf'),
+    'codex-rs/rmcp-client/src/http_headers_tests.rs': ('100644', 'blob', 'c27c5d10022de340f23bdf3e642ff7767943e1b2'),
+    'codex-rs/rmcp-client/src/local_child.rs': ('100644', 'blob', 'fdb98303e5e89d7266dbd4f681ca250c780ea184'),
+    'codex-rs/rmcp-client/src/local_stdio_transport.rs': ('100644', 'blob', 'b94c42584be88b6d288edf8b22170b3757eac44b'),
+    'codex-rs/rmcp-client/src/logging_client_handler.rs': ('100644', 'blob', '6955afc2022f6101d787edc93ad67fe5afe87489'),
+    'codex-rs/rmcp-client/src/macos_stdio.rs': ('100644', 'blob', 'af471320f36a561bb247f11fd835cba06be6dce4'),
+    'codex-rs/rmcp-client/src/macos_stdio_tests.rs': ('100644', 'blob', '4bf9ed063450f7d8233c3eacb4846fc5155b732a'),
+    'codex-rs/rmcp-client/src/oauth/credential_store.rs': ('100644', 'blob', '0429efde4241cc34d7deb9361dcb1bb853d36dbe'),
+    'codex-rs/rmcp-client/src/oauth/ema_identity.rs': ('100644', 'blob', '6f804a245f63d8862b7953a1b38c4dad1df0779b'),
+    'codex-rs/rmcp-client/src/oauth/ema_identity_tests.rs': ('100644', 'blob', 'c66721f3959b966ef1054daabaac572c0b925302'),
+    'codex-rs/rmcp-client/src/oauth/issuer_binding.rs': ('100644', 'blob', '5a12bf4024e1ee0484e7b033f7589143ec74a1b9'),
+    'codex-rs/rmcp-client/src/oauth/refresh_lock.rs': ('100644', 'blob', '18120d1e9ea31df3b8cca8224ff52e3353d54d60'),
+    'codex-rs/rmcp-client/src/oauth/runtime.rs': ('100644', 'blob', 'fbe43c09fc11f48a8fe4da1cd229738be0372ee3'),
+    'codex-rs/rmcp-client/src/oauth/store_lock.rs': ('100644', 'blob', 'f06b9b9adc53be373b12d5d97ad1d03d3a7a6f2a'),
+    'codex-rs/rmcp-client/src/oauth/test_support.rs': ('100644', 'blob', '90176e0361d2542c8644b8411b8df4474ffdd5e6'),
+    'codex-rs/rmcp-client/src/oauth/tests/credential_store_tests.rs': ('100644', 'blob', 'd8b4e3bdb1b98526b5daf8000e2b68215ea1d076'),
+    'codex-rs/rmcp-client/src/oauth/tests/store_lock_tests.rs': ('100644', 'blob', 'b8428f5e5e972f961b93004a1c43f299468c999b'),
+    'codex-rs/rmcp-client/src/oauth_callback.rs': ('100644', 'blob', 'eb3d7f31765b1d4e6e441e0f53b4ae761ca989c8'),
+    'codex-rs/rmcp-client/src/oauth_callback_tests.rs': ('100644', 'blob', '3d70c780a08ac29d783534d371701551c4863348'),
+    'codex-rs/rmcp-client/src/oauth_client_registration.rs': ('100644', 'blob', 'd9de5e21f7129f06b09ee66079f4bda8fdb7a4aa'),
+    'codex-rs/rmcp-client/src/oauth_client_registration_tests.rs': ('100644', 'blob', '8835449f5de108495c354f0cfa673735d09dc478'),
+    'codex-rs/rmcp-client/src/oauth_http_client.rs': ('100644', 'blob', '9e4e21e93d28b215f2530a5e9e0f029b1b503654'),
+    'codex-rs/rmcp-client/src/oauth_http_client_security_tests.rs': ('100644', 'blob', '736ffc8d9b2fac960775645ad85e3f208a40910a'),
+    'codex-rs/rmcp-client/src/oauth_refresh_mode.rs': ('100644', 'blob', '84b2a98370a43e194dc2f69229ed29302ef3d63c'),
+    'codex-rs/rmcp-client/src/perform_oauth_login.rs': ('100644', 'blob', 'bc905f4849c3bf50af9f922b58f76eaa38c7da4f'),
+    'codex-rs/rmcp-client/src/program_resolver.rs': ('100644', 'blob', '53db522166c22ebf02c7adea51448557f1f113eb'),
+    'codex-rs/rmcp-client/src/protocol_mode.rs': ('100644', 'blob', '656ba8f6e97eb2fb6ccd433827e17642f9daf028'),
+    'codex-rs/rmcp-client/src/service_error.rs': ('100644', 'blob', '65da799f1478cb5157af1a935fa5791e080b8649'),
+    'codex-rs/rmcp-client/src/stdio_server_launcher.rs': ('100644', 'blob', 'f942378bb8539dbc0d5c6444fcc420485990dfac'),
+    'codex-rs/rmcp-client/tests/mcp_2026_discovery.rs': ('100644', 'blob', '1495438d75efb9989cba066a04c014ddbae20632'),
+    'codex-rs/rmcp-client/tests/mcp_2026_message_limits.rs': ('100644', 'blob', '785aa4e1956c95a1b3319315ce1b135be6e0f713'),
+    'codex-rs/rmcp-client/tests/mcp_2026_mrtr.rs': ('100644', 'blob', '6f6a8555f9803cc0ffa28f6437acb789009a848c'),
+    'codex-rs/rmcp-client/tests/mcp_2026_oauth_discovery.rs': ('100644', 'blob', 'a26dc7fbee6fc6563ad6f244c389efce8032f49f'),
+    'codex-rs/rmcp-client/tests/mcp_2026_sse_discovery.rs': ('100644', 'blob', '92910a34a2a7fe0d3f6a2f433f165d4df5755727'),
+    'codex-rs/rmcp-client/tests/mcp_2026_stdio.rs': ('100644', 'blob', '53ba7fbb9588e36785156480b733639448b86bc0'),
+    'codex-rs/rmcp-client/tests/mcp_2026_stdio_discovery.rs': ('100644', 'blob', '8cf62a2697cf505946e283ae3a6c975532ab9d38'),
+    'codex-rs/rmcp-client/tests/mcp_events.rs': ('100644', 'blob', '3b015a01d274c90109f490b6314755240664fc35'),
+    'codex-rs/rmcp-client/tests/process_group_cleanup.rs': ('100644', 'blob', '1dcd5586ef5f73c28a6d028a59172b8c7b003d47'),
+    'codex-rs/rmcp-client/tests/resources.rs': ('100644', 'blob', 'da280ee29145613f9699a3371150d8b31cb440e0'),
+    'codex-rs/rmcp-client/tests/stdio_message_limits.rs': ('100644', 'blob', '7c8ec6102bbb4a3238fb8e61d697cb09f234b77f'),
+    'codex-rs/rmcp-client/tests/streamable_http_oauth_store_pinning.rs': ('100644', 'blob', '1656774650042ca28ffbeac1295d4bf367bd8a4c'),
+    'codex-rs/rmcp-client/tests/streamable_http_recovery.rs': ('100644', 'blob', 'fe6df5144818ba35575f4d5546aa8b2a333e0f16'),
+    'codex-rs/rmcp-client/tests/streamable_http_remote.rs': ('100644', 'blob', '7df871976bc3ae13d99122a8cbb2128fd7244dae'),
+})
 RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
     "codex-rs/model-provider/src/amazon_bedrock/catalog.rs": ("100644", "blob", "0bb216844a0b5334361b83281f3731f2202d2cd3"),
     "codex-rs/model-provider/src/amazon_bedrock/mantle.rs": ("100644", "blob", "60cc69d4c96f3fc340e1ebe1dd49ca37c81ad38f"),
@@ -545,9 +677,11 @@ CODE_MODE_PROTOCOL_LIB_OUTPUT = ("100644", "blob", "58e58be3c1f024797199c17660d2
 CODE_MODE_PROTOCOL_LIB_REMOVAL = b"pub use description::ImageDetailVisibility;\n"
 RESTORE_SOURCE_ENTRIES[CODE_MODE_PROTOCOL_LIB_PATH] = CODE_MODE_PROTOCOL_LIB_OUTPUT
 RESTORE_SOURCE_PREIMAGE_ENTRIES[CODE_MODE_PROTOCOL_LIB_PATH] = CODE_MODE_PROTOCOL_LIB_PREIMAGE
+RESTORE_SOURCE_ENTRIES = dict(sorted(RESTORE_SOURCE_ENTRIES.items()))
+RESTORE_SOURCE_PREIMAGE_ENTRIES = dict(sorted(RESTORE_SOURCE_PREIMAGE_ENTRIES.items()))
 RESTORE_PATHS = list(RESTORE_SOURCE_ENTRIES)
-RESTORE_PATHS_SHA256 = "0e48766ef262c2db59858a0d7c93267631c292ede74b1a5f4fa1aa6d90efa1cf"
-RESTORE_ENTRIES_SHA256 = "6bfe4f118132d6047b49994979d4e2a5868eecb5a72c4846fa7b0859f55f448c"
+RESTORE_PATHS_SHA256 = "74063c29a08f26250793f7850e02f3ad24e0fb5b8b807cd529d57fe16fca6f77"
+RESTORE_ENTRIES_SHA256 = "639d01807aadcfbc3a0576ec7c02c2e6fbd64e1642acd467e0c2247388025701"
 
 OVERLAY_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items())
@@ -933,10 +1067,11 @@ def path_digest(paths: list[str]) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def mode_oid_path_digest(entries: dict[str, tuple[str, str, str]]) -> str:
+def mode_oid_path_digest(entries: dict[str, tuple[str, str, str] | None]) -> str:
+    """Digest present entries and explicit deletions in one unambiguous encoding."""
     canonical = b"".join(
-        f"{mode} {oid}\t{path}".encode("utf-8") + b"\0"
-        for path, (mode, _object_type, oid) in sorted(entries.items())
+        (f"D\t{path}".encode("utf-8") if entry is None else f"{entry[0]} {entry[2]}\t{path}".encode("utf-8")) + b"\0"
+        for path, entry in sorted(entries.items())
     )
     return hashlib.sha256(canonical).hexdigest()
 
@@ -1033,9 +1168,8 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
             require(tree_entry(repo, BUILD_SOURCE_SHA, path) == postimage, f"overlay postimage mismatch: {path}")
     changed = sorted([*operations["A"], *operations["M"], *operations["D"]])
     require(changed == OVERLAY_CHANGED_PATHS, "overlay changed path set mismatch")
-    require(not operations["D"], "unexpected current overlay deletion")
     require(
-        len(operations["A"]) + len(operations["M"]) == len(OVERLAY_CHANGED_PATHS),
+        len(operations["A"]) + len(operations["M"]) + len(operations["D"]) == len(OVERLAY_CHANGED_PATHS),
         "overlay changed operation count mismatch",
     )
     return {
