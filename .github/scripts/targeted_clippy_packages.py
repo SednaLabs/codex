@@ -78,6 +78,17 @@ def select_packages(
     return sorted(selected)
 
 
+def validate_repo_root(repo_root: Path) -> Path:
+    resolved = repo_root.expanduser().resolve()
+    if not resolved.is_dir():
+        raise ValueError(f"--repo-root must be an existing directory: {repo_root}")
+    if not (resolved / "codex-rs" / "Cargo.toml").is_file():
+        raise ValueError(
+            f"--repo-root does not look like the expected repository root: {repo_root}"
+        )
+    return resolved
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True, type=Path)
@@ -85,8 +96,9 @@ def main() -> None:
     parser.add_argument("--head-sha", required=True)
     args = parser.parse_args()
 
-    paths = changed_paths(args.repo_root, args.base_sha, args.head_sha)
-    print(json.dumps(select_packages(args.repo_root, paths), separators=(",", ":")))
+    repo_root = validate_repo_root(args.repo_root)
+    paths = changed_paths(repo_root, args.base_sha, args.head_sha)
+    print(json.dumps(select_packages(repo_root, paths), separators=(",", ":")))
 
 
 if __name__ == "__main__":
