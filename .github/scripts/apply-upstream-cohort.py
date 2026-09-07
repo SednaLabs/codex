@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "563234323af2138387ace1a11827fdc4e2e8ea32"
+PUSH_PREDECESSOR_SHA = "88c06eebaf1354517447268f63cd900885131f3a"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -477,6 +477,10 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES["codex-rs/config/src/profile_toml.rs"] = (
     "cfd82d1aaac577c57c472d06731ba030426feb02",
 )
 RESTORE_SOURCE_ENTRIES.update({
+    "codex-rs/model-provider/src/amazon_bedrock/catalog.rs": ("100644", "blob", "1d93f3f636de843b69c97ed9674336b0b46e32c0"),
+    "codex-rs/model-provider/src/amazon_bedrock/mantle.rs": ("100644", "blob", "d9f9ac48848d7ca7456cffb78da839483e383d02"),
+    "codex-rs/model-provider/src/auth.rs": ("100644", "blob", "254ab92ce1077d3fb5bf10600dd2aaf3c265caa2"),
+    "codex-rs/model-provider/src/provider.rs": ("100644", "blob", "56e72362d5388db04b194b25f82fdae3ecfb081f"),
     "codex-rs/models-manager/src/cache.rs": ("100644", "blob", "903f70b9b234569a24b37480d2ec74ac93eccd29"),
     "codex-rs/models-manager/src/model_info.rs": ("100644", "blob", "f8c2ee3ecc0dc3ba5ea01572be70c13830faab92"),
     "codex-rs/models-manager/src/manager.rs": ("100644", "blob", "a0a0348e4e509f1e2c5f7d1d0d83deda09ba572a"),
@@ -504,6 +508,10 @@ RESTORE_SOURCE_ENTRIES.update({
     "codex-rs/sandboxing/src/windows_mxc.rs": ("100644", "blob", "97b32a2f0dd73ed1ca1968d5b5281a5d95095f8d"),
 })
 RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
+    "codex-rs/model-provider/src/amazon_bedrock/catalog.rs": ("100644", "blob", "0bb216844a0b5334361b83281f3731f2202d2cd3"),
+    "codex-rs/model-provider/src/amazon_bedrock/mantle.rs": ("100644", "blob", "60cc69d4c96f3fc340e1ebe1dd49ca37c81ad38f"),
+    "codex-rs/model-provider/src/auth.rs": ("100644", "blob", "f43c8bd99053259e9c95bc0f46dafae09e2c69e3"),
+    "codex-rs/model-provider/src/provider.rs": ("100644", "blob", "5a676d22306b790de4af9550cdf7b3a14b84926b"),
     "codex-rs/models-manager/src/cache.rs": ("100644", "blob", "15e8cf4dd8b2b5833406667d04c1969c30bfe875"),
     "codex-rs/models-manager/src/model_info.rs": ("100644", "blob", "fd9e2615c194411381634fd5806f4d91ead33c45"),
     "codex-rs/models-manager/src/manager.rs": ("100644", "blob", "45835c37cd41d28c3a6c038a3e77a1369621562a"),
@@ -538,8 +546,8 @@ CODE_MODE_PROTOCOL_LIB_REMOVAL = b"pub use description::ImageDetailVisibility;\n
 RESTORE_SOURCE_ENTRIES[CODE_MODE_PROTOCOL_LIB_PATH] = CODE_MODE_PROTOCOL_LIB_OUTPUT
 RESTORE_SOURCE_PREIMAGE_ENTRIES[CODE_MODE_PROTOCOL_LIB_PATH] = CODE_MODE_PROTOCOL_LIB_PREIMAGE
 RESTORE_PATHS = list(RESTORE_SOURCE_ENTRIES)
-RESTORE_PATHS_SHA256 = "d9e01fafb3f25bf6e1b3ab59e09865f3882298ae1cda6cdd7b22582c4f797597"
-RESTORE_ENTRIES_SHA256 = "0afff41a1061eca2e37e2ff822b0f4ffdf763838da09ad849db3206429f67767"
+RESTORE_PATHS_SHA256 = "0e48766ef262c2db59858a0d7c93267631c292ede74b1a5f4fa1aa6d90efa1cf"
+RESTORE_ENTRIES_SHA256 = "6bfe4f118132d6047b49994979d4e2a5868eecb5a72c4846fa7b0859f55f448c"
 
 OVERLAY_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items())
@@ -552,13 +560,13 @@ OVERLAY_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     }.items())
 )
 OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
-OVERLAY_PATHS_SHA256 = "0a13be899095d98652c2cdc62e5ab57240a9845bcf5c9e7bfeafa4eaabec231e"
+OVERLAY_PATHS_SHA256 = "568300e7ce6c714f665243b3fe5a917bbbd8c1b52a6ef008fc544a1ecd60c703"
 OVERLAY_CHANGED_PATHS = [
     path
     for path in OVERLAY_PATHS
     if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]
 ]
-OVERLAY_CHANGED_PATHS_SHA256 = "89ff32d02ca4793cb10dfe3db35cd780aae268dc253032d6de400a2c35137e0a"
+OVERLAY_CHANGED_PATHS_SHA256 = "475d009e39cb3dbd785f1782d6865b296ad4c4e5ce155ea81c1d51ca69184ce6"
 
 PATCH_DEPENDENCIES: dict[str, tuple[str, str, str]] = {
     "patches/rules_rs_windows_msvc_linker.patch": (
