@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "ced31bfc8b1ff209472dcf905eda23b7eb050edc"
+PUSH_PREDECESSOR_SHA = "809f0c9c5ddf1da876a99c028e7f36bb7277283b"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -259,6 +259,11 @@ CORE_SKILLS_EXACT_SHA256 = "6b58a39c530f7d9c02138d51e85860aec1b36892d806028d55f8
 BUILD_PATHS = list(BUILD_SOURCE_ENTRIES)
 
 RESTORE_SOURCE_ENTRIES: dict[str, tuple[str, str, str]] = {
+    "codex-rs/config/src/profile_toml.rs": (
+        "100644",
+        "blob",
+        "1c1859a559eee8ee6b52374b3232f00e86c583cb",
+    ),
     "codex-rs/ext/guardian/BUILD.bazel": (
         "100644",
         "blob",
@@ -372,6 +377,7 @@ RESTORE_SOURCE_ENTRIES: dict[str, tuple[str, str, str]] = {
 }
 RESTORE_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     path: (entry if path in {
+        "codex-rs/config/src/profile_toml.rs",
         "codex-rs/mcp-server/Cargo.toml",
         "codex-rs/mcp-server/src/codex_tool_config.rs",
         "codex-rs/mcp-server/src/codex_tool_runner.rs",
@@ -383,9 +389,14 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     } else None)
     for path, entry in RESTORE_SOURCE_ENTRIES.items()
 }
+RESTORE_SOURCE_PREIMAGE_ENTRIES["codex-rs/config/src/profile_toml.rs"] = (
+    "100644",
+    "blob",
+    "cfd82d1aaac577c57c472d06731ba030426feb02",
+)
 RESTORE_PATHS = list(RESTORE_SOURCE_ENTRIES)
-RESTORE_PATHS_SHA256 = "5428c8fdbb4cc499c3218272fdbd01bb822de4b254de51ee83346a389b44e7b6"
-RESTORE_ENTRIES_SHA256 = "76075be6752151e58794d773314f0dd38e2b98b86d962669876ff9e57a3100db"
+RESTORE_PATHS_SHA256 = "a42ab72b2de5657f542d685d2123d0daea24f30b5ac83825067c537c666f4d78"
+RESTORE_ENTRIES_SHA256 = "161b00e1fdfc421d7992bccd22a692f6013432495a2d3392d856b626a42382ad"
 
 OVERLAY_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items())
@@ -398,13 +409,13 @@ OVERLAY_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     }.items())
 )
 OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
-OVERLAY_PATHS_SHA256 = "78dee68f8d1b4f7443f8409e9162c21cf828477bf4550dbc1fd8e7e1cced84a1"
+OVERLAY_PATHS_SHA256 = "f7d91b163454496d6dd00498d2e0427e16796c8a914d9015e041cade56dbb881"
 OVERLAY_CHANGED_PATHS = [
     path
     for path in OVERLAY_PATHS
     if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]
 ]
-OVERLAY_CHANGED_PATHS_SHA256 = "55704da54ccad29d0631eb7e704286d3ef6ceaff521983a004ba3620a75ed75e"
+OVERLAY_CHANGED_PATHS_SHA256 = "b95e52a0bcfa4dc91de663f915baa47fb6da437a6fcb1086393e8533edd45041"
 
 PATCH_DEPENDENCIES: dict[str, tuple[str, str, str]] = {
     "patches/rules_rs_windows_msvc_linker.patch": (
@@ -853,7 +864,7 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
     changed = sorted([*operations["A"], *operations["M"], *operations["D"]])
     require(changed == OVERLAY_CHANGED_PATHS, "overlay changed path set mismatch")
     require(len(operations["A"]) == 36, "overlay addition count mismatch")
-    require(len(operations["M"]) == 19, "overlay modification count mismatch")
+    require(len(operations["M"]) == 20, "overlay modification count mismatch")
     require(not operations["D"], "unexpected current overlay deletion")
     require(len(operations["E"]) == 12, "overlay exact-retention count mismatch")
     return {
