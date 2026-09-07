@@ -99,7 +99,7 @@ jobs:
           workflow_tree = sys.argv[3]
           push = {
               "ref": "refs/heads/worker/w13825-sdk-build-consumer",
-              "before": "f479fcbad7e360ab6638d03992b77d4110fe423c",
+              "before": "e22c5ec06291f2e0f6b641c5bc6b5a7e40f16711",
               "after": workflow_sha,
               "created": False,
               "deleted": False,
@@ -368,9 +368,9 @@ jobs:
       SDK_ARTIFACT_HEAD_SHA: 0384d8ae9205e142fa4b352256d8c85a9e05f8c4
       SDK_CANDIDATE_SHA: 3a26f7dad12e96ea41dae025e77472af0dd273a8
       SDK_CANDIDATE_TREE: 6867e9e14ea8f416ee3075f959b880d038fe2cc0
-      BUILD_SOURCE_SHA: 5628fffa86a9e9a7dcc0cfd8d18f4cc09906ad39
-      BUILD_SOURCE_TREE: 21387ded774b7e5951a76a0cb26e3a5a30e24716
-      TARGET_HELPER_SHA: f96a454b6f0939dd5286cbd462e8581d0bc2d802
+      BUILD_SOURCE_SHA: 85b4fbedb76d439d64b6421fcbc213d54a7a89a9
+      BUILD_SOURCE_TREE: 1179ce52f138e92e2aedfdeffc31d28f29992000
+      TARGET_HELPER_SHA: de8749b65a85014c535740f761ab3d23377d6fee
     steps:
       - name: Check out exact diagnostic workflow
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -396,7 +396,7 @@ jobs:
       - name: Check out exact reviewed build source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 5628fffa86a9e9a7dcc0cfd8d18f4cc09906ad39
+          ref: 85b4fbedb76d439d64b6421fcbc213d54a7a89a9
           fetch-depth: 0
           persist-credentials: false
           path: source-candidate
@@ -443,7 +443,7 @@ jobs:
           path: ${{ runner.temp }}/w13825-sdk-input
           merge-multiple: true
 
-      - name: Probe exact SDK codex-api preimages
+      - name: Probe exact SDK OTEL preimages
         shell: bash
         run: |
           set -euo pipefail
@@ -451,14 +451,14 @@ jobs:
             --probe-sdk-paths-only \
             --repo-root "${GITHUB_WORKSPACE}/source-candidate" \
             --artifact-dir "${RUNNER_TEMP}/w13825-sdk-input" \
-            --output-dir "${RUNNER_TEMP}/w13825-sdk-codex-api-diagnostic" \
+            --output-dir "${RUNNER_TEMP}/w13825-sdk-otel-diagnostic" \
             --provider-receipt "${RUNNER_TEMP}/w13825-sdk-provider.json" \
             --expected-workflow-sha "${EXPECTED_WORKFLOW_SHA}" \
             --expected-workflow-tree "${EXPECTED_WORKFLOW_TREE}"
 
-      - name: Upload SDK codex-api preimage diagnostic
+      - name: Upload SDK OTEL preimage diagnostic
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: sdk-codex-api-preimage-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/w13825-sdk-codex-api-diagnostic
+          name: sdk-otel-preimage-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/w13825-sdk-otel-diagnostic
           if-no-files-found: error

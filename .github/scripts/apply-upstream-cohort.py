@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "f479fcbad7e360ab6638d03992b77d4110fe423c"
+PUSH_PREDECESSOR_SHA = "e22c5ec06291f2e0f6b641c5bc6b5a7e40f16711"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -68,10 +68,10 @@ SDK_INPUT_RECEIPT_SHA256 = "811992f09b22f610b8ab01983a01da0950ed090931813c67e91f
 SDK_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
 SDK_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
 SDK_CANDIDATE_PARENT = MATERIALIZED_SHA
-DIAGNOSTIC_SOURCE_SHA = "5628fffa86a9e9a7dcc0cfd8d18f4cc09906ad39"
-DIAGNOSTIC_SOURCE_TREE = "21387ded774b7e5951a76a0cb26e3a5a30e24716"
-DIAGNOSTIC_SOURCE_PARENT = "e437fdbb0817b0efc8a4368061df195382478d93"
-DIAGNOSTIC_HELPER_SHA = "f96a454b6f0939dd5286cbd462e8581d0bc2d802"
+DIAGNOSTIC_SOURCE_SHA = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
+DIAGNOSTIC_SOURCE_TREE = "1179ce52f138e92e2aedfdeffc31d28f29992000"
+DIAGNOSTIC_SOURCE_PARENT = "5628fffa86a9e9a7dcc0cfd8d18f4cc09906ad39"
+DIAGNOSTIC_HELPER_SHA = "de8749b65a85014c535740f761ab3d23377d6fee"
 
 COMMON_SOURCE_RUN_ID = "34035744523"
 COMMON_SOURCE_RUN_ATTEMPT = "1"
@@ -461,11 +461,11 @@ GENERATED_PATHS = [
 SDK_GENERATED_PATHS = GENERATED_PATHS[3:]
 SDK_BUNDLE_PROBE_PATHS = sorted(
     [
-        "codex-rs/codex-api/src/endpoint/responses.rs",
-        "codex-rs/codex-api/src/sse/responses.rs",
+        "codex-rs/otel/src/events/session_telemetry.rs",
+        "codex-rs/otel/src/tool_result.rs",
     ]
 )
-SDK_BUNDLE_PROBE_PATHS_SHA256 = "377d8cefbf895fa611b5e6ee7ed765cb371b3f1114d287ad7e7ff99c90735f49"
+SDK_BUNDLE_PROBE_PATHS_SHA256 = "2410d56b16733f33e21e89dde78555f85aaf09f4781cd7f7c81ec41d05d74d5a"
 SDK_BUNDLE_ROUTE_WITNESS = ("100644", "blob", "29705e44eb66f235adee5a8932264ee778f98ced")
 ALLOWED_MUTABLE_PATHS = sorted(set(OVERLAY_CHANGED_PATHS) | set(GENERATED_PATHS))
 
@@ -2267,7 +2267,7 @@ def emit_codex_api_preimage_receipt(
     ]
     require(all(item["entry"] is not None for item in entries), "diagnostic path is missing")
     receipt = {
-        "schema": "sdk-codex-api-preimage-diagnostic",
+        "schema": "sdk-otel-preimage-diagnostic",
         "version": 1,
         "repository": REPOSITORY,
         "workflow_sha": workflow_sha,
