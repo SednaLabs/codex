@@ -3,7 +3,7 @@ name: Build accepted SDK and build-source consumer
 on:
   push:
     branches:
-      - worker/w13825-sdk-build-consumer
+      - worker/w13825-sdk-network-proxy-diagnostic
   workflow_dispatch:
     inputs:
       expected_workflow_sha:
@@ -21,6 +21,7 @@ permissions:
 
 jobs:
   build-sdk-build-consumer:
+    if: github.ref_name == 'worker/w13825-sdk-build-consumer'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -351,3 +352,198 @@ jobs:
           name: upstream-sdk-build-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/w13825-sdk-build-candidate/diagnostics
           if-no-files-found: ignore
+
+  network-proxy-diagnostic:
+    if: github.ref_name == 'worker/w13825-sdk-network-proxy-diagnostic'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      REQUESTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha || '' }}
+      REQUESTED_WORKFLOW_TREE: ${{ inputs.expected_workflow_tree || '' }}
+      SDK_ARTIFACT_ID: "9992014028"
+      SDK_ARTIFACT_DIGEST: sha256:bce7300bd77efe798a463d8006b4291049bfaff5b996c878853ebab95087d433
+      SDK_ARTIFACT_RUN_ID: "34042133059"
+      SDK_ARTIFACT_HEAD_SHA: 0384d8ae9205e142fa4b352256d8c85a9e05f8c4
+      SDK_CANDIDATE_SHA: 3a26f7dad12e96ea41dae025e77472af0dd273a8
+      SDK_CANDIDATE_TREE: 6867e9e14ea8f416ee3075f959b880d038fe2cc0
+      BUILD_SOURCE_SHA: 5de836bbd93d4d62f01d7860d8bfed5d635b533c
+    steps:
+      - name: Check out exact diagnostic workflow
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: helper-checkout
+
+      - name: Verify exact diagnostic workflow checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_sha="$(git -C "${GITHUB_WORKSPACE}/helper-checkout" rev-parse HEAD)"
+          workflow_tree="$(git -C "${GITHUB_WORKSPACE}/helper-checkout" rev-parse HEAD^{tree})"
+          test "${GITHUB_SHA}" = "${workflow_sha}"
+          test -z "$(git -C "${GITHUB_WORKSPACE}/helper-checkout" status --porcelain)"
+          {
+            printf 'EXPECTED_WORKFLOW_SHA=%s\n' "${workflow_sha}"
+            printf 'EXPECTED_WORKFLOW_TREE=%s\n' "${workflow_tree}"
+          } >>"${GITHUB_ENV}"
+
+      - name: Check out exact reviewed build source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 5de836bbd93d4d62f01d7860d8bfed5d635b533c
+          fetch-depth: 0
+          persist-credentials: false
+          path: source-candidate
+
+      - name: Verify exact accepted SDK artifact provider identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          packet="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${SDK_ARTIFACT_ID}" --jq '[.id, .name, .size_in_bytes, .expired, .digest, .workflow_run.id, .workflow_run.head_branch, .workflow_run.head_sha, .workflow_run.repository_id, .workflow_run.head_repository_id] | @tsv')"
+          IFS=$'\t' read -r artifact_id artifact_name artifact_size expired artifact_digest run_id head_branch head_sha repository_id head_repository_id <<<"${packet}"
+          test "${artifact_id}" = "9992014028"
+          test "${artifact_name}" = "upstream-sdk-candidate-34042133059-1"
+          test "${artifact_size}" = "451611604"
+          test "${expired}" = false
+          test "${artifact_digest}" = "sha256:bce7300bd77efe798a463d8006b4291049bfaff5b996c878853ebab95087d433"
+          test "${run_id}" = "34042133059"
+          test "${head_branch}" = "worker/w13825-sdk-producer-validation-20260907"
+          test "${head_sha}" = "0384d8ae9205e142fa4b352256d8c85a9e05f8c4"
+          test "${repository_id}" = "1152496647"
+          test "${head_repository_id}" = "1152496647"
+          jq -n \
+            --arg id "${artifact_id}" \
+            --arg name "${artifact_name}" \
+            --arg size "${artifact_size}" \
+            --argjson expired "${expired}" \
+            --arg digest "${artifact_digest}" \
+            --arg run_id "${run_id}" \
+            --arg head_branch "${head_branch}" \
+            --arg head_sha "${head_sha}" \
+            --arg repository_id "${repository_id}" \
+            --arg head_repository_id "${head_repository_id}" \
+            '{artifact_id:$id,artifact_name:$name,artifact_size:$size,expired:$expired,artifact_digest:$digest,run_id:$run_id,head_branch:$head_branch,head_sha:$head_sha,repository_id:$repository_id,head_repository_id:$head_repository_id}' \
+            >"${RUNNER_TEMP}/w13825-sdk-provider.json"
+
+      - name: Download exact accepted SDK artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: 9992014028
+          github-token: ${{ github.token }}
+          repository: sednalabs/codex
+          run-id: 34042133059
+          path: ${{ runner.temp }}/w13825-sdk-input
+          merge-multiple: true
+
+      - name: Preflight accepted SDK bundle import
+        shell: bash
+        run: |
+          set -euo pipefail
+          preflight_dir="${RUNNER_TEMP}/w13825-sdk-diagnostic-inputs"
+          python3 "${GITHUB_WORKSPACE}/helper-checkout/.github/scripts/apply-upstream-cohort.py" \
+            --prepare-inputs-only \
+            --repo-root "${GITHUB_WORKSPACE}/source-candidate" \
+            --artifact-dir "${RUNNER_TEMP}/w13825-sdk-input" \
+            --preflight-dir "${preflight_dir}" \
+            --expected-workflow-sha "${EXPECTED_WORKFLOW_SHA}" \
+            --expected-workflow-tree "${EXPECTED_WORKFLOW_TREE}"
+
+      - name: Extract exact network-proxy diagnostic files
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_ROOT="${GITHUB_WORKSPACE}/source-candidate"
+          export DIAGNOSTIC_DIR="${RUNNER_TEMP}/w13825-network-proxy-diagnostic"
+          export PROVIDER_RECEIPT="${RUNNER_TEMP}/w13825-sdk-provider.json"
+          mkdir -p "${DIAGNOSTIC_DIR}"
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          source = pathlib.Path(os.environ["SOURCE_ROOT"])
+          output = pathlib.Path(os.environ["DIAGNOSTIC_DIR"])
+          candidate = os.environ["SDK_CANDIDATE_SHA"]
+          candidate_tree = os.environ["SDK_CANDIDATE_TREE"]
+          paths = [
+              "codex-rs/network-proxy/src/proxy.rs",
+              "codex-rs/network-proxy/src/remote_config.rs",
+              "codex-rs/network-proxy/src/remote_config_tests.rs",
+              "codex-rs/network-proxy/src/runtime.rs",
+          ]
+          if paths != sorted(paths) or len(paths) != len(set(paths)):
+              raise SystemExit("diagnostic path allowlist is not exact")
+          path_set_sha256 = hashlib.sha256(("\n".join(paths) + "\n").encode()).hexdigest()
+          if path_set_sha256 != "95270b21bd3fc002e728b5f6e8b929b3bd9d6a5e323bbf38ac26cc6c62ef0430":
+              raise SystemExit("diagnostic path-set digest mismatch")
+
+          def git(*args, input_bytes=None):
+              return subprocess.run(
+                  ["git", "-C", str(source), *args],
+                  input=input_bytes,
+                  check=True,
+                  capture_output=True,
+              ).stdout
+
+          if git("rev-parse", candidate).decode().strip() != candidate:
+              raise SystemExit("SDK candidate SHA mismatch")
+          if git("rev-parse", f"{candidate}^{{tree}}").decode().strip() != candidate_tree:
+              raise SystemExit("SDK candidate tree mismatch")
+
+          entries = []
+          for path in paths:
+              records = git("ls-tree", candidate, "--", path).decode().splitlines()
+              if len(records) != 1:
+                  raise SystemExit(f"diagnostic path missing or ambiguous: {path}")
+              metadata, listed = records[0].split("\t", 1)
+              mode, object_type, oid = metadata.split()
+              if listed != path or mode != "100644" or object_type != "blob" or len(oid) != 40:
+                  raise SystemExit(f"diagnostic path tuple mismatch: {path}")
+              content = git("show", f"{candidate}:{path}")
+              if git("cat-file", "-s", oid).decode().strip() != str(len(content)):
+                  raise SystemExit(f"diagnostic blob size mismatch: {path}")
+              if git("hash-object", "--stdin", input_bytes=content).decode().strip() != oid:
+                  raise SystemExit(f"diagnostic blob hash mismatch: {path}")
+              destination = output / path
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              destination.write_bytes(content)
+              entries.append(
+                  {
+                      "path": path,
+                      "git_oid": oid,
+                      "sha256": hashlib.sha256(content).hexdigest(),
+                      "size": len(content),
+                      "mode": mode,
+                      "type": object_type,
+                  }
+              )
+
+          receipt = {
+              "schema": "sdk-network-proxy-diagnostic",
+              "version": 1,
+              "repository": "sednalabs/codex",
+              "artifact_provider": json.loads(pathlib.Path(os.environ["PROVIDER_RECEIPT"]).read_text()),
+              "candidate_sha": candidate,
+              "candidate_tree": candidate_tree,
+              "path_set_sha256": path_set_sha256,
+              "entries": entries,
+          }
+          (output / "receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          if sorted(str(path.relative_to(output)) for path in output.rglob("*") if path.is_file()) != sorted(paths + ["receipt.json"]):
+              raise SystemExit("diagnostic output file set mismatch")
+          if json.loads((output / "receipt.json").read_text()) != receipt:
+              raise SystemExit("diagnostic receipt readback mismatch")
+          PY
+
+      - name: Upload network-proxy diagnostic evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sdk-network-proxy-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/w13825-network-proxy-diagnostic
+          if-no-files-found: error

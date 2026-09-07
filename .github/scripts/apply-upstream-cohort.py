@@ -30,9 +30,9 @@ from typing import Any
 REPOSITORY = "sednalabs/codex"
 REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
-VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
+VALIDATION_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "b77c115d523761426a1464f031714d6b189661d0"
+PUSH_PREDECESSOR_SHA = "2fa3066b6f7da924f4987693afd39a025d345fbb"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
