@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "0767290508439037324f8bbb7b85afe9066f9225"
+PUSH_PREDECESSOR_SHA = "b7d5cf2e3dc689cbb86f69abe5d1ec7a87951209"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -79,13 +79,13 @@ COMMON_PROVENANCE_SHA256 = "afbf269c8593c978ed706c9f2fddc0031383350fe216d88512ec
 COMMON_STAGED_PATCH_SHA256 = "dd4b59d9be8c2727d08de673085b36a1c61f6cee617855f210706412a5bfc66c"
 COMMON_STAGED_PATHS_SHA256 = "90b44134bb538a07fa03dfd674e96f08de4ba04a40252f6dc9f5c740dd5bb1ae"
 
-BUILD_SOURCE_SHA = "970381a0b85b313dea8c4e42dbb48f5d0ccbddf7"
-BUILD_SOURCE_TREE = "cf6638e191391c8b86bc7f4314b53c629be98bc4"
-BUILD_SOURCE_PARENT = "b2d5fb6c7b63ad47375d61608f730dd62648ef43"
+BUILD_SOURCE_SHA = "e437fdbb0817b0efc8a4368061df195382478d93"
+BUILD_SOURCE_TREE = "033134c962fc82e2749e42010bfbff14e69f9f2c"
+BUILD_SOURCE_PARENT = "970381a0b85b313dea8c4e42dbb48f5d0ccbddf7"
 BUILD_SOURCE_BRANCH = "worker/w13825-build-source-authoring-20260907"
 VOICE_HOST_DEFERRAL_BASELINE_SHA = "22a0c45ee711dc5ce47847dc04cbc5e7e76507c0"
 VOICE_HOST_DEFERRAL_BASELINE_ROOT_ENTRY = ("100644", "blob", "7bd8c144e52b169b907928bcf743363949d12cb2")
-BUILD_PATHS_SHA256 = "228de952b0fd234c05d6872babc84cfd96fcdef00be57ba8a993b2186a8bd730"
+BUILD_PATHS_SHA256 = "97c73967214df6d73f20b2f600fbaf631bd820d439b9844954ef67253993c032"
 BUILD_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     ".github/workflows/bazel.yml": (
         "100644",
@@ -137,6 +137,7 @@ BUILD_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
         "blob",
         "d9cfeb6cfaf7b7c40e7648f8547b7785c284cc28",
     ),
+    "codex-rs/websocket-client/src/lib.rs": ("100644", "blob", "631551c3af601aef02eb45004db99a6d46ae1a59"),
     "patches/BUILD.bazel": (
         "100644",
         "blob",
@@ -199,6 +200,7 @@ BUILD_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str]] = {
         "blob",
         "1be89f035d902d96e03b3a1aeb9d1f9b66e1dc82",
     ),
+    "codex-rs/websocket-client/src/lib.rs": ("100644", "blob", "e4f02feb21a93eecc199a400d13146bcdc7d5bcb"),
     "patches/BUILD.bazel": (
         "100644",
         "blob",
@@ -388,13 +390,13 @@ OVERLAY_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     }.items())
 )
 OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
-OVERLAY_PATHS_SHA256 = "f8bc802b1f356122a2e63725d1fbc686c2b7043db560979510e07bd0a1cfe40c"
+OVERLAY_PATHS_SHA256 = "ab90e3c84b14d604215f5e918ca4dbf7f127b9860a7c81d013a60c983c2b32a2"
 OVERLAY_CHANGED_PATHS = [
     path
     for path in OVERLAY_PATHS
     if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]
 ]
-OVERLAY_CHANGED_PATHS_SHA256 = "c1b295b0aee44b3121b2981c92a2070c320478a6825750b76eac7f1879579f8a"
+OVERLAY_CHANGED_PATHS_SHA256 = "9ffa822a833a39a01dd247d504e7d922f50dc1024b186ac0308a9d12c2eb4d4f"
 
 PATCH_DEPENDENCIES: dict[str, tuple[str, str, str]] = {
     "patches/rules_rs_windows_msvc_linker.patch": (
@@ -843,7 +845,7 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
     changed = sorted([*operations["A"], *operations["M"], *operations["D"]])
     require(changed == OVERLAY_CHANGED_PATHS, "overlay changed path set mismatch")
     require(len(operations["A"]) == 36, "overlay addition count mismatch")
-    require(len(operations["M"]) == 14, "overlay modification count mismatch")
+    require(len(operations["M"]) == 15, "overlay modification count mismatch")
     require(not operations["D"], "unexpected current overlay deletion")
     require(len(operations["E"]) == 12, "overlay exact-retention count mismatch")
     return {
