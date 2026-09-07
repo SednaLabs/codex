@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "4588637dac86d427a7a5dae1958cd40b71e53d58"
+PUSH_PREDECESSOR_SHA = "ced31bfc8b1ff209472dcf905eda23b7eb050edc"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -85,7 +85,7 @@ BUILD_SOURCE_PARENT = "5628fffa86a9e9a7dcc0cfd8d18f4cc09906ad39"
 BUILD_SOURCE_BRANCH = "worker/w13825-build-source-authoring-20260907"
 VOICE_HOST_DEFERRAL_BASELINE_SHA = "22a0c45ee711dc5ce47847dc04cbc5e7e76507c0"
 VOICE_HOST_DEFERRAL_BASELINE_ROOT_ENTRY = ("100644", "blob", "7bd8c144e52b169b907928bcf743363949d12cb2")
-BUILD_PATHS_SHA256 = "3bf5fd03c52b3ea579ccc63115f406c665f1de5e5da546c2f367bdefcccaeecd"
+BUILD_PATHS_SHA256 = "7dfbdc9e2a37f26c98451f904b7863743fdea91b34e5bacdc164708532ab8e90"
 BUILD_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     ".github/workflows/bazel.yml": (
         "100644",
@@ -132,9 +132,9 @@ BUILD_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     "codex-rs/http-client/src/lib.rs": ("100644", "blob", "e200f61af40f4c8464d819cb8c4d017f85fcd4ba"),
     "codex-rs/http-client/src/tls_backend_fallback.rs": ("100644", "blob", "760df1824ad752fe8d4b5f3f2b0d0e3e848c0144"),
     "codex-rs/http-client/src/tls_backend_fallback_tests.rs": ("100644", "blob", "c7ca0adceb94a6729d8657c7a7feb4e066044f68"),
+    "codex-rs/network-proxy/src/proxy.rs": ("100644", "blob", "2ff3dcf97e0ba78632ff09af252dea235c501b4f"),
     "codex-rs/otel/src/events/session_telemetry.rs": ("100644", "blob", "eacb744c9d0fccb7dcf7c3d401f385283ddf5f7c"),
     "codex-rs/otel/src/tool_result.rs": ("100644", "blob", "1617dc2cebb4cef34ab6f05069cdd5b15d8d23ef"),
-    "codex-rs/network-proxy/src/proxy.rs": ("100644", "blob", "2ff3dcf97e0ba78632ff09af252dea235c501b4f"),
     "codex-rs/protocol/src/legacy_events.rs": ("100644", "blob", "823f92f32a418337e2355c2938969630784cb71d"),
     "codex-rs/realtime-webrtc/BUILD.bazel": (
         "100644",
@@ -199,9 +199,9 @@ BUILD_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str]] = {
     "codex-rs/http-client/src/lib.rs": ("100644", "blob", "837d1dc27e2409f41d27c84a1cab638c71e47bbc"),
     "codex-rs/http-client/src/tls_backend_fallback.rs": ("100644", "blob", "760df1824ad752fe8d4b5f3f2b0d0e3e848c0144"),
     "codex-rs/http-client/src/tls_backend_fallback_tests.rs": ("100644", "blob", "c7ca0adceb94a6729d8657c7a7feb4e066044f68"),
+    "codex-rs/network-proxy/src/proxy.rs": ("100644", "blob", "7d823f480f3ea5787babfee2bf7d788b574c21c3"),
     "codex-rs/otel/src/events/session_telemetry.rs": ("100644", "blob", "7851e5f13110da03054eb36d2d33119a7e8252f7"),
     "codex-rs/otel/src/tool_result.rs": ("100644", "blob", "a7567a3b1e296057dc7be30598b25f46f1d11f90"),
-    "codex-rs/network-proxy/src/proxy.rs": ("100644", "blob", "7d823f480f3ea5787babfee2bf7d788b574c21c3"),
     "codex-rs/protocol/src/legacy_events.rs": ("100644", "blob", "39f1abbcc066c5dbeae8254bcd756e8e22bd5526"),
     "codex-rs/realtime-webrtc/BUILD.bazel": (
         "100644",
