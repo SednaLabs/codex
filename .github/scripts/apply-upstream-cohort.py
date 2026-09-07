@@ -33,6 +33,18 @@ WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
 PUSH_PREDECESSOR_SHA = "e016e6ba58424f9f223bd30946c3796251a34217"
+DIAGNOSTIC_TAIL_LINES = 80
+DIAGNOSTIC_LINE_LIMIT = 4096
+DIAGNOSTIC_BYTE_LIMIT = 131072
+SECRET_ENV_NAME = re.compile(
+    r"(?:token|secret|password|passwd|credential|auth|cookie|private[\s_-]*key)",
+    re.IGNORECASE,
+)
+SECRET_ASSIGNMENT = re.compile(
+    r"(?i)(\b[A-Za-z_][A-Za-z0-9_]*(?:token|secret|password|passwd|credential|auth|cookie|private[\s_-]*key)"
+    r"\s*[=:]\s*)[^\s,;]+"
+)
+BEARER_VALUE = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -987,7 +999,9 @@ def run_tool(
     *args: str,
     cwd: pathlib.Path,
     env: dict[str, str] | None = None,
+    tail_lines: int = DIAGNOSTIC_TAIL_LINES,
 ) -> str:
+    require(tail_lines > 0, "diagnostic tail-lines must be positive")
     result = subprocess.run(
         args,
         cwd=cwd,
@@ -998,15 +1012,48 @@ def run_tool(
     )
     if result.returncode != 0:
         combined = "\n".join(part for part in (result.stdout, result.stderr) if part)
+        effective_env = os.environ if env is None else env
+        secret_values = sorted(
+            {value for name, value in effective_env.items() if SECRET_ENV_NAME.search(name) and value},
+            key=len,
+            reverse=True,
+        )
         safe = combined.replace(str(cwd), "<candidate-worktree>")
+        for value in secret_values:
+            safe = safe.replace(value, "<redacted-secret>")
         safe = re.sub(r"https?://\S+", "<redacted-url>", safe)
         safe = re.sub(
             r"\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b",
             "<redacted-token>",
             safe,
         )
-        lines = safe.splitlines()
-        excerpt = "\n".join(lines[-400:]) or "<no diagnostic output>"
+        safe = BEARER_VALUE.sub("Bearer <redacted-secret>", safe)
+        safe = SECRET_ASSIGNMENT.sub(r"\1<redacted-secret>", safe)
+        line_marker = " <line truncated>"
+        lines = [
+            line
+            if len(line) <= DIAGNOSTIC_LINE_LIMIT
+            else line[: DIAGNOSTIC_LINE_LIMIT - len(line_marker)] + line_marker
+            for line in safe.splitlines()
+        ]
+        excerpt_lines = lines[-tail_lines:]
+        if len(lines) > tail_lines:
+            excerpt_lines.insert(0, "<earlier diagnostics omitted>")
+        excerpt = "\n".join(excerpt_lines) or "<no diagnostic output>"
+        encoded = excerpt.encode("utf-8")
+        if len(encoded) > DIAGNOSTIC_BYTE_LIMIT:
+            marker = "<diagnostic output truncated to 131072 bytes>"
+            budget = DIAGNOSTIC_BYTE_LIMIT - len(marker.encode("utf-8")) - 1
+            retained: list[str] = []
+            used = 0
+            for line in reversed(excerpt_lines):
+                line_size = len(line.encode("utf-8")) + (1 if retained else 0)
+                if used + line_size > budget:
+                    break
+                retained.append(line)
+                used += line_size
+            retained.reverse()
+            excerpt = marker + "\n" + "\n".join(retained)
         raise SystemExit(f"{label} failed with exit {result.returncode}\n{excerpt}")
     return result.stdout
 
@@ -3618,6 +3665,7 @@ def generate_and_test(
         "--lib",
         "service::tests::",
         cwd=worktree,
+        tail_lines=400,
     )
     require_candidate_paths(
         worktree,
