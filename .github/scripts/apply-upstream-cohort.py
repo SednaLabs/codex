@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "c989b54e24385559d8be2243a3fd9c1756cb598b"
+PUSH_PREDECESSOR_SHA = "e016e6ba58424f9f223bd30946c3796251a34217"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -1006,7 +1006,7 @@ def run_tool(
             safe,
         )
         lines = safe.splitlines()
-        excerpt = "\n".join(lines[-80:]) or "<no diagnostic output>"
+        excerpt = "\n".join(lines[-400:]) or "<no diagnostic output>"
         raise SystemExit(f"{label} failed with exit {result.returncode}\n{excerpt}")
     return result.stdout
 
