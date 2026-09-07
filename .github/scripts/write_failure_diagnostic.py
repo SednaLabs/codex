@@ -506,7 +506,13 @@ def main() -> int:
     elif input_reason == "unsupported" and command_status == "failed":
         status = "unknown"
         diagnostic = empty_diagnostic("unsupported_input")
-    elif not args.log_file and not args.structured_input and not args.input_json and command_status == "failed":
+    elif (
+        not args.log_file
+        and not args.structured_input
+        and not args.input_json
+        and not args.diagnostic_code
+        and command_status == "failed"
+    ):
         status = "unknown"
         diagnostic = empty_diagnostic("input_not_supplied")
     elif command_status in {"cancelled", "missing", "unexercised"} and not diagnostic.get("code"):

@@ -147,7 +147,8 @@ class FailureDiagnosticTests(unittest.TestCase):
         self.assertEqual(clippy["diagnostic"]["code"], "clippy::needless_return")
         self.assertEqual(rustfmt["diagnostic"]["kind"], "rustfmt")
         self.assertEqual(rustfmt["diagnostic"]["code"], "format_diff")
-        self.assertNotIn("cargo-clippy", json.dumps(clippy))
+        self.assertEqual(clippy["reproducer"]["id"], "cargo-clippy")
+        self.assertNotIn("needless return", json.dumps(clippy))
 
     def test_planner_payload_and_fingerprint_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
