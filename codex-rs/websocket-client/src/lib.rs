@@ -121,6 +121,7 @@ impl WebSocketConnector {
             self.tls_config.clone(),
             proxy_route,
             self.tcp_nodelay,
+            false,
         );
         if let Some(claim) = claim {
             claim.acknowledge();
