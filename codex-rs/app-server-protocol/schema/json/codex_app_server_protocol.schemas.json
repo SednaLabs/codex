@@ -19088,7 +19088,9 @@
               "requestedReasoningEffort",
               "effectiveModel",
               "effectiveReasoningEffort",
-              "agentsStates"
+              "agentsStates",
+              "wakeNotifications",
+              "completionReason"
             ],
             "title": "CollabAgentToolCallThreadItem",
             "type": "object"
