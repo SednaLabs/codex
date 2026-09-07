@@ -46,11 +46,12 @@ def workspace_packages(repo_root: Path) -> list[tuple[PurePosixPath, str]]:
     payload = json.loads(metadata)
     workspace_members = set(payload.get("workspace_members", []))
     packages = []
+    resolved_repo_root = repo_root.resolve()
     for package in payload.get("packages", []):
         if package.get("id") not in workspace_members:
             continue
         manifest_path = Path(package["manifest_path"]).resolve()
-        package_root = manifest_path.parent.relative_to(repo_root.resolve())
+        package_root = manifest_path.parent.relative_to(resolved_repo_root)
         packages.append((PurePosixPath(package_root.as_posix()), package["name"]))
     return packages
 
