@@ -1,5 +1,6 @@
 /**
  * @name Native visual response production coverage witness
+ * @id rust/native-visual-response-coverage-witness
  * @description Counts successful visual response exits reached by each production Android or browser handler so an empty or fixture-only analysis cannot masquerade as coverage.
  * @kind metric
  * @tags summary
