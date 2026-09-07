@@ -211,7 +211,8 @@ impl ChatWidget {
                 effective_model,
                 effective_reasoning_effort,
                 agents_states,
-                ..
+                wake_notifications,
+                completion_reason,
             } => self.on_collab_agent_tool_call(ThreadItem::CollabAgentToolCall {
                 id,
                 tool,
@@ -226,6 +227,8 @@ impl ChatWidget {
                 effective_model,
                 effective_reasoning_effort,
                 agents_states,
+                wake_notifications,
+                completion_reason,
             }),
             item @ ThreadItem::SubAgentActivity { .. } => self.on_sub_agent_activity(item),
             ThreadItem::DynamicToolCall { .. } => {}
