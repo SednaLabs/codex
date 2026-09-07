@@ -620,7 +620,7 @@ ALLOWED_MUTABLE_PATHS = sorted(set(OVERLAY_CHANGED_PATHS) | set(GENERATED_PATHS)
 
 ROOT_MANIFEST_PATH = "codex-rs/Cargo.toml"
 ROOT_LOCK_PATH = "codex-rs/Cargo.lock"
-ROOT_CLOSURE_SHA256 = "489401f326edc4f9e9b3a4b2aa57de6be1ff5eb5cc29390761d9d1b6f2ac29fb"
+ROOT_CLOSURE_SHA256 = "cf463d56f7d8e7ccc542a84bfa324399c081585aeadaa7aa09b59be49a091493"
 REQUIRED_ROOT_MEMBERS = {
     "agent-roles",
     "app-server-protocol-noop-macros",
@@ -641,11 +641,12 @@ REQUIRED_ROOT_MEMBERS = {
     "utils/audio",
     "utils/git-discovery",
     "utils/redacted-string",
+    "voice-host",
     "windows-sandbox-service",
     "workload-identity",
     "worktree",
 }
-DEFERRED_ROOT_MEMBERS = {"voice-host"}
+DEFERRED_ROOT_MEMBERS = set()
 REQUIRED_WORKSPACE_DEPENDENCIES: dict[str, Any] = {
     "appcontainer_common": {
         "git": "https://github.com/microsoft/mxc",
@@ -665,6 +666,7 @@ REQUIRED_WORKSPACE_DEPENDENCIES: dict[str, Any] = {
     "codex-utils-audio": {"path": "utils/audio"},
     "codex-utils-git-discovery": {"path": "utils/git-discovery"},
     "codex-utils-redacted-string": {"path": "utils/redacted-string"},
+    "codex-workload-identity": {"path": "workload-identity"},
     "gix-url": "0.35.2",
     "learning_mode_windows": {
         "git": "https://github.com/microsoft/mxc",
@@ -682,7 +684,6 @@ DEFERRED_WORKSPACE_DEPENDENCIES = {
     "codex-guardian-v2",
     "codex-history-notes-extension",
     "codex-queue-extension",
-    "codex-workload-identity",
     "codex-worktree",
 }
 EXPECTED_V8_LOCK_ENTRY = {
