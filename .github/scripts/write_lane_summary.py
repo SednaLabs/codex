@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 from pathlib import Path
 
@@ -30,15 +29,20 @@ DIAGNOSTIC_MAX_BYTES = 64 * 1024
 
 
 def safe_diagnostic_path(path_value: str) -> Path | None:
-    """Resolve a diagnostic artifact only below the current checkout root."""
+    """Resolve one of the fixed diagnostic artifact names in the checkout."""
 
-    if not path_value or os.path.isabs(path_value):
+    if path_value == "diagnostic.json":
+        candidate = Path("diagnostic.json").resolve()
+    elif path_value == "failure-diagnostic.json":
+        candidate = Path("failure-diagnostic.json").resolve()
+    elif path_value == "ci-diagnostic.json":
+        candidate = Path("ci-diagnostic.json").resolve()
+    else:
         return None
-    root = os.path.realpath(os.getcwd())
-    candidate = os.path.realpath(os.path.join(root, path_value))
-    if candidate != root and not candidate.startswith(root + os.sep):
+    root = Path.cwd().resolve()
+    if candidate.parent != root:
         return None
-    return Path(candidate)
+    return candidate
 
 
 def parse_args() -> argparse.Namespace:
