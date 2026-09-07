@@ -1875,7 +1875,7 @@ mod tests {
             &receiver_thread_ids,
             &statuses,
             &[],
-            None,
+            /*completion_reason*/ None,
             &mut agent_metadata,
         );
 

@@ -39,6 +39,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::items::AgentNotificationContent;
+use codex_protocol::items::AgentNotificationOrigin;
+use codex_protocol::items::AgentNotificationSummary;
 use codex_protocol::items::CollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallStatus;
 use codex_protocol::models::BaseInstructions;
@@ -5194,7 +5197,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
     session
         .input_queue
         .enqueue_mailbox_communication(InterAgentCommunication::new(
-            worker_path,
+            worker_path.clone(),
             AgentPath::root(),
             Vec::new(),
             "mailbox update".to_string(),
@@ -5217,7 +5220,17 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
             pending_ids: Vec::new(),
             completion_reason: CollabWaitingCompletionReason::Mailbox,
             timed_out: false,
-            wake_notifications: None,
+            wake_notifications: Some(vec![AgentNotificationSummary {
+                communication_id: None,
+                sequence: 0,
+                origin: AgentNotificationOrigin::ExplicitMessage,
+                sender_agent_path: worker_path,
+                sender_thread_id: Some(agent_id),
+                content: AgentNotificationContent::PlaintextPreview {
+                    text: "mailbox update".to_string(),
+                    truncated: false,
+                },
+            }]),
         }
     );
     assert_eq!(success, None);
@@ -5271,7 +5284,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
     session
         .input_queue
         .enqueue_mailbox_communication(InterAgentCommunication::new(
-            worker_path,
+            worker_path.clone(),
             AgentPath::root(),
             Vec::new(),
             "already queued".to_string(),
@@ -5305,7 +5318,17 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
             pending_ids: vec![agent_id],
             completion_reason: CollabWaitingCompletionReason::Mailbox,
             timed_out: false,
-            wake_notifications: None,
+            wake_notifications: Some(vec![AgentNotificationSummary {
+                communication_id: None,
+                sequence: 0,
+                origin: AgentNotificationOrigin::ExplicitMessage,
+                sender_agent_path: worker_path,
+                sender_thread_id: Some(agent_id),
+                content: AgentNotificationContent::PlaintextPreview {
+                    text: "already queued".to_string(),
+                    truncated: false,
+                },
+            }]),
         }
     );
     assert_eq!(success, None);
@@ -5596,7 +5619,7 @@ fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
         session
             .input_queue
             .enqueue_mailbox_communication(InterAgentCommunication::new(
-                worker_path,
+                worker_path.clone(),
                 AgentPath::root(),
                 Vec::new(),
                 "sensitive child output".to_string(),
@@ -5617,7 +5640,27 @@ fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
             CollabWaitingCompletionReason::Mailbox
         );
         assert!(!result.timed_out);
-        assert!(!content.contains("sensitive child output"));
+        let notifications = result
+            .wake_notifications
+            .expect("mailbox wake should include a safe notification summary");
+        assert_eq!(notifications.len(), 1);
+        let notification = &notifications[0];
+        assert_eq!(notification.communication_id, None);
+        assert_eq!(notification.sequence, 0);
+        assert_eq!(
+            notification.origin,
+            AgentNotificationOrigin::ExplicitMessage
+        );
+        assert_eq!(notification.sender_agent_path, worker_path);
+        assert_eq!(notification.sender_thread_id, Some(agent_id));
+        assert_eq!(
+            notification.content,
+            AgentNotificationContent::PlaintextPreview {
+                text: "sensitive child output".to_string(),
+                truncated: false,
+            }
+        );
+        assert!(!content.contains("encrypted_content"));
         assert_eq!(success, None);
     });
 }
