@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "a8c232d85424d2ca1ff2ca2804159e5b7046672d"
+PUSH_PREDECESSOR_SHA = "f96a454b6f0939dd5286cbd462e8581d0bc2d802"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -192,7 +192,7 @@ BUILD_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str]] = {
         "blob",
         "b7d06b98391ef2f3307096d963eea4e19853d8f0",
     ),
-    "codex-rs/codex-api/src/endpoint/responses.rs": ("100644", "blob", "210b0f032c895606586503a720ceb338d4bed86b"),
+    "codex-rs/codex-api/src/endpoint/responses.rs": ("100644", "blob", "0e62dd907d2be8f402c27fed4cb988e39cc7ec63"),
     "codex-rs/codex-api/src/sse/responses.rs": ("100644", "blob", "f76c18812c68610afd4f764476a94cfba74e33ce"),
     "codex-rs/http-client/src/lib.rs": ("100644", "blob", "837d1dc27e2409f41d27c84a1cab638c71e47bbc"),
     "codex-rs/http-client/src/tls_backend_fallback.rs": ("100644", "blob", "760df1824ad752fe8d4b5f3f2b0d0e3e848c0144"),
