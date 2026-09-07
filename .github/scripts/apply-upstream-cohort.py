@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "7a80f886b7ebf979b8324f7e3527afdbe83a65b3"
+PUSH_PREDECESSOR_SHA = "2f1a936647c947ec2f0c6c563b8335c27fe37d11"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -68,14 +68,14 @@ SDK_INPUT_RECEIPT_SHA256 = "811992f09b22f610b8ab01983a01da0950ed090931813c67e91f
 SDK_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
 SDK_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
 SDK_CANDIDATE_PARENT = MATERIALIZED_SHA
-DIAGNOSTIC_SOURCE_SHA = "cb3c6b5abd9b08d93f38aec0a959703a5915c6dd"
-DIAGNOSTIC_SOURCE_TREE = "97459288bcebe0fbcff352778293d95ed79aeef1"
-DIAGNOSTIC_SOURCE_PARENT = "c56b0290e019a536da55cc4ae902ac4db55676c5"
-DIAGNOSTIC_HELPER_SHA = "c989b54e24385559d8be2243a3fd9c1756cb598b"
+DIAGNOSTIC_SOURCE_SHA = "b1f542e7efa662eab4525c6d3673ffa655532412"
+DIAGNOSTIC_SOURCE_TREE = "c68eece6e8809ecd95e090bfb80af44b2720298f"
+DIAGNOSTIC_SOURCE_PARENT = "cb3c6b5abd9b08d93f38aec0a959703a5915c6dd"
+DIAGNOSTIC_HELPER_SHA = "94be98a5d77fe01a82edd6e4c8be83c5b7147d30"
 TARGET_HELPER_BRANCH = "worker/w13825-sdk-build-consumer"
-TARGET_HELPER_SHA = "c989b54e24385559d8be2243a3fd9c1756cb598b"
-TARGET_HELPER_TREE = "85966159f29a883da63c5a3ecca521eb5fae9d19"
-TARGET_HELPER_PARENT = "88c06eebaf1354517447268f63cd900885131f3a"
+TARGET_HELPER_SHA = "94be98a5d77fe01a82edd6e4c8be83c5b7147d30"
+TARGET_HELPER_TREE = "64c7eda40dde58443f2266454ae30f1835de7993"
+TARGET_HELPER_PARENT = "3c0fae0c1bb04fdf3cb3fdd2636019040d62135c"
 
 COMMON_SOURCE_RUN_ID = "34035744523"
 COMMON_SOURCE_RUN_ATTEMPT = "1"
@@ -714,6 +714,8 @@ RMCP_PREIMAGE_PATHS = [
     "codex-rs/rmcp-client/tests/streamable_http_test_support.rs",
 ]
 RMCP_PREIMAGE_PATHS_SHA256 = "706df09a76a0d40d204dbd13b950ce57f83e43b6999f73343e3d2b873ff98ba7"
+RMCP_PREIMAGE_PATHS = ["codex-rs/tools/src/code_mode.rs"]
+RMCP_PREIMAGE_PATHS_SHA256 = "6b19655d8f34fc6786dcbae8f044c00c186c98e6c73f357823bcab962bcbf5b6"
 SDK_BUNDLE_ROUTE_WITNESS = ("100644", "blob", "29705e44eb66f235adee5a8932264ee778f98ced")
 ALLOWED_MUTABLE_PATHS = sorted(set(OVERLAY_CHANGED_PATHS) | set(GENERATED_PATHS))
 
@@ -2552,7 +2554,7 @@ def emit_sdk_bundle_path_receipt(repo: pathlib.Path, diagnostics: pathlib.Path) 
     return receipt
 
 
-def emit_sdk_rmcp_preimage_receipt(
+def emit_sdk_code_mode_preimage_receipt(
     repo: pathlib.Path,
     output: pathlib.Path,
     provider_receipt: pathlib.Path,
@@ -2560,7 +2562,7 @@ def emit_sdk_rmcp_preimage_receipt(
     workflow_tree: str,
 ) -> dict[str, Any]:
     require(RMCP_PREIMAGE_PATHS == sorted(RMCP_PREIMAGE_PATHS), "diagnostic paths are not sorted")
-    require(len(RMCP_PREIMAGE_PATHS) == 82, "diagnostic path scope is not exactly 82 paths")
+    require(len(RMCP_PREIMAGE_PATHS) == 1, "diagnostic path scope is not exactly one path")
     require(path_digest(RMCP_PREIMAGE_PATHS) == RMCP_PREIMAGE_PATHS_SHA256, "diagnostic path-set digest mismatch")
     entries = [
         {"path": path, "entry": tuple_json(tree_entry(repo, SDK_CANDIDATE_SHA, path))}
@@ -2570,7 +2572,7 @@ def emit_sdk_rmcp_preimage_receipt(
     require(set(missing_paths).issubset(set(RMCP_PREIMAGE_PATHS)), "diagnostic missing path escaped probe set")
     provider = verify_probe_provider_receipt(provider_receipt)
     receipt = {
-        "schema": "sdk-rmcp-preimage-diagnostic",
+        "schema": "sdk-code-mode-preimage-diagnostic",
         "version": 1,
         "repository": REPOSITORY,
         "diagnostic_workflow_sha": workflow_sha,
@@ -3724,7 +3726,7 @@ def main() -> None:
     parser.add_argument("--validate-uv-identity")
     parser.add_argument("--prepare-inputs-only", action="store_true")
     parser.add_argument("--metadata-manifest-only", action="store_true")
-    parser.add_argument("--probe-sdk-rmcp-preimage-only", action="store_true")
+    parser.add_argument("--probe-sdk-code-mode-preimage-only", action="store_true")
     parser.add_argument("--provider-receipt", type=pathlib.Path)
     args = parser.parse_args()
 
@@ -3777,7 +3779,7 @@ def main() -> None:
     repo = absolute_argument(args.repo_root, "repo-root", must_exist=True)
     artifact = absolute_argument(args.artifact_dir, "artifact-dir", must_exist=True)
     require(repo.is_dir() and artifact.is_dir(), "repository and artifact inputs must be directories")
-    if args.probe_sdk_rmcp_preimage_only:
+    if args.probe_sdk_code_mode_preimage_only:
         require(args.output_dir is not None, "diagnostic output path is required")
         require(args.preflight_dir is None, "diagnostic mode does not accept a preflight path")
         require(args.provider_receipt is not None, "diagnostic provider receipt is required")
@@ -3794,7 +3796,7 @@ def main() -> None:
             isolated_repo = import_sdk_bundle_for_probe(files["bundle"], temp)
             verify_imported_sdk_objects(isolated_repo)
             output = absolute_argument(args.output_dir, "output-dir", must_exist=False)
-            emission = emit_sdk_rmcp_preimage_receipt(
+            emission = emit_sdk_code_mode_preimage_receipt(
                 isolated_repo,
                 output,
                 provider_receipt,
