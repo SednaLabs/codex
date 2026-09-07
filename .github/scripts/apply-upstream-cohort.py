@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "2fa3066b6f7da924f4987693afd39a025d345fbb"
+PUSH_PREDECESSOR_SHA = "f479fcbad7e360ab6638d03992b77d4110fe423c"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -68,6 +68,10 @@ SDK_INPUT_RECEIPT_SHA256 = "811992f09b22f610b8ab01983a01da0950ed090931813c67e91f
 SDK_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
 SDK_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
 SDK_CANDIDATE_PARENT = MATERIALIZED_SHA
+DIAGNOSTIC_SOURCE_SHA = "5628fffa86a9e9a7dcc0cfd8d18f4cc09906ad39"
+DIAGNOSTIC_SOURCE_TREE = "21387ded774b7e5951a76a0cb26e3a5a30e24716"
+DIAGNOSTIC_SOURCE_PARENT = "e437fdbb0817b0efc8a4368061df195382478d93"
+DIAGNOSTIC_HELPER_SHA = "f96a454b6f0939dd5286cbd462e8581d0bc2d802"
 
 COMMON_SOURCE_RUN_ID = "34035744523"
 COMMON_SOURCE_RUN_ATTEMPT = "1"
@@ -457,12 +461,11 @@ GENERATED_PATHS = [
 SDK_GENERATED_PATHS = GENERATED_PATHS[3:]
 SDK_BUNDLE_PROBE_PATHS = sorted(
     [
-        "codex-rs/http-client/src/lib.rs",
-        "codex-rs/http-client/src/route_aware_client_pool.rs",
-        "codex-rs/http-client/src/tls_backend_fallback.rs",
-        "codex-rs/http-client/src/tls_backend_fallback_tests.rs",
+        "codex-rs/codex-api/src/endpoint/responses.rs",
+        "codex-rs/codex-api/src/sse/responses.rs",
     ]
 )
+SDK_BUNDLE_PROBE_PATHS_SHA256 = "377d8cefbf895fa611b5e6ee7ed765cb371b3f1114d287ad7e7ff99c90735f49"
 SDK_BUNDLE_ROUTE_WITNESS = ("100644", "blob", "29705e44eb66f235adee5a8932264ee778f98ced")
 ALLOWED_MUTABLE_PATHS = sorted(set(OVERLAY_CHANGED_PATHS) | set(GENERATED_PATHS))
 
@@ -2248,6 +2251,42 @@ def emit_sdk_bundle_path_receipt(repo: pathlib.Path, diagnostics: pathlib.Path) 
     return receipt
 
 
+def emit_codex_api_preimage_receipt(
+    repo: pathlib.Path,
+    output: pathlib.Path,
+    provider_receipt: pathlib.Path,
+    workflow_sha: str,
+    workflow_tree: str,
+) -> dict[str, Any]:
+    require(SDK_BUNDLE_PROBE_PATHS == sorted(SDK_BUNDLE_PROBE_PATHS), "diagnostic paths are not sorted")
+    require(len(SDK_BUNDLE_PROBE_PATHS) == 2, "diagnostic path scope is not exactly two paths")
+    require(path_digest(SDK_BUNDLE_PROBE_PATHS) == SDK_BUNDLE_PROBE_PATHS_SHA256, "diagnostic path-set digest mismatch")
+    entries = [
+        {"path": path, "entry": tuple_json(tree_entry(repo, SDK_CANDIDATE_SHA, path))}
+        for path in SDK_BUNDLE_PROBE_PATHS
+    ]
+    require(all(item["entry"] is not None for item in entries), "diagnostic path is missing")
+    receipt = {
+        "schema": "sdk-codex-api-preimage-diagnostic",
+        "version": 1,
+        "repository": REPOSITORY,
+        "workflow_sha": workflow_sha,
+        "workflow_tree": workflow_tree,
+        "helper_sha": DIAGNOSTIC_HELPER_SHA,
+        "source_sha": DIAGNOSTIC_SOURCE_SHA,
+        "source_tree": DIAGNOSTIC_SOURCE_TREE,
+        "source_parent": DIAGNOSTIC_SOURCE_PARENT,
+        "artifact_provider": load(provider_receipt),
+        "candidate_sha": SDK_CANDIDATE_SHA,
+        "candidate_tree": SDK_CANDIDATE_TREE,
+        "path_set_sha256": path_digest(SDK_BUNDLE_PROBE_PATHS),
+        "entries": entries,
+    }
+    output.mkdir(parents=True, exist_ok=False)
+    write_json(output / "receipt.json", receipt)
+    return receipt
+
+
 def verify_sdk_input_entries(repo: pathlib.Path, receipt: dict[str, Any]) -> list[dict[str, Any]]:
     require(
         not set(COMPOSITE_RUNTIME_INPUTS).intersection(ALLOWED_MUTABLE_PATHS),
@@ -3376,6 +3415,8 @@ def main() -> None:
     parser.add_argument("--validate-uv-identity")
     parser.add_argument("--prepare-inputs-only", action="store_true")
     parser.add_argument("--metadata-manifest-only", action="store_true")
+    parser.add_argument("--probe-sdk-paths-only", action="store_true")
+    parser.add_argument("--provider-receipt", type=pathlib.Path)
     args = parser.parse_args()
 
     runtime = verify_runtime(args.expected_workflow_sha, args.expected_workflow_tree)
@@ -3427,6 +3468,31 @@ def main() -> None:
     repo = absolute_argument(args.repo_root, "repo-root", must_exist=True)
     artifact = absolute_argument(args.artifact_dir, "artifact-dir", must_exist=True)
     require(repo.is_dir() and artifact.is_dir(), "repository and artifact inputs must be directories")
+    if args.probe_sdk_paths_only:
+        require(args.output_dir is not None, "diagnostic output path is required")
+        require(args.preflight_dir is None, "diagnostic mode does not accept a preflight path")
+        require(args.provider_receipt is not None, "diagnostic provider receipt is required")
+        provider_receipt = absolute_argument(args.provider_receipt, "provider-receipt", must_exist=True)
+        require(provider_receipt.is_file() and not provider_receipt.is_symlink(), "provider receipt is unavailable")
+        require(run("git", "rev-parse", "HEAD", cwd=repo).strip() == DIAGNOSTIC_SOURCE_SHA, "diagnostic source SHA mismatch")
+        require(run("git", "rev-parse", "HEAD^{tree}", cwd=repo).strip() == DIAGNOSTIC_SOURCE_TREE, "diagnostic source tree mismatch")
+        require(run("git", "show", "-s", "--format=%P", "HEAD", cwd=repo).split() == [DIAGNOSTIC_SOURCE_PARENT], "diagnostic source parent mismatch")
+        require(not run("git", "status", "--porcelain", cwd=repo), "diagnostic source checkout is dirty")
+        files = verify_sdk_artifact_files(artifact)
+        with tempfile.TemporaryDirectory(prefix="w13825-sdk-probe-", dir=str(repo.parent)) as temp_name:
+            temp = pathlib.Path(temp_name).resolve(strict=True)
+            import_sdk_bundle(repo, files["bundle"], temp)
+            verify_imported_sdk_objects(repo)
+        output = absolute_argument(args.output_dir, "output-dir", must_exist=False)
+        emission = emit_codex_api_preimage_receipt(
+            repo,
+            output,
+            provider_receipt,
+            args.expected_workflow_sha,
+            args.expected_workflow_tree,
+        )
+        print(json.dumps(emission, sort_keys=True, separators=(",", ":")))
+        return
     verify_build_source_checkout(repo)
 
     if args.metadata_manifest_only:
