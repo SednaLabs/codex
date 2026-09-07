@@ -107,7 +107,7 @@ jobs:
           workflow_tree = sys.argv[3]
           push = {
               "ref": "refs/heads/worker/w13825-sdk-build-consumer",
-              "before": "0fa546e0ad2d4e8c0840103ddd9c74e573a664b1",
+              "before": "292f9404273103ff7333ef8f881017aa7bc324fb",
               "after": workflow_sha,
               "created": False,
               "deleted": False,
