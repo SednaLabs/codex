@@ -298,6 +298,8 @@ pub fn item_event_to_server_notification(
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states,
+                wake_notifications: None,
+                completion_reason: None,
             };
             ServerNotification::ItemCompleted(ItemCompletedNotification {
                 thread_id,
@@ -360,6 +362,8 @@ pub fn item_event_to_server_notification(
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states,
+                wake_notifications: None,
+                completion_reason: None,
             };
             ServerNotification::ItemCompleted(ItemCompletedNotification {
                 thread_id,
@@ -422,6 +426,8 @@ pub fn item_event_to_server_notification(
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states,
+                wake_notifications: None,
+                completion_reason: None,
             };
             ServerNotification::ItemCompleted(ItemCompletedNotification {
                 thread_id,

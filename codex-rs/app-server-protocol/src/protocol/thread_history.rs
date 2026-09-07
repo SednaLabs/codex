@@ -900,6 +900,7 @@ impl ThreadHistoryBuilder {
             agents_states: HashMap::new(),
             wake_notifications: None,
             completion_reason: None,
+            completion_reason: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -943,6 +944,8 @@ impl ThreadHistoryBuilder {
             effective_model,
             effective_reasoning_effort,
             agents_states,
+            wake_notifications: None,
+            completion_reason: None,
         });
     }
 
@@ -965,6 +968,7 @@ impl ThreadHistoryBuilder {
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
             wake_notifications: None,
+            completion_reason: None,
             completion_reason: None,
         };
         self.upsert_item_in_current_turn(item);
@@ -1037,6 +1041,7 @@ impl ThreadHistoryBuilder {
             agents_states: HashMap::new(),
             wake_notifications: None,
             completion_reason: None,
+            completion_reason: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -1076,6 +1081,8 @@ impl ThreadHistoryBuilder {
             effective_model: None,
             effective_reasoning_effort: None,
             agents_states,
+            wake_notifications: None,
+            completion_reason: None,
         });
     }
 
@@ -1098,6 +1105,7 @@ impl ThreadHistoryBuilder {
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
             wake_notifications: None,
+            completion_reason: None,
             completion_reason: None,
         };
         self.upsert_item_in_current_turn(item);
@@ -1129,6 +1137,8 @@ impl ThreadHistoryBuilder {
             effective_model: None,
             effective_reasoning_effort: None,
             agents_states,
+            wake_notifications: None,
+            completion_reason: None,
         });
     }
 
@@ -1185,6 +1195,8 @@ impl ThreadHistoryBuilder {
             effective_model: None,
             effective_reasoning_effort: None,
             agents_states,
+            wake_notifications: None,
+            completion_reason: None,
         });
     }
 
