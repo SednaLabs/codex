@@ -2488,7 +2488,10 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         child_snapshot.session_source.get_agent_path().as_deref(),
         Some("/root/test_process")
     );
-    assert_ne!(turn.config.model_reasoning_effort, child_snapshot.reasoning_effort);
+    assert_ne!(
+        turn.config.model_reasoning_effort,
+        child_snapshot.reasoning_effort
+    );
     assert!(manager.captured_ops().iter().any(|(id, op)| {
         *id == child_thread_id
             && matches!(
@@ -3512,7 +3515,10 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .await
         .expect("worker thread should exist");
     let worker_config = thread.config_snapshot().await;
-    assert_ne!(turn.config.model_reasoning_effort, worker_config.reasoning_effort);
+    assert_ne!(
+        turn.config.model_reasoning_effort,
+        worker_config.reasoning_effort
+    );
     let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
 
     let first_turn = thread.session.new_default_turn().await;
