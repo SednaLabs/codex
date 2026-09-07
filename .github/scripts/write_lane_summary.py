@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 
@@ -26,6 +27,18 @@ SCHEMA_FILE_SET_DRIFT_RE = re.compile(
 )
 DIAGNOSTIC_SCHEMA_VERSION = "ci-diagnostic-v1"
 DIAGNOSTIC_MAX_BYTES = 64 * 1024
+
+
+def safe_diagnostic_path(path_value: str) -> Path | None:
+    """Resolve a diagnostic artifact only below the current checkout root."""
+
+    if not path_value or os.path.isabs(path_value):
+        return None
+    root = os.path.realpath(os.getcwd())
+    candidate = os.path.realpath(os.path.join(root, path_value))
+    if candidate != root and not candidate.startswith(root + os.sep):
+        return None
+    return Path(candidate)
 
 
 def parse_args() -> argparse.Namespace:
@@ -178,7 +191,9 @@ def load_failure_diagnostic(path_value: str) -> dict:
     }
     if not path_value:
         return {}
-    path = Path(path_value)
+    path = safe_diagnostic_path(path_value)
+    if path is None:
+        return invalid
     try:
         if path.stat().st_size > DIAGNOSTIC_MAX_BYTES:
             return invalid

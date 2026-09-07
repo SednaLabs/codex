@@ -71,8 +71,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--evidence-fingerprint", default="")
     parser.add_argument("--reproducer-id", default="")
     parser.add_argument("--reproducer-args-json", default="{}")
-    parser.add_argument("--log-file", default="", type=Path)
-    parser.add_argument("--structured-input", default="", type=Path)
+    parser.add_argument("--log-file", default=None, type=Path)
+    parser.add_argument("--structured-input", default=None, type=Path)
     parser.add_argument("--input-json", default="", help=argparse.SUPPRESS)
     return parser.parse_args()
 

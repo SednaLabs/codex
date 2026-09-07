@@ -283,11 +283,12 @@ class FailureDiagnosticTests(unittest.TestCase):
                     "--outcome",
                     "cancelled",
                     "--failure-diagnostic-json",
-                    str(diagnostic),
+                    diagnostic.name,
                     "--output",
                     str(lane_summary),
                 ],
                 check=True,
+                cwd=root,
             )
             lane = json.loads(lane_summary.read_text(encoding="utf-8"))
             results = aggregate.build_results(
