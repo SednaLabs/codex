@@ -4537,6 +4537,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+
+                wake_notifications: None,
+                completion_reason: None,
             }]
         );
     }
@@ -4579,6 +4582,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+
+                wake_notifications: None,
+                completion_reason: None,
             }]
         );
     }
@@ -4619,6 +4625,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+
+                wake_notifications: None,
+                completion_reason: None,
             }]
         );
     }
@@ -4678,6 +4687,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+
+                wake_notifications: None,
+                completion_reason: None,
             }
         );
     }
@@ -4755,6 +4767,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+
+                wake_notifications: None,
+                completion_reason: None,
             }
         );
     }
@@ -4845,6 +4860,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+
+                wake_notifications: None,
+                completion_reason: None,
             }
         );
     }
@@ -4906,6 +4924,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+
+                wake_notifications: None,
+                completion_reason: None,
             }
         );
     }
@@ -4982,6 +5003,9 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+
+                wake_notifications: None,
+                completion_reason: None,
             }
         );
     }

@@ -391,6 +391,7 @@ impl ChatWidget {
                 effective_model,
                 effective_reasoning_effort,
                 agents_states,
+                ..
             } => self.on_collab_agent_tool_call(ThreadItem::CollabAgentToolCall {
                 id,
                 tool,

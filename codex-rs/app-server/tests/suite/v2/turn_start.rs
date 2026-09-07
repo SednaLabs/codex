@@ -3239,6 +3239,9 @@ async fn turn_start_emits_multi_agent_v1_spawn_requested_and_effective_identity_
             effective_model: None,
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
+
+            wake_notifications: None,
+            completion_reason: None,
         }
     );
 
@@ -3268,6 +3271,7 @@ async fn turn_start_emits_multi_agent_v1_spawn_requested_and_effective_identity_
         effective_model,
         effective_reasoning_effort,
         agents_states,
+        ..
     } = spawn_completed
     else {
         unreachable!("loop ensures we break on collab agent tool call items");
@@ -3603,6 +3607,9 @@ config_file = "./custom-role.toml"
             effective_model: None,
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
+
+            wake_notifications: None,
+            completion_reason: None,
         }
     );
 
@@ -3632,6 +3639,7 @@ config_file = "./custom-role.toml"
         effective_model,
         effective_reasoning_effort,
         agents_states,
+        ..
     } = spawn_completed
     else {
         unreachable!("loop ensures we break on collab agent tool call items");

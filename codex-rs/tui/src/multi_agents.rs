@@ -1585,6 +1585,9 @@ mod tests {
                     robie_id.to_string(),
                     agent_state(CollabAgentStatus::PendingInit, /*message*/ None),
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
@@ -1609,6 +1612,9 @@ mod tests {
                     robie_id.to_string(),
                     agent_state(CollabAgentStatus::Running, /*message*/ None),
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
@@ -1630,6 +1636,9 @@ mod tests {
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
@@ -1660,6 +1669,9 @@ mod tests {
                         agent_state(CollabAgentStatus::Errored, Some("tool timeout")),
                     ),
                 ]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
@@ -1684,6 +1696,9 @@ mod tests {
                     robie_id.to_string(),
                     agent_state(CollabAgentStatus::Completed, Some("39916800")),
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
@@ -1979,6 +1994,9 @@ mod tests {
                     robie_id.to_string(),
                     agent_state(CollabAgentStatus::PendingInit, /*message*/ None),
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, ThreadId::new()),
@@ -2024,6 +2042,9 @@ mod tests {
                     robie_id.to_string(),
                     agent_state(CollabAgentStatus::Interrupted, /*message*/ None),
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, ThreadId::new()),
@@ -2061,6 +2082,9 @@ mod tests {
             effective_model: None,
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
+
+            wake_notifications: None,
+            completion_reason: None,
         }
     }
 

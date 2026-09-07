@@ -114,6 +114,9 @@ async fn replayed_collab_spawn_terminal_uses_only_explicit_effective_identity() 
             effective_model: Some("gpt-effective-model".to_string()),
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
+
+            wake_notifications: None,
+            completion_reason: None,
         },
         "turn-replay".to_string(),
         ReplayKind::ResumeInitialMessages,
@@ -133,6 +136,9 @@ async fn replayed_collab_spawn_terminal_uses_only_explicit_effective_identity() 
             effective_model: Some("gpt-effective-effort".to_string()),
             effective_reasoning_effort: Some(ReasoningEffortConfig::Low),
             agents_states: HashMap::new(),
+
+            wake_notifications: None,
+            completion_reason: None,
         },
         "turn-replay".to_string(),
         ReplayKind::ResumeInitialMessages,
@@ -241,6 +247,9 @@ async fn replayed_failed_collab_spawn_without_receiver_keeps_requested_identity(
             effective_model: None,
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
+
+            wake_notifications: None,
+            completion_reason: None,
         },
         "turn-replay".to_string(),
         ReplayKind::ResumeInitialMessages,

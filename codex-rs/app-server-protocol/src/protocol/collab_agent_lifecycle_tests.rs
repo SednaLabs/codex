@@ -497,6 +497,9 @@ fn collab_item(
         effective_model: None,
         effective_reasoning_effort: None,
         agents_states,
+
+        wake_notifications: None,
+        completion_reason: None,
     }
 }
 
