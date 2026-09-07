@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "809f0c9c5ddf1da876a99c028e7f36bb7277283b"
+PUSH_PREDECESSOR_SHA = "80e0e192172f9fc998a635915f17a6011af6cbd6"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -79,10 +79,15 @@ COMMON_PROVENANCE_SHA256 = "afbf269c8593c978ed706c9f2fddc0031383350fe216d88512ec
 COMMON_STAGED_PATCH_SHA256 = "dd4b59d9be8c2727d08de673085b36a1c61f6cee617855f210706412a5bfc66c"
 COMMON_STAGED_PATHS_SHA256 = "90b44134bb538a07fa03dfd674e96f08de4ba04a40252f6dc9f5c740dd5bb1ae"
 
-BUILD_SOURCE_SHA = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
-BUILD_SOURCE_TREE = "1179ce52f138e92e2aedfdeffc31d28f29992000"
-BUILD_SOURCE_PARENT = "5628fffa86a9e9a7dcc0cfd8d18f4cc09906ad39"
+BUILD_SOURCE_SHA = "b593ff0ba02ff08d0c44f6db95840c6cc59f0598"
+BUILD_SOURCE_TREE = "8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47"
+BUILD_SOURCE_PARENT = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
 BUILD_SOURCE_BRANCH = "worker/w13825-build-source-authoring-20260907"
+SANDBOXING_PREIMAGE_RECEIPT_SHA256 = "a51e419d19bfe58360b718dedc0b60dc16814a1ed1fc4da77fd8846a60c27427"
+SANDBOXING_PREIMAGE_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
+SANDBOXING_PREIMAGE_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
+SANDBOXING_PREIMAGE_PATH_COUNT = 23
+SANDBOXING_PREIMAGE_PATH_SET_SHA256 = "017139984c58749594a88c98b0e409fc0781741499cb3749b5037874b1f3b3ac"
 VOICE_HOST_DEFERRAL_BASELINE_SHA = "22a0c45ee711dc5ce47847dc04cbc5e7e76507c0"
 VOICE_HOST_DEFERRAL_BASELINE_ROOT_ENTRY = ("100644", "blob", "7bd8c144e52b169b907928bcf743363949d12cb2")
 BUILD_PATHS_SHA256 = "7dfbdc9e2a37f26c98451f904b7863743fdea91b34e5bacdc164708532ab8e90"
@@ -394,9 +399,57 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES["codex-rs/config/src/profile_toml.rs"] = (
     "blob",
     "cfd82d1aaac577c57c472d06731ba030426feb02",
 )
+RESTORE_SOURCE_ENTRIES.update({
+    "codex-rs/sandboxing/BUILD.bazel": ("100644", "blob", "5cdc37b747c9a960dffeaf0730616295282a5253"),
+    "codex-rs/sandboxing/Cargo.toml": ("100644", "blob", "3cdd2e8c9b20b3a495edcb72bce48af62a971f99"),
+    "codex-rs/sandboxing/src/denial.rs": ("100644", "blob", "507bf4de5e4c82d96d373000b6e92815e6fa9c16"),
+    "codex-rs/sandboxing/src/landlock.rs": ("100644", "blob", "819fc9365e9f592eb52ba5938489ea66037472dd"),
+    "codex-rs/sandboxing/src/landlock_tests.rs": ("100644", "blob", "d0bbab8400c7e169904f037e01ca009e38e6ad78"),
+    "codex-rs/sandboxing/src/lib.rs": ("100644", "blob", "fc390fdf951a8407e9d38b52b48121ba89df51d7"),
+    "codex-rs/sandboxing/src/manager.rs": ("100644", "blob", "b633e8f7793f4a008ecb952adfb80dac8c415e84"),
+    "codex-rs/sandboxing/src/manager_tests.rs": ("100644", "blob", "8954f11d48d5bb7fd493289c146995a7f0f0da0c"),
+    "codex-rs/sandboxing/src/policy_transforms.rs": ("100644", "blob", "fed7bd15b1d5ce23f56fdeb122e65ab4bef6e4ea"),
+    "codex-rs/sandboxing/src/policy_transforms_tests.rs": ("100644", "blob", "28d5828b9c56b79db0780dd3e824863508a5623e"),
+    "codex-rs/sandboxing/src/seatbelt.rs": ("100644", "blob", "4e5c9a75718c5657a9bc0f5bea3416b17ca66766"),
+    "codex-rs/sandboxing/src/seatbelt_base_policy.sbpl": ("100644", "blob", "2fca6a886e4f3ad5a5d8d8e6e6e88894fc8f0ed9"),
+    "codex-rs/sandboxing/src/seatbelt_preferences_policy.sbpl": ("100644", "blob", "45599d1b5e131081c920e96ba73f6fcd9ccc97d7"),
+    "codex-rs/sandboxing/src/seatbelt_read_only_platform_defaults.sbpl": ("100644", "blob", "61743f43f49f82a66669fb1a3c948128c7395cf8"),
+    "codex-rs/sandboxing/src/seatbelt_tests.rs": ("100644", "blob", "4c11be4c351e44f20501da7042800d41ff9b27a5"),
+    "codex-rs/sandboxing/src/spawn.rs": ("100644", "blob", "871d3f7d7f3e430c3255f752b7f463af682ecec8"),
+    "codex-rs/sandboxing/src/terminal_queries.rs": ("100644", "blob", "a6a3f458878459adc2ff69e93067e8ec28097646"),
+    "codex-rs/sandboxing/src/terminal_queries_tests.rs": ("100644", "blob", "140d587cce6f5a1a85c23d1a86b88dc35f4a6112"),
+    "codex-rs/sandboxing/src/violation.rs": ("100644", "blob", "4023fb449475309f32cdd6d8801b067d19522621"),
+    "codex-rs/sandboxing/src/violation_tests.rs": ("100644", "blob", "7e982ed7486977128cc63db0c9910f9bc63a7655"),
+    "codex-rs/sandboxing/src/windows.rs": ("100644", "blob", "b69168ca98a0bdbc9d41a24b4bb1c7cf9e0d6a21"),
+    "codex-rs/sandboxing/src/windows_mxc.rs": ("100644", "blob", "97b32a2f0dd73ed1ca1968d5b5281a5d95095f8d"),
+})
+RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
+    "codex-rs/sandboxing/BUILD.bazel": ("100644", "blob", "5cdc37b747c9a960dffeaf0730616295282a5253"),
+    "codex-rs/sandboxing/Cargo.toml": ("100644", "blob", "3cdd2e8c9b20b3a495edcb72bce48af62a971f99"),
+    "codex-rs/sandboxing/src/denial.rs": ("100644", "blob", "507bf4de5e4c82d96d373000b6e92815e6fa9c16"),
+    "codex-rs/sandboxing/src/landlock.rs": ("100644", "blob", "b4591e01c54dee332dcef89a1ffa784ab229ca5c"),
+    "codex-rs/sandboxing/src/landlock_tests.rs": ("100644", "blob", "8f2ae9d98b5c56f5bdbebdecef51084f67ff9502"),
+    "codex-rs/sandboxing/src/lib.rs": ("100644", "blob", "2eafbcf430142d9a2c6d35aff215137ebde0b2cc"),
+    "codex-rs/sandboxing/src/manager.rs": ("100644", "blob", "00b14706904ca189dbb9db6825fc4327bb105eb7"),
+    "codex-rs/sandboxing/src/manager_tests.rs": ("100644", "blob", "d9083c3271a0075161afb988b2795fb4ea9b270c"),
+    "codex-rs/sandboxing/src/policy_transforms.rs": ("100644", "blob", "8b7b18c0bcd91ef9d6c64db563cbb3dec5ada83f"),
+    "codex-rs/sandboxing/src/policy_transforms_tests.rs": ("100644", "blob", "8cbb13b92e57620d0ae9f1cd87c11778fc0f32bb"),
+    "codex-rs/sandboxing/src/seatbelt.rs": ("100644", "blob", "4e5c9a75718c5657a9bc0f5bea3416b17ca66766"),
+    "codex-rs/sandboxing/src/seatbelt_base_policy.sbpl": ("100644", "blob", "2fca6a886e4f3ad5a5d8d8e6e6e88894fc8f0ed9"),
+    "codex-rs/sandboxing/src/seatbelt_preferences_policy.sbpl": ("100644", "blob", "45599d1b5e131081c920e96ba73f6fcd9ccc97d7"),
+    "codex-rs/sandboxing/src/seatbelt_read_only_platform_defaults.sbpl": ("100644", "blob", "61743f43f49f82a66669fb1a3c948128c7395cf8"),
+    "codex-rs/sandboxing/src/seatbelt_tests.rs": ("100644", "blob", "4c11be4c351e44f20501da7042800d41ff9b27a5"),
+    "codex-rs/sandboxing/src/spawn.rs": ("100644", "blob", "871d3f7d7f3e430c3255f752b7f463af682ecec8"),
+    "codex-rs/sandboxing/src/terminal_queries.rs": ("100644", "blob", "a6a3f458878459adc2ff69e93067e8ec28097646"),
+    "codex-rs/sandboxing/src/terminal_queries_tests.rs": ("100644", "blob", "140d587cce6f5a1a85c23d1a86b88dc35f4a6112"),
+    "codex-rs/sandboxing/src/violation.rs": ("100644", "blob", "4023fb449475309f32cdd6d8801b067d19522621"),
+    "codex-rs/sandboxing/src/violation_tests.rs": ("100644", "blob", "7e982ed7486977128cc63db0c9910f9bc63a7655"),
+    "codex-rs/sandboxing/src/windows.rs": ("100644", "blob", "2629cb1bffc445158ad4ec1cfe6b830f8ecac2b0"),
+    "codex-rs/sandboxing/src/windows_mxc.rs": ("100644", "blob", "97b32a2f0dd73ed1ca1968d5b5281a5d95095f8d"),
+})
 RESTORE_PATHS = list(RESTORE_SOURCE_ENTRIES)
-RESTORE_PATHS_SHA256 = "a42ab72b2de5657f542d685d2123d0daea24f30b5ac83825067c537c666f4d78"
-RESTORE_ENTRIES_SHA256 = "161b00e1fdfc421d7992bccd22a692f6013432495a2d3392d856b626a42382ad"
+RESTORE_PATHS_SHA256 = "12b80b0c1d13202d5433103b4b8d74afec8c9faae527abe3db74705e5738f296"
+RESTORE_ENTRIES_SHA256 = "5e9b502754311ce112b1e518da442a3dc18b882bd8e41bcf4fbe740a0159b8a8"
 
 OVERLAY_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items())
@@ -409,13 +462,13 @@ OVERLAY_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     }.items())
 )
 OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
-OVERLAY_PATHS_SHA256 = "f7d91b163454496d6dd00498d2e0427e16796c8a914d9015e041cade56dbb881"
+OVERLAY_PATHS_SHA256 = "8e4b149a0751825d7bd5c45a739a769406ebf69fba858a4e96a21055ffc3b661"
 OVERLAY_CHANGED_PATHS = [
     path
     for path in OVERLAY_PATHS
     if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]
 ]
-OVERLAY_CHANGED_PATHS_SHA256 = "b95e52a0bcfa4dc91de663f915baa47fb6da437a6fcb1086393e8533edd45041"
+OVERLAY_CHANGED_PATHS_SHA256 = "0d33958493c3a5649c4f5c338de01e5099a3052c6cfd6ec45dd3a551a996eda8"
 
 PATCH_DEPENDENCIES: dict[str, tuple[str, str, str]] = {
     "patches/rules_rs_windows_msvc_linker.patch": (
@@ -864,10 +917,15 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
     changed = sorted([*operations["A"], *operations["M"], *operations["D"]])
     require(changed == OVERLAY_CHANGED_PATHS, "overlay changed path set mismatch")
     require(len(operations["A"]) == 36, "overlay addition count mismatch")
-    require(len(operations["M"]) == 20, "overlay modification count mismatch")
+    require(len(operations["M"]) == 28, "overlay modification count mismatch")
     require(not operations["D"], "unexpected current overlay deletion")
-    require(len(operations["E"]) == 12, "overlay exact-retention count mismatch")
+    require(len(operations["E"]) == 26, "overlay exact-retention count mismatch")
     return {
+        "sandboxing_preimage_receipt_sha256": SANDBOXING_PREIMAGE_RECEIPT_SHA256,
+        "sandboxing_preimage_candidate_sha": SANDBOXING_PREIMAGE_CANDIDATE_SHA,
+        "sandboxing_preimage_candidate_tree": SANDBOXING_PREIMAGE_CANDIDATE_TREE,
+        "sandboxing_preimage_path_count": SANDBOXING_PREIMAGE_PATH_COUNT,
+        "sandboxing_preimage_path_set_sha256": SANDBOXING_PREIMAGE_PATH_SET_SHA256,
         "declared_path_count": len(OVERLAY_PATHS),
         "declared_path_set_sha256": OVERLAY_PATHS_SHA256,
         "changed_path_count": len(OVERLAY_CHANGED_PATHS),
