@@ -817,6 +817,7 @@ impl InterAgentCommunication {
         let mut communication = self.clone();
         communication.id = None;
         communication.internal_chat_message_metadata_passthrough = None;
+        communication.origin = None;
         ResponseInputItem::Message {
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
