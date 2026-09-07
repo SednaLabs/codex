@@ -629,7 +629,7 @@ SDK_BUNDLE_PROBE_PATHS = [
     "codex-rs/websocket-client/src/lib_tests.rs",
 ]
 SDK_BUNDLE_PROBE_PATHS_SHA256 = "bafd2e6ed26638c260c5979c65db9a60ea5b085c69189439bdd7a9759c9e114d"
-RMCP_PREIMAGE_PATHS = [
+_LEGACY_RMCP_PREIMAGE_PATHS = [
     "codex-rs/rmcp-client/Cargo.toml",
     "codex-rs/rmcp-client/src/auth_status.rs",
     "codex-rs/rmcp-client/src/bin/rmcp_test_server.rs",
@@ -713,7 +713,7 @@ RMCP_PREIMAGE_PATHS = [
     "codex-rs/rmcp-client/tests/streamable_http_remote.rs",
     "codex-rs/rmcp-client/tests/streamable_http_test_support.rs",
 ]
-RMCP_PREIMAGE_PATHS_SHA256 = "706df09a76a0d40d204dbd13b950ce57f83e43b6999f73343e3d2b873ff98ba7"
+_LEGACY_RMCP_PREIMAGE_PATHS_SHA256 = "706df09a76a0d40d204dbd13b950ce57f83e43b6999f73343e3d2b873ff98ba7"
 RMCP_PREIMAGE_PATHS = ["codex-rs/tools/src/code_mode.rs"]
 RMCP_PREIMAGE_PATHS_SHA256 = "6b19655d8f34fc6786dcbae8f044c00c186c98e6c73f357823bcab962bcbf5b6"
 SDK_BUNDLE_ROUTE_WITNESS = ("100644", "blob", "29705e44eb66f235adee5a8932264ee778f98ced")
