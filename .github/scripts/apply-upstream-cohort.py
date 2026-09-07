@@ -36,13 +36,11 @@ PUSH_PREDECESSOR_SHA = "e016e6ba58424f9f223bd30946c3796251a34217"
 DIAGNOSTIC_TAIL_LINES = 80
 DIAGNOSTIC_LINE_LIMIT = 4096
 DIAGNOSTIC_BYTE_LIMIT = 131072
-SECRET_ENV_NAME = re.compile(
-    r"(?:token|secret|password|passwd|credential|auth|cookie|private[\s_-]*key)",
-    re.IGNORECASE,
-)
+SECRET_NAME_TERM = r"(?:token|secret|password|passwd|credential|auth|cookie|private[\s_-]*key|api[\s_-]*key|access[\s_-]*key)"
+SECRET_ENV_NAME = re.compile(SECRET_NAME_TERM, re.IGNORECASE)
 SECRET_ASSIGNMENT = re.compile(
-    r"(?i)(\b[A-Za-z_][A-Za-z0-9_]*(?:token|secret|password|passwd|credential|auth|cookie|private[\s_-]*key)"
-    r"\s*[=:]\s*)[^\s,;]+"
+    rf"(?i)(\b(?=[^=:\n]*{SECRET_NAME_TERM})"
+    r"[A-Za-z_][A-Za-z0-9_-]*(?:[ \t]+[A-Za-z0-9_-]+)*[ \t]*[=:][ \t]*)[^\s,;]+"
 )
 BEARER_VALUE = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
 
