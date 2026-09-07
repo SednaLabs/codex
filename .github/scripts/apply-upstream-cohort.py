@@ -79,13 +79,13 @@ COMMON_PROVENANCE_SHA256 = "afbf269c8593c978ed706c9f2fddc0031383350fe216d88512ec
 COMMON_STAGED_PATCH_SHA256 = "dd4b59d9be8c2727d08de673085b36a1c61f6cee617855f210706412a5bfc66c"
 COMMON_STAGED_PATHS_SHA256 = "90b44134bb538a07fa03dfd674e96f08de4ba04a40252f6dc9f5c740dd5bb1ae"
 
-BUILD_SOURCE_SHA = "b2d5fb6c7b63ad47375d61608f730dd62648ef43"
-BUILD_SOURCE_TREE = "f5f4837b2a58c2d50aa67eb620e5d1e3b630542c"
-BUILD_SOURCE_PARENT = "5de836bbd93d4d62f01d7860d8bfed5d635b533c"
+BUILD_SOURCE_SHA = "970381a0b85b313dea8c4e42dbb48f5d0ccbddf7"
+BUILD_SOURCE_TREE = "cf6638e191391c8b86bc7f4314b53c629be98bc4"
+BUILD_SOURCE_PARENT = "b2d5fb6c7b63ad47375d61608f730dd62648ef43"
 BUILD_SOURCE_BRANCH = "worker/w13825-build-source-authoring-20260907"
 VOICE_HOST_DEFERRAL_BASELINE_SHA = "22a0c45ee711dc5ce47847dc04cbc5e7e76507c0"
 VOICE_HOST_DEFERRAL_BASELINE_ROOT_ENTRY = ("100644", "blob", "7bd8c144e52b169b907928bcf743363949d12cb2")
-BUILD_PATHS_SHA256 = "791ff4dca00400de1fdc42f10c87158666558d82f1f3b254be6b2ebe59d64746"
+BUILD_PATHS_SHA256 = "228de952b0fd234c05d6872babc84cfd96fcdef00be57ba8a993b2186a8bd730"
 BUILD_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     ".github/workflows/bazel.yml": (
         "100644",
@@ -131,6 +131,7 @@ BUILD_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     "codex-rs/http-client/src/tls_backend_fallback.rs": ("100644", "blob", "760df1824ad752fe8d4b5f3f2b0d0e3e848c0144"),
     "codex-rs/http-client/src/tls_backend_fallback_tests.rs": ("100644", "blob", "c7ca0adceb94a6729d8657c7a7feb4e066044f68"),
     "codex-rs/network-proxy/src/proxy.rs": ("100644", "blob", "2ff3dcf97e0ba78632ff09af252dea235c501b4f"),
+    "codex-rs/protocol/src/legacy_events.rs": ("100644", "blob", "823f92f32a418337e2355c2938969630784cb71d"),
     "codex-rs/realtime-webrtc/BUILD.bazel": (
         "100644",
         "blob",
@@ -192,6 +193,7 @@ BUILD_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str]] = {
     "codex-rs/http-client/src/tls_backend_fallback.rs": ("100644", "blob", "760df1824ad752fe8d4b5f3f2b0d0e3e848c0144"),
     "codex-rs/http-client/src/tls_backend_fallback_tests.rs": ("100644", "blob", "c7ca0adceb94a6729d8657c7a7feb4e066044f68"),
     "codex-rs/network-proxy/src/proxy.rs": ("100644", "blob", "7d823f480f3ea5787babfee2bf7d788b574c21c3"),
+    "codex-rs/protocol/src/legacy_events.rs": ("100644", "blob", "39f1abbcc066c5dbeae8254bcd756e8e22bd5526"),
     "codex-rs/realtime-webrtc/BUILD.bazel": (
         "100644",
         "blob",
@@ -386,13 +388,13 @@ OVERLAY_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     }.items())
 )
 OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
-OVERLAY_PATHS_SHA256 = "6c744f580ea7e7e9e373f85f115bd56852ba9d130db56e39a796af4d607fda8a"
+OVERLAY_PATHS_SHA256 = "f8bc802b1f356122a2e63725d1fbc686c2b7043db560979510e07bd0a1cfe40c"
 OVERLAY_CHANGED_PATHS = [
     path
     for path in OVERLAY_PATHS
     if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]
 ]
-OVERLAY_CHANGED_PATHS_SHA256 = "4d79f15ed15f1fe4298dd627ff3b9788354c614af06afcefbaeff8f2f9469645"
+OVERLAY_CHANGED_PATHS_SHA256 = "c1b295b0aee44b3121b2981c92a2070c320478a6825750b76eac7f1879579f8a"
 
 PATCH_DEPENDENCIES: dict[str, tuple[str, str, str]] = {
     "patches/rules_rs_windows_msvc_linker.patch": (
@@ -841,7 +843,7 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
     changed = sorted([*operations["A"], *operations["M"], *operations["D"]])
     require(changed == OVERLAY_CHANGED_PATHS, "overlay changed path set mismatch")
     require(len(operations["A"]) == 36, "overlay addition count mismatch")
-    require(len(operations["M"]) == 13, "overlay modification count mismatch")
+    require(len(operations["M"]) == 14, "overlay modification count mismatch")
     require(not operations["D"], "unexpected current overlay deletion")
     require(len(operations["E"]) == 12, "overlay exact-retention count mismatch")
     return {
