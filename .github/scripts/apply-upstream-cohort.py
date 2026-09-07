@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "a819bb631103a2bb1d4a462b02e7a80f8d21acb5"
+PUSH_PREDECESSOR_SHA = "2dd5902b19decad1b3d228d060f505f7629648c3"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -79,9 +79,9 @@ COMMON_PROVENANCE_SHA256 = "afbf269c8593c978ed706c9f2fddc0031383350fe216d88512ec
 COMMON_STAGED_PATCH_SHA256 = "dd4b59d9be8c2727d08de673085b36a1c61f6cee617855f210706412a5bfc66c"
 COMMON_STAGED_PATHS_SHA256 = "90b44134bb538a07fa03dfd674e96f08de4ba04a40252f6dc9f5c740dd5bb1ae"
 
-BUILD_SOURCE_SHA = "c56b0290e019a536da55cc4ae902ac4db55676c5"
-BUILD_SOURCE_TREE = "1861baba49d84803094791d9f2a24bfad7f5f2ed"
-BUILD_SOURCE_PARENT = "0edf842fe046c89f0f965bc42c1431f18be82475"
+BUILD_SOURCE_SHA = "cb3c6b5abd9b08d93f38aec0a959703a5915c6dd"
+BUILD_SOURCE_TREE = "97459288bcebe0fbcff352778293d95ed79aeef1"
+BUILD_SOURCE_PARENT = "c56b0290e019a536da55cc4ae902ac4db55676c5"
 DIAGNOSTIC_PREDECESSOR_SOURCE_SHA = "b593ff0ba02ff08d0c44f6db95840c6cc59f0598"
 DIAGNOSTIC_PREDECESSOR_SOURCE_TREE = "8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47"
 DIAGNOSTIC_PREDECESSOR_SOURCE_PARENT = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
@@ -100,8 +100,11 @@ RUNTIME_SURFACES_PREIMAGE_PATH_SET_SHA256 = "bafd2e6ed26638c260c5979c65db9a60ea5
 RUNTIME_SOURCE_STATIC_FALLBACK_PATH = "codex-rs/Cargo.toml"
 RUNTIME_SOURCE_STATIC_FALLBACK_PREIMAGE = ("100644", "blob", "b7d06b98391ef2f3307096d963eea4e19853d8f0")
 RUNTIME_SOURCE_STATIC_FALLBACK_POSTIMAGE = ("100644", "blob", "c00642ab13089e20e2299eb667f1ba0e7c512826")
-RUNTIME_SOURCE_UNION_PATH_COUNT = 164
-RUNTIME_SOURCE_UNION_PATH_SET_SHA256 = "dccb8b9265746813aeecb1501f0a89fbc0c0f0ea00fff09a839939c562a086f3"
+RUNTIME_SOURCE_PLUGIN_FALLBACK_PATH = "codex-rs/utils/plugins/src/plugin_namespace.rs"
+RUNTIME_SOURCE_PLUGIN_FALLBACK_PREIMAGE = ("100644", "blob", "b4da61deabe3a03a2acb66f25e20956719d2cfb8")
+RUNTIME_SOURCE_PLUGIN_FALLBACK_POSTIMAGE = ("100644", "blob", "b76739e9a8c4eef8132cb920d394e3651f0caf56")
+RUNTIME_SOURCE_UNION_PATH_COUNT = 165
+RUNTIME_SOURCE_UNION_PATH_SET_SHA256 = "4f388365ec4f785a71ebbf600e713166c33537940d6fcb7c9de79cea08b59e2f"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID = "10021647248"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_NAME = "sdk-runtime-surfaces-preimage-diagnostic-34129864201-1"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_SIZE = 6658
@@ -1098,8 +1101,18 @@ def configure_runtime_source_contract(repo: pathlib.Path, receipt_path: pathlib.
     paths = [entry.get("path") for entry in receipt.get("entries", [])]
     require(paths == sorted(paths) and len(paths) == RUNTIME_SURFACES_PREIMAGE_PATH_COUNT, "runtime-surface receipt path set mismatch")
     require(path_digest(paths) == RUNTIME_SURFACES_PREIMAGE_PATH_SET_SHA256, "runtime-surface receipt path digest mismatch")
-    require(RUNTIME_SOURCE_STATIC_FALLBACK_PATH not in paths, "runtime-surface receipt unexpectedly contains static fallback path")
-    union_paths = sorted(set(paths) | {RUNTIME_SOURCE_STATIC_FALLBACK_PATH})
+    static_fallbacks = {
+        RUNTIME_SOURCE_STATIC_FALLBACK_PATH: (
+            RUNTIME_SOURCE_STATIC_FALLBACK_PREIMAGE,
+            RUNTIME_SOURCE_STATIC_FALLBACK_POSTIMAGE,
+        ),
+        RUNTIME_SOURCE_PLUGIN_FALLBACK_PATH: (
+            RUNTIME_SOURCE_PLUGIN_FALLBACK_PREIMAGE,
+            RUNTIME_SOURCE_PLUGIN_FALLBACK_POSTIMAGE,
+        ),
+    }
+    require(not set(paths) & set(static_fallbacks), "runtime-surface receipt unexpectedly contains static fallback path")
+    union_paths = sorted(set(paths) | set(static_fallbacks))
     require(len(union_paths) == RUNTIME_SOURCE_UNION_PATH_COUNT, "runtime source union path count mismatch")
     require(path_digest(union_paths) == RUNTIME_SOURCE_UNION_PATH_SET_SHA256, "runtime source union path digest mismatch")
     require(receipt.get("missing_path_count") == 0 and receipt.get("missing_paths") == [], "runtime-surface receipt has missing entries")
@@ -1117,12 +1130,13 @@ def configure_runtime_source_contract(repo: pathlib.Path, receipt_path: pathlib.
         runtime_postimages[path] = postimage
         BUILD_SOURCE_ENTRIES[path] = postimage
         BUILD_SOURCE_PREIMAGE_ENTRIES[path] = runtime_preimages[path]
-    require(BUILD_SOURCE_PREIMAGE_ENTRIES[RUNTIME_SOURCE_STATIC_FALLBACK_PATH] == RUNTIME_SOURCE_STATIC_FALLBACK_PREIMAGE, "runtime static fallback preimage mismatch")
-    require(tree_entry(repo, BUILD_SOURCE_SHA, RUNTIME_SOURCE_STATIC_FALLBACK_PATH) == RUNTIME_SOURCE_STATIC_FALLBACK_POSTIMAGE, "runtime static fallback postimage mismatch")
-    BUILD_SOURCE_PREIMAGE_ENTRIES[RUNTIME_SOURCE_STATIC_FALLBACK_PATH] = RUNTIME_SOURCE_STATIC_FALLBACK_PREIMAGE
-    BUILD_SOURCE_ENTRIES[RUNTIME_SOURCE_STATIC_FALLBACK_PATH] = RUNTIME_SOURCE_STATIC_FALLBACK_POSTIMAGE
-    runtime_preimages[RUNTIME_SOURCE_STATIC_FALLBACK_PATH] = RUNTIME_SOURCE_STATIC_FALLBACK_PREIMAGE
-    runtime_postimages[RUNTIME_SOURCE_STATIC_FALLBACK_PATH] = RUNTIME_SOURCE_STATIC_FALLBACK_POSTIMAGE
+    for path, (preimage, postimage) in static_fallbacks.items():
+        require(BUILD_SOURCE_PREIMAGE_ENTRIES[path] == preimage, f"runtime static fallback preimage mismatch: {path}")
+        require(tree_entry(repo, BUILD_SOURCE_SHA, path) == postimage, f"runtime static fallback postimage mismatch: {path}")
+        BUILD_SOURCE_PREIMAGE_ENTRIES[path] = preimage
+        BUILD_SOURCE_ENTRIES[path] = postimage
+        runtime_preimages[path] = preimage
+        runtime_postimages[path] = postimage
     global BUILD_PATHS, BUILD_PATHS_SHA256, BUILD_SOURCE_DIFF_PATHS, BUILD_SOURCE_DIFF_PATHS_SHA256
     global RUNTIME_SOURCE_PREIMAGE_MAP_COUNT, RUNTIME_SOURCE_PREIMAGE_MAP_SHA256
     global RUNTIME_SOURCE_POSTIMAGE_MAP_COUNT, RUNTIME_SOURCE_POSTIMAGE_MAP_SHA256
