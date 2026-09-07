@@ -7935,6 +7935,36 @@ class RustCiModeScriptTests(unittest.TestCase):
             "${{ needs.changed.outputs.run_argument_comment_lint_package == 'true' }}",
         )
 
+    def test_rust_ci_general_runs_pinned_targeted_clippy_before_bench_smoke(self) -> None:
+        payload = load_workflow_payload(REPO_ROOT / ".github/workflows/rust-ci.yml")
+        general = (payload.get("jobs") or {}).get("general") or {}
+        self.assertEqual(general.get("name"), "Fast format / Clippy / etc")
+        steps = general.get("steps") or []
+        names = [step.get("name") for step in steps]
+        self.assertLess(names.index("cargo fmt"), names.index("cargo clippy (targeted packages)"))
+        self.assertLess(
+            names.index("cargo clippy (targeted packages)"),
+            names.index("Rust benchmark smoke test"),
+        )
+        toolchain = next(
+            step
+            for step in steps
+            if step.get("uses") == "dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d"
+        )
+        self.assertEqual(
+            (toolchain.get("with") or {}).get("target"),
+            "x86_64-unknown-linux-gnu",
+        )
+        clippy = next(step for step in steps if step.get("name") == "cargo clippy (targeted packages)")
+        clippy_run = clippy.get("run") or ""
+        self.assertIn("--all-features", clippy_run)
+        self.assertIn("--tests", clippy_run)
+        self.assertIn("--profile dev", clippy_run)
+        self.assertIn("--no-deps", clippy_run)
+        self.assertIn("-- -D warnings", clippy_run)
+        self.assertNotIn("--workspace", clippy_run)
+        self.assertIn("steps.targeted_clippy_packages.outputs.packages", clippy.get("if") or "")
+
     def test_rust_ci_argument_comment_lint_uses_single_cached_bazel_action(self) -> None:
         payload = load_workflow_payload(REPO_ROOT / ".github/workflows/rust-ci.yml")
         jobs = payload.get("jobs") or {}
