@@ -79,6 +79,7 @@ pub enum GoalNotificationInput {
 pub struct GoalNotificationProjection {
     snapshot: GoalNotificationSnapshot,
     opted_in: bool,
+    completion_forwarded: bool,
 }
 
 /// Thread-scoped holder shared by goal lifecycle hooks and the V2 producer.
@@ -86,6 +87,7 @@ pub struct GoalNotificationStore {
     projection: Mutex<Option<GoalNotificationProjection>>,
     incarnation: ThreadId,
     source_turn_id: Mutex<Option<String>>,
+    forwarded_completion: Mutex<Option<GoalNotificationTurnToken>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,6 +104,7 @@ impl Default for GoalNotificationStore {
             projection: Mutex::new(None),
             incarnation: ThreadId::new(),
             source_turn_id: Mutex::new(None),
+            forwarded_completion: Mutex::new(None),
         }
     }
 }
@@ -116,6 +119,10 @@ impl GoalNotificationStore {
             .projection
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(projection);
+        *self
+            .forwarded_completion
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     pub fn set_source_turn(&self, source_turn_id: impl Into<String>) {
@@ -147,7 +154,122 @@ impl GoalNotificationStore {
         projection.observe(binding, GoalNotificationInput::ContinuationPending)
     }
 
+    /// Publishes the authoritative completion after the turn lifecycle has
+    /// reduced the terminal `TurnComplete` event. The token gate keeps a late
+    /// event from attaching a result to a replacement goal.
+    pub fn publish_turn_complete(
+        &self,
+        token: &GoalNotificationTurnToken,
+        result: Option<String>,
+    ) -> bool {
+        if !self.token_matches(token) {
+            return false;
+        }
+        let mut projection = self
+            .projection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(projection) = projection.as_mut() else {
+            return false;
+        };
+        projection.observe(
+            &token.binding,
+            GoalNotificationInput::TurnComplete {
+                source_turn: token.source_turn_id.clone(),
+                result,
+            },
+        )
+    }
+
+    /// Claims a suppressed completion for a terminal external goal mutation.
+    /// The claim is idempotent until the store is invalidated, so repeated API
+    /// or tool updates cannot send duplicate parent handbacks.
+    pub fn take_pending_completion(&self) -> Option<(GoalNotificationTurnToken, Option<String>)> {
+        let mut projection = self
+            .projection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let projection = projection.as_mut()?;
+        if projection.snapshot.phase != GoalNotificationPhase::ContinuationPending
+            || projection.completion_forwarded
+        {
+            return None;
+        }
+        let source_turn = projection.snapshot.last_completed_source_turn.clone()?;
+        projection.completion_forwarded = true;
+        let token = GoalNotificationTurnToken {
+            incarnation: self.incarnation,
+            binding: projection.snapshot.binding.clone(),
+            source_turn_id: source_turn,
+            generation: projection.snapshot.binding.control_generation,
+        };
+        Some((token, projection.snapshot.result_reference.clone()))
+    }
+
+    /// Records a successful queue delivery while retaining a one-shot tombstone
+    /// so a concurrently finishing Session cannot forward the same completion.
+    pub fn mark_completion_forwarded(&self, token: &GoalNotificationTurnToken) -> bool {
+        if !self.token_matches(token) {
+            return false;
+        }
+        let mut projection = self
+            .projection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(projection) = projection.as_mut() else {
+            return false;
+        };
+        if projection.snapshot.binding != token.binding
+            || projection.snapshot.phase != GoalNotificationPhase::ContinuationPending
+            || !projection.completion_forwarded
+        {
+            return false;
+        }
+        *self
+            .forwarded_completion
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(token.clone());
+        true
+    }
+
+    pub fn has_forwarded_completion(&self) -> bool {
+        self.forwarded_completion
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+    }
+
+    /// Releases a failed parent-delivery claim so a later external mutation
+    /// can retry the same pending completion.
+    pub fn restore_pending_completion(&self, binding: &GoalNotificationBinding) -> bool {
+        let mut projection = self
+            .projection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(projection) = projection.as_mut() else {
+            return false;
+        };
+        if projection.snapshot.binding != *binding
+            || projection.snapshot.phase != GoalNotificationPhase::ContinuationPending
+        {
+            return false;
+        }
+        projection.completion_forwarded = false;
+        true
+    }
+
     pub fn clear(&self) {
+        *self
+            .projection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        *self
+            .forwarded_completion
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    pub fn clear_preserving_forwarded_completion(&self) {
         *self
             .projection
             .lock()
@@ -203,22 +325,30 @@ impl GoalNotificationStore {
         &self,
         token: &GoalNotificationTurnToken,
     ) -> Option<bool> {
-        if token.incarnation != self.incarnation {
-            return None;
-        }
-        if token.generation != token.binding.control_generation {
-            return None;
-        }
         if self
-            .source_turn_id
+            .forwarded_completion
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_deref()
-            != Some(token.source_turn_id.as_str())
+            .as_ref()
+            == Some(token)
         {
+            return Some(false);
+        }
+        if !self.token_matches(token) {
             return None;
         }
         self.terminal_turn_is_wake_eligible_for(&token.binding)
+    }
+
+    fn token_matches(&self, token: &GoalNotificationTurnToken) -> bool {
+        token.incarnation == self.incarnation
+            && token.generation == token.binding.control_generation
+            && self
+                .source_turn_id
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_deref()
+                == Some(token.source_turn_id.as_str())
     }
 }
 
@@ -235,6 +365,7 @@ impl GoalNotificationProjection {
                 classification: GoalNotificationClassification::Progress,
             },
             opted_in: false,
+            completion_forwarded: false,
         }
     }
 
@@ -329,6 +460,7 @@ impl GoalNotificationProjection {
                 source_turn,
                 result,
             } => {
+                self.completion_forwarded = false;
                 self.snapshot.last_completed_source_turn = Some(source_turn);
                 self.snapshot.result_reference = result;
                 if !self.opted_in {
@@ -342,9 +474,12 @@ impl GoalNotificationProjection {
                 } else if self.snapshot.status == ThreadGoalStatus::Complete {
                     self.snapshot.phase = GoalNotificationPhase::ActionRequired;
                     self.snapshot.classification = GoalNotificationClassification::ActionRequired;
-                } else {
+                } else if self.snapshot.status == ThreadGoalStatus::Active {
                     self.snapshot.phase = GoalNotificationPhase::ContinuationPending;
                     self.snapshot.classification = GoalNotificationClassification::Progress;
+                } else {
+                    self.snapshot.phase = GoalNotificationPhase::ActionRequired;
+                    self.snapshot.classification = GoalNotificationClassification::ActionRequired;
                 }
             }
         }
@@ -461,6 +596,96 @@ mod tests {
             store.snapshot().unwrap().phase,
             GoalNotificationPhase::ContinuationPending
         );
+    }
+
+    #[test]
+    fn store_publishes_turn_completion_and_wakes_after_goal_completion() {
+        let binding = binding();
+        let store = GoalNotificationStore::default();
+        let mut projection =
+            GoalNotificationProjection::new(binding.clone(), ThreadGoalStatus::Active);
+        projection.opt_in(&binding);
+        store.install_authoritative(projection);
+        store.set_source_turn("turn");
+        let token = GoalNotificationTurnToken {
+            incarnation: store.incarnation(),
+            binding: binding.clone(),
+            source_turn_id: "turn".into(),
+            generation: binding.control_generation,
+        };
+        assert!(store.publish_continuation(&binding));
+        assert!(store.publish_turn_complete(&token, Some("result".into())));
+        assert_eq!(
+            store.terminal_turn_is_wake_eligible_for_token(&token),
+            Some(false)
+        );
+        assert!(store.publish(&binding, ThreadGoalStatus::Complete));
+        assert_eq!(
+            store.terminal_turn_is_wake_eligible_for_token(&token),
+            Some(true)
+        );
+        assert_eq!(
+            store
+                .snapshot()
+                .and_then(|snapshot| snapshot.result_reference),
+            Some("result".into())
+        );
+    }
+
+    #[test]
+    fn blocked_goal_completion_remains_wake_eligible() {
+        let binding = binding();
+        let store = GoalNotificationStore::default();
+        let mut projection =
+            GoalNotificationProjection::new(binding.clone(), ThreadGoalStatus::Active);
+        projection.opt_in(&binding);
+        store.install_authoritative(projection);
+        store.set_source_turn("turn");
+        let token = GoalNotificationTurnToken {
+            incarnation: store.incarnation(),
+            binding: binding.clone(),
+            source_turn_id: "turn".into(),
+            generation: binding.control_generation,
+        };
+        assert!(store.publish(&binding, ThreadGoalStatus::Blocked));
+        assert!(store.publish_turn_complete(&token, Some("result".into())));
+        assert_eq!(
+            store.terminal_turn_is_wake_eligible_for_token(&token),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn forwarded_completion_tombstone_suppresses_concurrent_session_delivery() {
+        let binding = binding();
+        let store = GoalNotificationStore::default();
+        let mut projection =
+            GoalNotificationProjection::new(binding.clone(), ThreadGoalStatus::Active);
+        projection.opt_in(&binding);
+        store.install_authoritative(projection);
+        store.set_source_turn("turn");
+        let token = GoalNotificationTurnToken {
+            incarnation: store.incarnation(),
+            binding: binding.clone(),
+            source_turn_id: "turn".into(),
+            generation: binding.control_generation,
+        };
+        assert!(store.publish_continuation(&binding));
+        assert!(store.publish_turn_complete(&token, Some("result".into())));
+        let (claimed, result) = store.take_pending_completion().unwrap();
+        assert_eq!(claimed, token);
+        assert_eq!(result, Some("result".into()));
+        assert!(store.mark_completion_forwarded(&claimed));
+        store.clear_preserving_forwarded_completion();
+        assert!(store.has_forwarded_completion());
+        assert_eq!(
+            store.terminal_turn_is_wake_eligible_for_token(&token),
+            Some(false)
+        );
+        assert!(store.take_pending_completion().is_none());
+        store.clear();
+        assert!(!store.has_forwarded_completion());
+        assert_eq!(store.terminal_turn_is_wake_eligible_for_token(&token), None);
     }
 
     #[test]

@@ -217,7 +217,9 @@ impl GoalToolExecutor {
                         .to_string(),
                 )
             })?;
-        self.runtime.invalidate_goal_notification();
+        if let Err(err) = self.runtime.finalize_pending_goal_notification().await {
+            tracing::warn!("failed to forward deferred goal completion: {err}");
+        }
         fill_empty_thread_preview_if_possible(self.state_db.as_ref(), self.thread_id, &goal).await;
         let turn_id = self
             .accounting_state
@@ -289,7 +291,9 @@ impl GoalToolExecutor {
                     "cannot update goal because this thread has no goal".to_string(),
                 )
             })?;
-        self.runtime.invalidate_goal_notification();
+        if let Err(err) = self.runtime.finalize_pending_goal_notification().await {
+            tracing::warn!("failed to forward deferred goal completion: {err}");
+        }
         self.metrics
             .record_terminal_if_status_changed(previous_status, &goal);
         self.analytics.status_changed(

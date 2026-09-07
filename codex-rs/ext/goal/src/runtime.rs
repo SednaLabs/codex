@@ -9,6 +9,7 @@ use codex_core::GoalNotificationStore;
 use codex_core::GoalNotificationTurnToken;
 use codex_core::ThreadManager;
 use codex_extension_api::ExtensionData;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ThreadGoal;
@@ -36,6 +37,7 @@ pub(crate) struct GoalRuntimeConfig {
     pub(crate) enabled: bool,
     pub(crate) tools_available_for_thread: bool,
     pub(crate) parent_thread_id: Option<ThreadId>,
+    pub(crate) child_agent_path: Option<AgentPath>,
     pub(crate) notification_store: Arc<GoalNotificationStore>,
 }
 
@@ -56,6 +58,7 @@ struct GoalRuntimeInner {
     tools_available_for_thread: bool,
     goal_state_lock: Semaphore,
     parent_thread_id: Option<ThreadId>,
+    child_agent_path: Option<AgentPath>,
     notification_store: Arc<GoalNotificationStore>,
     notification_generation: AtomicU64,
     continuation_launch_in_progress: AtomicBool,
@@ -124,6 +127,7 @@ impl GoalRuntimeHandle {
                 tools_available_for_thread: config.tools_available_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
                 parent_thread_id: config.parent_thread_id,
+                child_agent_path: config.child_agent_path,
                 notification_store: config.notification_store,
                 notification_generation: AtomicU64::new(1),
                 continuation_launch_in_progress: AtomicBool::new(false),
@@ -233,6 +237,65 @@ impl GoalRuntimeHandle {
             .notification_generation
             .fetch_add(1, Ordering::AcqRel);
         self.inner.notification_store.clear();
+    }
+
+    /// Completes a deferred child handback when an external goal mutation
+    /// makes the child terminal while no new turn will run. The pending
+    /// completion is claimed before delivery and restored if the parent
+    /// transport rejects it, allowing a later mutation to retry.
+    pub(crate) async fn finalize_pending_goal_notification(&self) -> Result<(), String> {
+        let Some((token, result)) = self.inner.notification_store.take_pending_completion() else {
+            if self.inner.notification_store.has_forwarded_completion() {
+                return Ok(());
+            }
+            self.invalidate_goal_notification();
+            return Ok(());
+        };
+
+        let Some(parent_thread_id) = self.inner.parent_thread_id else {
+            self.invalidate_goal_notification();
+            return Ok(());
+        };
+        let Some(child_agent_path) = self.inner.child_agent_path.clone() else {
+            self.invalidate_goal_notification();
+            return Ok(());
+        };
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            self.inner
+                .notification_store
+                .restore_pending_completion(&token.binding);
+            return Err("thread manager unavailable for deferred goal completion".to_string());
+        };
+
+        let result = thread_manager
+            .notify_v2_child_completion(
+                self.inner.thread_id,
+                parent_thread_id,
+                child_agent_path,
+                codex_protocol::protocol::AgentStatus::Completed(result),
+            )
+            .await;
+        match result {
+            Ok(()) => {
+                let _ = self
+                    .inner
+                    .notification_store
+                    .mark_completion_forwarded(&token);
+                self.inner
+                    .notification_generation
+                    .fetch_add(1, Ordering::AcqRel);
+                self.inner
+                    .notification_store
+                    .clear_preserving_forwarded_completion();
+                Ok(())
+            }
+            Err(err) => {
+                self.inner
+                    .notification_store
+                    .restore_pending_completion(&token.binding);
+                Err(err)
+            }
+        }
     }
 
     pub(crate) async fn goal_state_permit(&self) -> Result<SemaphorePermit<'_>, String> {

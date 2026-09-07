@@ -1,6 +1,8 @@
 use crate::CodexAppsToolsCache;
 use crate::SkillsService;
 use crate::agent::AgentControl;
+use crate::agent_communication::AgentCommunicationContext;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -17,6 +19,7 @@ use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
 use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
+use crate::session_prefix::format_inter_agent_completion_message;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
@@ -44,6 +47,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
@@ -51,6 +55,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -1360,6 +1365,47 @@ impl ThreadManager {
 
     pub(crate) fn agent_control(&self) -> AgentControl {
         AgentControl::new(Arc::downgrade(&self.state), /*rollout_budget*/ None)
+    }
+
+    /// Delivers a queue-only V2 child completion to its immediate parent.
+    /// Extensions use this when a completion was intentionally deferred during
+    /// a child turn and a later external state change makes it terminal while
+    /// the child is idle.
+    pub async fn notify_v2_child_completion(
+        &self,
+        child_thread_id: ThreadId,
+        parent_thread_id: ThreadId,
+        child_agent_path: AgentPath,
+        status: AgentStatus,
+    ) -> Result<(), String> {
+        let Some(parent_agent_path) = child_agent_path
+            .as_str()
+            .rsplit_once('/')
+            .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
+        else {
+            return Ok(());
+        };
+        let Some(message) = format_inter_agent_completion_message(
+            parent_agent_path.clone(),
+            child_agent_path.clone(),
+            &status,
+        ) else {
+            return Ok(());
+        };
+        let communication = codex_protocol::protocol::InterAgentCommunication::new(
+            child_agent_path,
+            parent_agent_path,
+            Vec::new(),
+            message,
+            /*trigger_turn*/ false,
+        );
+        let context =
+            AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
+        self.agent_control()
+            .send_inter_agent_communication(parent_thread_id, communication, context)
+            .await
+            .map(|_| ())
+            .map_err(|err| err.to_string())
     }
 
     fn agent_control_for_config(&self, config: &Config) -> AgentControl {

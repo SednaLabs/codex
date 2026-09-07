@@ -275,7 +275,9 @@ impl GoalService {
             fill_empty_thread_preview_if_possible(state_db, thread_id, &goal).await;
         }
         if let Some(runtime) = runtime.as_ref() {
-            runtime.invalidate_goal_notification();
+            if let Err(err) = runtime.finalize_pending_goal_notification().await {
+                tracing::warn!("failed to forward deferred goal completion: {err}");
+            }
         }
         Ok(GoalSetOutcome {
             goal: protocol_goal_from_state(goal.clone()),
@@ -316,7 +318,9 @@ impl GoalService {
             })?;
         let cleared = cleared_goal.is_some();
         if let Some(runtime) = runtime.as_ref() {
-            runtime.invalidate_goal_notification();
+            if let Err(err) = runtime.finalize_pending_goal_notification().await {
+                tracing::warn!("failed to forward deferred goal completion: {err}");
+            }
         }
         drop(goal_state_permit);
         drop(runtime);

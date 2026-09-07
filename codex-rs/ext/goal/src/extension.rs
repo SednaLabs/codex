@@ -123,6 +123,12 @@ where
                 }) => Some(*parent_thread_id),
                 _ => None,
             };
+            let child_agent_path = match input.session_source {
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
+                    agent_path.clone()
+                }
+                _ => None,
+            };
             let notification_store = input
                 .thread_store
                 .get_or_init(GoalNotificationStore::default);
@@ -139,6 +145,7 @@ where
                         enabled,
                         tools_available_for_thread,
                         parent_thread_id,
+                        child_agent_path,
                         notification_store,
                     },
                 )

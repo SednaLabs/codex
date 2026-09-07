@@ -2047,6 +2047,20 @@ impl Session {
             return;
         }
 
+        if let EventMsg::TurnComplete(event) = msg
+            && matches!(status, AgentStatus::Completed(_))
+            && let Some(token) = turn_context
+                .extension_data
+                .get::<crate::agent::goal_notifications::GoalNotificationTurnToken>(
+            )
+            && let Some(store) = self
+                .services
+                .thread_extension_data
+                .get::<crate::agent::goal_notifications::GoalNotificationStore>()
+        {
+            let _ = store.publish_turn_complete(token, event.last_agent_message.clone());
+        }
+
         // Only a normal, error-free TurnComplete may be deferred. Aborts and
         // errors always hand back to the parent. The turn token and store must
         // agree on incarnation, goal, and generation before suppression.
