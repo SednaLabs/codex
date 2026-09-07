@@ -63,6 +63,7 @@ def select_packages(
 ) -> list[str]:
     """Return deterministic package names for package-local Rust changes."""
     package_roots = packages if packages is not None else workspace_packages(repo_root)
+    package_map = {root: name for root, name in package_roots}
     selected: set[str] = set()
     for raw_path in paths:
         path = PurePosixPath(raw_path.replace("\\", "/"))
@@ -70,9 +71,10 @@ def select_packages(
             continue
         if path.suffix != ".rs" and path.name != "Cargo.toml":
             continue
-        for package_root, package_name in package_roots:
-            if path == package_root / "Cargo.toml" or package_root in path.parents:
-                selected.add(package_name)
+        for parent in path.parents:
+            if parent in package_map:
+                selected.add(package_map[parent])
+                break
     return sorted(selected)
 
 
