@@ -32,6 +32,11 @@ jobs:
           test "$(git rev-parse HEAD)" = "$(printf '%s' "$CANDIDATE_REF" | tr '[:upper:]' '[:lower:]')"
           git cat-file -e "$BASE_REF^{commit}"
 
+      - name: Install just
+        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
+        with:
+          tool: just
+
       - name: Generate schema fixtures
         shell: bash
         run: just write-app-server-schema
