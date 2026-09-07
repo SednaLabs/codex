@@ -1,5 +1,6 @@
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
+use crate::common::ResponseModelIdentity;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::common::SafetyBufferingTreatment;
@@ -692,6 +693,7 @@ async fn run_websocket_response_stream(
     timing_log_context: &ResponsesWebsocketTimingLogContext,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
+    let mut last_server_model_identity: Option<ResponseModelIdentity> = None;
     let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
     send_websocket_request(
         ws_stream,
@@ -776,13 +778,26 @@ async fn run_websocket_response_stream(
                     }
                     continue;
                 }
-                if let Some(model) = event.response_model()
+                let model_metadata = event.response_model_metadata();
+                if let Some(model) = model_metadata.warning_model
                     && last_server_model.as_deref() != Some(model.as_str())
                 {
                     let _ = tx_event
                         .send(Ok(ResponseEvent::ServerModel(model.clone())))
                         .await;
                     last_server_model = Some(model);
+                }
+                let server_model_identity = model_metadata.execution_identity;
+                if (server_model_identity.final_model.is_some()
+                    || server_model_identity.model_snapshot.is_some())
+                    && last_server_model_identity.as_ref() != Some(&server_model_identity)
+                {
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::ServerModelIdentity(
+                            server_model_identity.clone(),
+                        )))
+                        .await;
+                    last_server_model_identity = Some(server_model_identity);
                 }
                 if let Some(verifications) = model_verifications
                     && tx_event
