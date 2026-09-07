@@ -1649,7 +1649,9 @@ def recommend_actions(
     # A BLOCKED merge state is actionable only when current check/review
     # evidence does not already explain why the PR cannot proceed.
     has_explaining_blocker = bool(
-        checks_summary.get("pending_count")
+        str(pr.get("mergeable") or "") != "MERGEABLE"
+        or not checks_summary.get("all_terminal")
+        or checks_summary.get("pending_count")
         or checks_summary.get("failed_count")
         or failed_jobs
         or actionable_review_items

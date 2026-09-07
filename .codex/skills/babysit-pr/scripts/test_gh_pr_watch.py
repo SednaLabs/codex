@@ -506,6 +506,15 @@ def test_blocked_with_explaining_evidence_does_not_add_policy_action(
     ) == expected
 
 
+@pytest.mark.parametrize("mergeable", ["CONFLICTING", "UNKNOWN", ""])
+def test_blocked_mergeability_evidence_is_not_an_unexplained_policy(mergeable):
+    blocked = sample_pr()
+    blocked.update(merge_state_status="BLOCKED", mergeable=mergeable)
+    assert gh_pr_watch.recommend_actions(
+        blocked, sample_checks(), [], [], [], {}, 0, 3
+    ) == ["idle"]
+
+
 def test_policy_blocker_does_not_backoff_and_decision_is_exact_head(monkeypatch):
     args = argparse.Namespace(poll_seconds=30)
     snapshot = {
