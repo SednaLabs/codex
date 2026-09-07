@@ -1,12 +1,19 @@
 use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use codex_core::GoalNotificationBinding;
+use codex_core::GoalNotificationStore;
+use codex_core::GoalNotificationTurnToken;
 use codex_core::ThreadManager;
+use codex_extension_api::ExtensionData;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ThreadGoal;
+use codex_protocol::protocol::ThreadGoalStatus;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
@@ -29,6 +36,9 @@ pub(crate) struct GoalRuntimeConfig {
     pub(crate) analytics: GoalAnalytics,
     pub(crate) enabled: bool,
     pub(crate) tools_available_for_thread: bool,
+    pub(crate) parent_thread_id: Option<ThreadId>,
+    pub(crate) child_agent_path: Option<AgentPath>,
+    pub(crate) notification_store: Arc<GoalNotificationStore>,
 }
 
 pub(crate) enum ActiveGoalStopReason {
@@ -47,6 +57,23 @@ struct GoalRuntimeInner {
     enabled: AtomicBool,
     tools_available_for_thread: bool,
     goal_state_lock: Semaphore,
+    parent_thread_id: Option<ThreadId>,
+    child_agent_path: Option<AgentPath>,
+    notification_store: Arc<GoalNotificationStore>,
+    notification_generation: AtomicU64,
+    continuation_launch_in_progress: AtomicBool,
+}
+
+struct ContinuationLaunchGuard {
+    inner: Arc<GoalRuntimeInner>,
+}
+
+impl Drop for ContinuationLaunchGuard {
+    fn drop(&mut self) {
+        self.inner
+            .continuation_launch_in_progress
+            .store(false, Ordering::Release);
+    }
 }
 
 pub(crate) struct AccountedGoalProgress {
@@ -99,6 +126,11 @@ impl GoalRuntimeHandle {
                 enabled: AtomicBool::new(config.enabled),
                 tools_available_for_thread: config.tools_available_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
+                parent_thread_id: config.parent_thread_id,
+                child_agent_path: config.child_agent_path,
+                notification_store: config.notification_store,
+                notification_generation: AtomicU64::new(1),
+                continuation_launch_in_progress: AtomicBool::new(false),
             }),
         }
     }
@@ -123,12 +155,170 @@ impl GoalRuntimeHandle {
         Arc::clone(&self.inner.accounting_state)
     }
 
+    pub(crate) fn bind_goal_notification_turn(
+        &self,
+        turn_store: &ExtensionData,
+        source_turn_id: &str,
+        goal_id: &str,
+    ) {
+        let Some(parent_thread_id) = self.inner.parent_thread_id else {
+            return;
+        };
+        let generation = self.inner.notification_generation.load(Ordering::Acquire);
+        let binding = GoalNotificationBinding {
+            parent_thread_id,
+            child_thread_id: self.inner.thread_id,
+            goal_id: goal_id.to_string(),
+            control_generation: generation,
+        };
+        let mut projection =
+            codex_core::GoalNotificationProjection::new(binding.clone(), ThreadGoalStatus::Active);
+        let _ = projection.opt_in(&binding);
+        self.inner
+            .notification_store
+            .install_authoritative(projection);
+        self.inner
+            .notification_store
+            .set_source_turn(source_turn_id);
+        turn_store.insert(GoalNotificationTurnToken {
+            incarnation: self.inner.notification_store.incarnation(),
+            binding,
+            source_turn_id: source_turn_id.to_string(),
+            generation,
+        });
+    }
+
+    pub(crate) fn publish_goal_notification_turn(
+        &self,
+        turn_store: &ExtensionData,
+        status: codex_state::ThreadGoalStatus,
+    ) {
+        let Some(token) = turn_store.get::<GoalNotificationTurnToken>() else {
+            return;
+        };
+        if token.incarnation != self.inner.notification_store.incarnation() {
+            return;
+        }
+        let status = match status {
+            codex_state::ThreadGoalStatus::Active => {
+                codex_protocol::protocol::ThreadGoalStatus::Active
+            }
+            codex_state::ThreadGoalStatus::Paused => {
+                codex_protocol::protocol::ThreadGoalStatus::Paused
+            }
+            codex_state::ThreadGoalStatus::Blocked => {
+                codex_protocol::protocol::ThreadGoalStatus::Blocked
+            }
+            codex_state::ThreadGoalStatus::UsageLimited => {
+                codex_protocol::protocol::ThreadGoalStatus::UsageLimited
+            }
+            codex_state::ThreadGoalStatus::BudgetLimited => {
+                codex_protocol::protocol::ThreadGoalStatus::BudgetLimited
+            }
+            codex_state::ThreadGoalStatus::Complete => {
+                codex_protocol::protocol::ThreadGoalStatus::Complete
+            }
+        };
+        let active = matches!(status, codex_protocol::protocol::ThreadGoalStatus::Active);
+        let _ = self
+            .inner
+            .notification_store
+            .publish(&token.binding, status);
+        if active {
+            let _ = self
+                .inner
+                .notification_store
+                .publish_continuation(&token.binding);
+        }
+    }
+
+    pub(crate) fn invalidate_goal_notification(&self) {
+        self.inner
+            .notification_generation
+            .fetch_add(1, Ordering::AcqRel);
+        self.inner.notification_store.clear();
+    }
+
+    /// Completes a deferred child handback when an external goal mutation
+    /// makes the child terminal while no new turn will run. The pending
+    /// completion is claimed before delivery and restored if the parent
+    /// transport rejects it, allowing a later mutation to retry.
+    pub(crate) async fn finalize_pending_goal_notification(&self) -> Result<(), String> {
+        let Some((token, result)) = self.inner.notification_store.take_pending_completion() else {
+            if self.inner.notification_store.has_forwarded_completion() {
+                return Ok(());
+            }
+            self.invalidate_goal_notification();
+            return Ok(());
+        };
+
+        let Some(parent_thread_id) = self.inner.parent_thread_id else {
+            self.invalidate_goal_notification();
+            return Ok(());
+        };
+        let Some(child_agent_path) = self.inner.child_agent_path.clone() else {
+            self.invalidate_goal_notification();
+            return Ok(());
+        };
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            self.inner
+                .notification_store
+                .restore_pending_completion(&token.binding);
+            return Err("thread manager unavailable for deferred goal completion".to_string());
+        };
+
+        let result = thread_manager
+            .notify_v2_child_completion(
+                self.inner.thread_id,
+                parent_thread_id,
+                child_agent_path,
+                codex_protocol::protocol::AgentStatus::Completed(result),
+            )
+            .await;
+        match result {
+            Ok(()) => {
+                let _ = self
+                    .inner
+                    .notification_store
+                    .mark_completion_forwarded(&token);
+                self.inner
+                    .notification_generation
+                    .fetch_add(1, Ordering::AcqRel);
+                self.inner
+                    .notification_store
+                    .clear_preserving_forwarded_completion();
+                Ok(())
+            }
+            Err(err) => {
+                self.inner
+                    .notification_store
+                    .restore_pending_completion(&token.binding);
+                Err(err)
+            }
+        }
+    }
+
     pub(crate) async fn goal_state_permit(&self) -> Result<SemaphorePermit<'_>, String> {
         self.inner
             .goal_state_lock
             .acquire()
             .await
             .map_err(|err| err.to_string())
+    }
+
+    pub(crate) fn continuation_launch_in_progress(&self) -> bool {
+        self.inner
+            .continuation_launch_in_progress
+            .load(Ordering::Acquire)
+    }
+
+    fn continuation_launch_guard(&self) -> ContinuationLaunchGuard {
+        self.inner
+            .continuation_launch_in_progress
+            .store(true, Ordering::Release);
+        ContinuationLaunchGuard {
+            inner: Arc::clone(&self.inner),
+        }
     }
 
     pub async fn prepare_external_goal_mutation(&self) -> Result<(), String> {
@@ -323,6 +513,7 @@ impl GoalRuntimeHandle {
             GoalEventAttribution::Turn(turn_id),
         );
         self.inner.accounting_state.clear_active_goal();
+        self.invalidate_goal_notification();
         let goal = protocol_goal_from_state(goal);
         self.inner.event_emitter.thread_goal_updated(
             format!("{turn_id}:{event_name}"),
@@ -337,6 +528,8 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
+        let _goal_state_permit = self.goal_state_permit().await?;
+
         let goal = self
             .inner
             .state_dbs
@@ -344,6 +537,7 @@ impl GoalRuntimeHandle {
             .get_thread_goal(self.thread_id())
             .await
             .map_err(|err| err.to_string())?;
+        self.invalidate_goal_notification();
         match goal {
             Some(goal) if goal.status == codex_state::ThreadGoalStatus::Active => {
                 self.inner
@@ -402,6 +596,7 @@ impl GoalRuntimeHandle {
         }
         let item = continuation_steering_item(&protocol_goal_from_state(goal));
 
+        let _continuation_launch_guard = self.continuation_launch_guard();
         if let Err(err) = thread.try_start_turn_if_idle(vec![item]).await {
             let reason = err.reason();
             tracing::debug!(

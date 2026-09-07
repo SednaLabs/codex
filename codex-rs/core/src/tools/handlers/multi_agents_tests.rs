@@ -2462,7 +2462,9 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
             "spawn_agent",
             function_payload(json!({
                 "message": "encrypted-spawn-message",
-                "task_name": "test_process"
+                "task_name": "test_process",
+                "reasoning_effort": "xhigh",
+                "expected_reasoning_effort": "xhigh"
             })),
         ))
         .await
@@ -2488,6 +2490,10 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
     assert_eq!(
         child_snapshot.session_source.get_agent_path().as_deref(),
         Some("/root/test_process")
+    );
+    assert_ne!(
+        turn.config.model_reasoning_effort,
+        child_snapshot.reasoning_effort
     );
     assert!(manager.captured_ops().iter().any(|(id, op)| {
         *id == child_thread_id
@@ -2522,6 +2528,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         receipt,
         json!({
             "task_name": "/root/test_process",
+            "recipient_task_name": "/root/test_process",
+            "effective_identity_scope": "recipient",
             "handoff_state": "queued",
             "effective_model": child_snapshot.model,
             "effective_model_provider_id": child_snapshot.model_provider_id,
@@ -2616,6 +2624,8 @@ async fn multi_agent_v2_send_message_keeps_cold_target_unloaded() {
         receipt,
         json!({
             "task_name": "/root/cold_worker",
+            "recipient_task_name": "/root/cold_worker",
+            "effective_identity_scope": "recipient",
             "handoff_state": "queued",
             "effective_model": null,
             "effective_model_provider_id": null,
@@ -3490,7 +3500,9 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             "spawn_agent",
             function_payload(json!({
                 "message": "boot worker",
-                "task_name": "worker"
+                "task_name": "worker",
+                "reasoning_effort": "xhigh",
+                "expected_reasoning_effort": "xhigh"
             })),
         ))
         .await
@@ -3506,6 +3518,10 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .await
         .expect("worker thread should exist");
     let worker_config = thread.config_snapshot().await;
+    assert_ne!(
+        turn.config.model_reasoning_effort,
+        worker_config.reasoning_effort
+    );
     let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
 
     let first_turn = thread.session.new_default_turn().await;
@@ -3548,6 +3564,8 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         followup_receipt,
         json!({
             "task_name": "/root/worker",
+            "recipient_task_name": "/root/worker",
+            "effective_identity_scope": "recipient",
             "effective_model": worker_config.model,
             "effective_model_provider_id": worker_config.model_provider_id,
             "effective_reasoning_effort": worker_config.reasoning_effort,

@@ -2047,6 +2047,39 @@ impl Session {
             return;
         }
 
+        if let EventMsg::TurnComplete(event) = msg
+            && matches!(status, AgentStatus::Completed(_))
+            && let Some(token) = turn_context
+                .extension_data
+                .get::<crate::agent::goal_notifications::GoalNotificationTurnToken>(
+            )
+            && let Some(store) = self
+                .services
+                .thread_extension_data
+                .get::<crate::agent::goal_notifications::GoalNotificationStore>()
+        {
+            let _ = store.publish_turn_complete(&token, event.last_agent_message.clone());
+        }
+
+        // Only a normal, error-free TurnComplete may be deferred. Aborts and
+        // errors always hand back to the parent. The turn token and store must
+        // agree on incarnation, goal, and generation before suppression.
+        if matches!(msg, EventMsg::TurnComplete(_))
+            && matches!(status, AgentStatus::Completed(_))
+            && turn_context
+                .extension_data
+                .get::<crate::agent::goal_notifications::GoalNotificationTurnToken>()
+                .and_then(|token| {
+                    self.services
+                        .thread_extension_data
+                        .get::<crate::agent::goal_notifications::GoalNotificationStore>()
+                        .and_then(|store| store.terminal_turn_is_wake_eligible_for_token(&token))
+                })
+                == Some(false)
+        {
+            return;
+        }
+
         self.forward_child_completion_to_parent(
             turn_context,
             *parent_thread_id,

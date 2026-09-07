@@ -13,6 +13,7 @@ FAILED_OUTCOMES = {"failure", "cancelled", "missing", "timed_out", "action_requi
 SUCCESS_OUTCOMES = {"success", "neutral", "skipped"}
 BLOCKER_OUTCOMES = {"failure", "cancelled", "missing"}
 OUTCOME_PRIORITY = {"failure": 0, "cancelled": 1, "missing": 2}
+DIAGNOSTIC_SCHEMA_VERSION = "ci-diagnostic-v1"
 
 
 def parse_args() -> argparse.Namespace:
@@ -126,6 +127,12 @@ def lane_status(lane: dict) -> str:
 
 
 def lane_signal(lane: dict) -> str:
+    diagnostic = lane_diagnostic(lane)
+    if diagnostic:
+        kind = diagnostic.get("kind") or "unknown"
+        code = diagnostic.get("code") or "unknown_input"
+        location = diagnostic.get("location") or ""
+        return f"{kind} {code}" + (f" at {location}" if location else "")
     schema_drift = lane.get("schema_fixture_drift")
     if isinstance(schema_drift, dict):
         summary = str(schema_drift.get("summary") or "").strip()
@@ -145,6 +152,53 @@ def lane_signal(lane: dict) -> str:
     if outcome == "missing":
         return "lane artifact missing"
     return ""
+
+
+def lane_diagnostic(lane: dict) -> dict:
+    """Return only the typed diagnostic fields safe for aggregate output."""
+
+    diagnostic = lane.get("failure_diagnostic")
+    if not isinstance(diagnostic, dict):
+        return {}
+    if diagnostic.get("schema_version") != DIAGNOSTIC_SCHEMA_VERSION:
+        return {}
+    nested = diagnostic.get("diagnostic")
+    if not isinstance(nested, dict):
+        nested = {}
+    result = {
+        "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
+        "status": str(diagnostic.get("status") or "unknown"),
+        "kind": str(nested.get("kind") or "unknown"),
+        "code": str(nested.get("code") or "unknown_input"),
+        "test_or_invariant_id": str(nested.get("test_or_invariant_id") or ""),
+        "location": str(nested.get("location") or ""),
+    }
+    evidence = diagnostic.get("evidence")
+    if isinstance(evidence, dict):
+        if isinstance(evidence.get("url"), str):
+            result["evidence_url"] = evidence["url"]
+        if isinstance(evidence.get("fingerprint"), str):
+            result["fingerprint"] = evidence["fingerprint"]
+    return result
+
+
+def synthetic_diagnostic(status: str, code: str) -> dict:
+    return {
+        "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
+        "status": status,
+        "command_status": status,
+        "diagnostic": {
+            "kind": "unknown",
+            "code": code,
+            "test_or_invariant_id": "",
+            "location": "",
+        },
+        "evidence": {
+            "url": None,
+            "fingerprint": "",
+            "fingerprint_scope": DIAGNOSTIC_SCHEMA_VERSION,
+        },
+    }
 
 
 def choose_family_blocker(failing: list[dict]) -> dict:
@@ -269,6 +323,12 @@ def build_results(
                     "error_lines": [],
                     "tail_excerpt": [],
                     "artifact_name": "",
+                    "failure_diagnostic": synthetic_diagnostic(
+                        outcome,
+                        "lane_cancelled_before_payload"
+                        if outcome == "cancelled"
+                        else "lane_artifact_missing",
+                    ),
                 }
             )
         else:
@@ -345,6 +405,12 @@ def derive_primary_and_secondary(
                 "signal": "setup failed before any lane started"
                 if job_result == "failure"
                 else "setup class fanout cancelled before any lane started",
+                "failure_diagnostic": synthetic_diagnostic(
+                    "cancelled" if job_result == "cancelled" else "missing",
+                    "setup_class_cancelled_before_payload"
+                    if job_result == "cancelled"
+                    else "setup_class_failed_before_payload",
+                ),
             }
         )
 
@@ -379,6 +445,7 @@ def derive_primary_and_secondary(
                 "exit_code": chosen.get("exit_code"),
                 "signal": lane_signal(chosen),
                 "schema_fixture_drift": chosen.get("schema_fixture_drift") or {},
+                "failure_diagnostic": lane_diagnostic(chosen),
             }
         )
 
@@ -401,6 +468,7 @@ def derive_primary_and_secondary(
                 "exit_code": lane.get("exit_code"),
                 "signal": lane_signal(lane),
                 "schema_fixture_drift": lane.get("schema_fixture_drift") or {},
+                "failure_diagnostic": lane_diagnostic(lane),
             }
         )
 
@@ -658,6 +726,7 @@ def main() -> None:
                 "lane_id": "validation-plan",
                 "job_result": "failure",
                 "signal": "; ".join(summary_input_signals),
+                "failure_diagnostic": synthetic_diagnostic("unknown", "planner_input_malformed"),
             }
         ]
         secondary = []
@@ -699,6 +768,7 @@ def main() -> None:
                     "setup_class": item["setup_class"],
                     "signal": item["signal"],
                     "lane_ids": item["lane_ids"],
+                    "failure_diagnostic": item.get("failure_diagnostic") or {},
                 }
             )
         elif item["kind"] == "planner":
@@ -707,6 +777,7 @@ def main() -> None:
                     "kind": "planner",
                     "lane_id": item["lane_id"],
                     "signal": item["signal"],
+                    "failure_diagnostic": item.get("failure_diagnostic") or {},
                 }
             )
         else:
@@ -718,6 +789,7 @@ def main() -> None:
                     "setup_class": item.get("setup_class"),
                     "signal": item.get("signal", ""),
                     "schema_fixture_drift": item.get("schema_fixture_drift") or {},
+                    "failure_diagnostic": item.get("failure_diagnostic") or {},
                 }
             )
 
@@ -747,6 +819,7 @@ def main() -> None:
                 "outcome": lane["outcome"],
                 "signal": lane_signal(lane),
                 "schema_fixture_drift": lane.get("schema_fixture_drift") or {},
+                "failure_diagnostic": lane_diagnostic(lane),
             }
             for lane in results
             if lane["outcome"] in BLOCKER_OUTCOMES
