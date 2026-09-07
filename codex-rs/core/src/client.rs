@@ -24,16 +24,13 @@
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
 use std::collections::HashMap;
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
-use std::hash::Hash;
-use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use async_channel::Sender;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
@@ -44,19 +41,17 @@ use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
 use codex_api::MemorySummarizeOutput as ApiMemorySummarizeOutput;
 use codex_api::Provider as ApiProvider;
-use codex_api::ProviderRequestAttempt;
-use codex_api::ProviderRequestAttemptFactory;
 use codex_api::RawMemory as ApiRawMemory;
 use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
 use codex_api::RealtimeSessionConfig as ApiRealtimeSessionConfig;
 use codex_api::Reasoning;
 use codex_api::ReasoningContext;
-use codex_api::RequestInitiation;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
 use codex_api::ResponsesApiRequest;
 use codex_api::ResponsesClient as ApiResponsesClient;
+use codex_api::ResponsesEndpoint;
 use codex_api::ResponsesOptions as ApiResponsesOptions;
 use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
@@ -77,35 +72,36 @@ use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
 use codex_login::default_client::add_originator_header;
-use codex_login::default_client::create_credential_bound_client_for_route;
+use codex_login::default_client::create_client_for_route;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
+use codex_protocol::ResponseItemId;
 use codex_protocol::auth::AuthMode;
 
-use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AuthRecoveryEvent;
+use codex_protocol::protocol::Event as ProtocolEvent;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::create_tools_json_for_responses_api;
+use codex_tools::create_tools_json_for_responses_lite;
 use codex_tools::create_tools_raw_json_for_responses_api;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
-use http::StatusCode as HttpStatusCode;
-use reqwest::StatusCode;
+use http::StatusCode;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -117,6 +113,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::attestation::AttestationContext;
 use crate::attestation::AttestationProvider;
@@ -124,8 +121,12 @@ use crate::attestation::X_OAI_ATTESTATION_HEADER;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::context::BaseInstructionsFragment;
+use crate::context::ContextualUserFragment;
+use crate::cyber_access_program;
 use crate::feedback_tags;
 use crate::responses_metadata::CodexResponsesMetadata;
+use crate::responses_metadata::subagent_header_value;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
@@ -133,8 +134,8 @@ use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_login::auth_env_telemetry::AuthEnvTelemetry;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_model_provider::AgentIdentitySessionFallback;
-use codex_model_provider::ProviderAuthIdentity;
 use codex_model_provider::ProviderAuthScope;
+use codex_model_provider::ProviderUnauthorizedRecovery;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 #[cfg(test)]
@@ -150,6 +151,7 @@ use codex_response_debug_context::telemetry_transport_error_message;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
+pub const X_CODEX_ROUTING_HINT_HEADER: &str = "x-codex-routing-hint";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 pub const X_CODEX_PARENT_THREAD_ID_HEADER: &str = "x-codex-parent-thread-id";
@@ -166,7 +168,6 @@ const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=20
 const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";
 const REALTIME_CALLS_ENDPOINT: &str = "/realtime/calls";
-const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 // `/responses/compact` is unary, so the timeout covers the full response rather than one idle
 // period between stream events.
@@ -180,13 +181,6 @@ pub(crate) struct CompactConversationRequestSettings {
     pub(crate) effort: Option<ReasoningEffortConfig>,
     pub(crate) summary: ReasoningSummaryConfig,
     pub(crate) service_tier: Option<String>,
-}
-
-fn reasoning_effort_for_request(effort: ReasoningEffortConfig) -> ReasoningEffortConfig {
-    match effort {
-        ReasoningEffortConfig::Ultra => ReasoningEffortConfig::Max,
-        effort => effort,
-    }
 }
 
 fn session_telemetry_for_request(
@@ -208,14 +202,13 @@ fn session_telemetry_for_request(
 /// configuration is per turn and is passed explicitly to streaming/unary methods.
 #[derive(Debug)]
 struct ModelClientState {
-    _session_id: SessionId,
     thread_id: ThreadId,
-    _installation_id: String,
     provider: SharedModelProvider,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     originator: String,
     model_verbosity: Option<VerbosityConfig>,
+    content_item_kinds_enabled: bool,
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
@@ -236,26 +229,6 @@ struct CurrentClientSetup {
     api_provider: ApiProvider,
     api_auth: SharedAuthProvider,
     agent_identity_telemetry: Option<AgentIdentityTelemetry>,
-    authority: ProviderAuthority,
-    request_initiation: RequestInitiation,
-}
-
-/// Complete process-local provider authority and transport identity admitted for an automatic
-/// operation or bound to a cached connection. The fingerprint is keyed, opaque, non-persisted,
-/// and deliberately redacted from Debug output.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ProviderAuthority {
-    revision: Option<u64>,
-    fingerprint: [u64; 2],
-}
-
-impl std::fmt::Debug for ProviderAuthority {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProviderAuthority")
-            .field("revision", &self.revision)
-            .field("fingerprint", &"<redacted>")
-            .finish()
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -285,6 +258,8 @@ pub struct ModelClient {
     state: Arc<ModelClientState>,
     agent_identity_policy: AgentIdentityAuthPolicy,
     prompt_cache_key_override: Option<String>,
+    free_guardian_enabled: bool,
+    event_sender: Option<Sender<ProtocolEvent>>,
     http_client_factory: HttpClientFactory,
 }
 
@@ -315,8 +290,6 @@ pub struct ModelClientSession {
     /// keep sending it unchanged between turn requests (e.g., for retries, incremental
     /// appends, or continuation requests), and must not send it between different turns.
     turn_state: Arc<OnceLock<String>>,
-    /// Complete provider authority admitted for this turn, when it is automatic.
-    expected_authority: Option<ProviderAuthority>,
 }
 
 #[derive(Debug, Clone)]
@@ -328,7 +301,7 @@ struct LastResponse {
 #[derive(Debug, Default)]
 struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
-    authority: Option<ProviderAuthority>,
+    endpoint: Option<ResponsesEndpoint>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     last_response_from_untraced_warmup: bool,
@@ -337,6 +310,7 @@ struct WebsocketSession {
 
 // This is intentionally not a `PartialEq` implementation: request equality includes `input` and
 // `client_metadata`, while websocket reuse compares the input separately and ignores metadata.
+// Access programs are authorized per response, including continuations, without replaying input.
 // Keep the destructuring exhaustive so new request fields require an explicit reuse decision.
 fn responses_request_properties_match(
     previous: &ResponsesApiRequest,
@@ -358,6 +332,7 @@ fn responses_request_properties_match(
         prompt_cache_key: previous_prompt_cache_key,
         text: previous_text,
         client_metadata: _,
+        access_programs: _,
     } = previous;
     let ResponsesApiRequest {
         model: current_model,
@@ -375,6 +350,7 @@ fn responses_request_properties_match(
         prompt_cache_key: current_prompt_cache_key,
         text: current_text,
         client_metadata: _,
+        access_programs: _,
     } = current;
 
     previous_model == current_model
@@ -451,105 +427,6 @@ fn sideband_websocket_auth_headers(api_auth: &dyn AuthProvider) -> ApiHeaderMap 
     headers
 }
 
-fn hash_sorted_map<H: Hasher>(values: Option<&HashMap<String, String>>, state: &mut H) {
-    let mut values = values
-        .into_iter()
-        .flatten()
-        .map(|(key, value)| (key.as_str(), value.as_str()))
-        .collect::<Vec<_>>();
-    values.sort_unstable();
-    values.hash(state);
-}
-
-fn hash_headers<H: Hasher>(headers: &ApiHeaderMap, state: &mut H) {
-    let mut values = headers
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_bytes()))
-        .collect::<Vec<_>>();
-    values.sort_unstable();
-    values.hash(state);
-}
-
-fn hash_provider_authority<H: Hasher>(
-    provider: &ModelProviderInfo,
-    api_provider: &ApiProvider,
-    account_auth: Option<&CodexAuth>,
-    auth_identity: ProviderAuthIdentity,
-    revision: Option<u64>,
-    state: &mut H,
-) {
-    revision.hash(state);
-    provider.name.hash(state);
-    provider.base_url.hash(state);
-    provider.env_key.hash(state);
-    provider.experimental_bearer_token.hash(state);
-    provider.wire_api.to_string().hash(state);
-    provider.requires_openai_auth.hash(state);
-    provider.supports_websockets.hash(state);
-    hash_sorted_map(provider.query_params.as_ref(), state);
-    hash_sorted_map(provider.http_headers.as_ref(), state);
-    hash_sorted_map(provider.env_http_headers.as_ref(), state);
-    if let Some(command_auth) = provider.auth.as_ref() {
-        command_auth.command.hash(state);
-        command_auth.args.hash(state);
-        command_auth.timeout_ms.hash(state);
-        command_auth.refresh_interval_ms.hash(state);
-        command_auth.cwd.as_path().hash(state);
-    }
-    if let Some(aws) = provider.aws.as_ref() {
-        aws.profile.hash(state);
-        aws.region.hash(state);
-    }
-
-    api_provider.name.hash(state);
-    api_provider.base_url.hash(state);
-    hash_sorted_map(api_provider.query_params.as_ref(), state);
-    hash_headers(&api_provider.headers, state);
-    api_provider.retry.max_attempts.hash(state);
-    api_provider.stream_idle_timeout.hash(state);
-
-    account_auth
-        .map(CodexAuth::api_auth_mode)
-        .map(|mode| mode.to_string())
-        .hash(state);
-    account_auth.and_then(CodexAuth::get_account_id).hash(state);
-    account_auth
-        .and_then(CodexAuth::get_chatgpt_user_id)
-        .hash(state);
-    account_auth
-        .map(CodexAuth::is_workspace_account)
-        .hash(state);
-    auth_identity.hash(state);
-}
-
-fn complete_provider_authority(
-    provider: &ModelProviderInfo,
-    api_provider: &ApiProvider,
-    account_auth: Option<&CodexAuth>,
-    auth_identity: ProviderAuthIdentity,
-    revision: Option<u64>,
-) -> ProviderAuthority {
-    static KEYS: OnceLock<[RandomState; 2]> = OnceLock::new();
-    let keys = KEYS.get_or_init(|| [RandomState::new(), RandomState::new()]);
-    let mut fingerprint = [0; 2];
-    for (index, key) in keys.iter().enumerate() {
-        let mut state = key.build_hasher();
-        hash_provider_authority(
-            provider,
-            api_provider,
-            account_auth,
-            auth_identity,
-            revision,
-            &mut state,
-        );
-        fingerprint[index] = state.finish();
-    }
-    ProviderAuthority {
-        revision,
-        fingerprint,
-    }
-}
-
 impl ModelClient {
     #[allow(clippy::too_many_arguments)]
     /// Creates a new session-scoped `ModelClient`.
@@ -561,13 +438,12 @@ impl ModelClient {
     pub fn new(
         auth_manager: Option<Arc<AuthManager>>,
         agent_identity_policy: AgentIdentityAuthPolicy,
-        session_id: SessionId,
         thread_id: ThreadId,
-        installation_id: String,
         provider_info: ModelProviderInfo,
         session_source: SessionSource,
         originator: String,
         model_verbosity: Option<VerbosityConfig>,
+        content_item_kinds_enabled: bool,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
@@ -585,14 +461,13 @@ impl ModelClient {
         let include_attestation = model_provider.supports_attestation();
         Self {
             state: Arc::new(ModelClientState {
-                _session_id: session_id,
                 thread_id,
-                _installation_id: installation_id,
                 provider: model_provider,
                 auth_env_telemetry,
                 session_source,
                 originator,
                 model_verbosity,
+                content_item_kinds_enabled,
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
@@ -605,22 +480,39 @@ impl ModelClient {
             }),
             agent_identity_policy,
             prompt_cache_key_override: None,
+            free_guardian_enabled: false,
+            event_sender: None,
             http_client_factory,
         }
     }
 
-    pub(crate) fn with_prompt_cache_key_override(
+    pub(crate) fn with_free_guardian_enabled(mut self, free_guardian_enabled: bool) -> Self {
+        self.free_guardian_enabled = free_guardian_enabled;
+        self
+    }
+
+    pub(crate) fn with_session_context(
         mut self,
         prompt_cache_key_override: Option<String>,
+        event_sender: Sender<ProtocolEvent>,
     ) -> Self {
         self.prompt_cache_key_override = prompt_cache_key_override;
+        self.event_sender = Some(event_sender);
         self
     }
 
     fn prompt_cache_key(&self, responses_metadata: &CodexResponsesMetadata) -> String {
-        self.prompt_cache_key_override
-            .clone()
-            .unwrap_or_else(|| responses_metadata.session_id.clone())
+        if let Some(prompt_cache_key) = &self.prompt_cache_key_override {
+            return prompt_cache_key.clone();
+        }
+
+        if let SessionSource::Internal(source) = &self.state.session_source
+            && let Some(parent_thread_id) = responses_metadata.parent_thread_id
+        {
+            return format!("{source}:{parent_thread_id}");
+        }
+
+        responses_metadata.session_id.clone()
     }
 
     /// Creates a fresh turn-scoped streaming session.
@@ -628,21 +520,11 @@ impl ModelClient {
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily
     /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
-        self.new_session_with_authority(/*expected_authority*/ None)
-    }
-
-    pub(crate) fn new_session_with_authority(
-        &self,
-        expected_authority: Option<ProviderAuthority>,
-    ) -> ModelClientSession {
-        let mut session = ModelClientSession {
+        ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
             turn_state: Arc::new(OnceLock::new()),
-            expected_authority,
-        };
-        session.set_expected_authority(expected_authority);
-        session
+        }
     }
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -700,7 +582,6 @@ impl ModelClient {
         prompt: &Prompt,
         model_info: &ModelInfo,
         turn_state: Option<Arc<OnceLock<String>>>,
-        expected_authority: Option<ProviderAuthority>,
         settings: CompactConversationRequestSettings,
         session_telemetry: &SessionTelemetry,
         compaction_trace: &CompactionTraceContext,
@@ -709,21 +590,9 @@ impl ModelClient {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
-        let client_setup = self.current_client_setup(expected_authority).await?;
+        let client_setup = self.current_client_setup().await?;
         let transport =
             self.build_api_transport(&client_setup.api_provider, RESPONSES_COMPACT_ENDPOINT)?;
-        let request_attempt_factory = self.provider_request_attempt_factory(
-            expected_authority,
-            RESPONSES_COMPACT_ENDPOINT,
-            /*provider_override*/ None,
-            ProviderRequestAttempt::new(
-                transport.clone(),
-                client_setup.api_provider.clone(),
-                client_setup.api_auth.clone(),
-                client_setup.authority,
-                client_setup.request_initiation,
-            ),
-        );
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
             AuthRequestTelemetryContext::new(
@@ -736,7 +605,6 @@ impl ModelClient {
             self.state.auth_env_telemetry.clone(),
         );
         let request = self.build_responses_request(
-            &client_setup.api_provider,
             prompt,
             model_info,
             settings.effort,
@@ -767,6 +635,10 @@ impl ModelClient {
             service_tier: service_tier.as_deref(),
             prompt_cache_key: prompt_cache_key.as_deref(),
             text,
+            access_programs: cyber_access_program::for_auth(
+                client_setup.auth.as_ref(),
+                prompt.cyber_access_program,
+            ),
         };
 
         let mut extra_headers = ApiHeaderMap::new();
@@ -786,6 +658,13 @@ impl ModelClient {
         if let Some(header_value) = self.generate_attestation_header_for().await {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
+        if let Some(header_value) = self.build_routing_hint_header(
+            client_setup.auth.as_ref(),
+            &model,
+            service_tier.as_deref(),
+        ) {
+            extra_headers.insert(X_CODEX_ROUTING_HINT_HEADER, header_value);
+        }
         add_responses_lite_header(&mut extra_headers, model_info.use_responses_lite);
         let compact_request_timeout = client_setup
             .api_provider
@@ -793,8 +672,7 @@ impl ModelClient {
             .saturating_mul(COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER);
         let client =
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
-                .with_telemetry(Some(request_telemetry))
-                .with_request_attempt_factory(Some(request_attempt_factory));
+                .with_telemetry(Some(request_telemetry));
         let trace_attempt = compaction_trace.start_attempt(&payload);
         let result = client
             .compact_input(
@@ -818,45 +696,39 @@ impl ModelClient {
     ) -> Result<RealtimeWebrtcCallStart> {
         // Create the media call over HTTP first, then retain matching auth so realtime can attach
         // the server-side control WebSocket to the call id from that HTTP response.
-        let client_setup = self
-            .current_client_setup(/*expected_authority*/ None)
-            .await?;
+        let client_setup = self.current_client_setup().await?;
         if let Some(header_value) = self.generate_attestation_header_for().await {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
-        let api_provider = api_provider_override
-            .clone()
-            .unwrap_or(client_setup.api_provider);
+        let mut sideband_headers = extra_headers.clone();
+        sideband_headers.extend(sideband_websocket_auth_headers(
+            client_setup.api_auth.as_ref(),
+        ));
+        let api_provider = api_provider_override.unwrap_or(client_setup.api_provider);
         let transport = self.build_api_transport(&api_provider, REALTIME_CALLS_ENDPOINT)?;
-        let request_attempt_factory = self.provider_request_attempt_factory(
-            /*expected_authority*/ None,
-            REALTIME_CALLS_ENDPOINT,
-            api_provider_override,
-            ProviderRequestAttempt::new(
-                transport.clone(),
-                api_provider.clone(),
-                client_setup.api_auth.clone(),
-                client_setup.authority,
-                client_setup.request_initiation,
-            ),
-        );
-        let (response, successful_auth) =
-            ApiRealtimeCallClient::new(transport, api_provider, client_setup.api_auth)
-                .with_request_attempt_factory(Some(request_attempt_factory))
-                .create_with_session_and_headers_and_auth(
-                    sdp,
-                    session_config,
-                    extra_headers.clone(),
-                )
-                .await
-                .map_err(|error| self.state.provider.map_api_error(error))?;
-        let mut sideband_headers = extra_headers;
-        sideband_headers.extend(sideband_websocket_auth_headers(successful_auth.as_ref()));
+        let response = ApiRealtimeCallClient::new(transport, api_provider, client_setup.api_auth)
+            .create_with_session_and_headers(sdp, session_config, extra_headers)
+            .await
+            .map_err(|error| self.state.provider.map_api_error(error))?;
         Ok(RealtimeWebrtcCallStart {
             sdp: response.sdp,
             call_id: response.call_id,
             sideband_headers,
         })
+    }
+
+    pub(crate) async fn realtime_sideband_headers(
+        &self,
+        mut extra_headers: ApiHeaderMap,
+    ) -> Result<ApiHeaderMap> {
+        let client_setup = self.current_client_setup().await?;
+        if let Some(header_value) = self.generate_attestation_header_for().await {
+            extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
+        }
+        extra_headers.extend(sideband_websocket_auth_headers(
+            client_setup.api_auth.as_ref(),
+        ));
+        Ok(extra_headers)
     }
 
     /// Builds memory summaries for each provided normalized raw memory.
@@ -876,23 +748,9 @@ impl ModelClient {
             return Ok(Vec::new());
         }
 
-        let client_setup = self
-            .current_client_setup(/*expected_authority*/ None)
-            .await?;
+        let client_setup = self.current_client_setup().await?;
         let transport =
             self.build_api_transport(&client_setup.api_provider, MEMORIES_SUMMARIZE_ENDPOINT)?;
-        let request_attempt_factory = self.provider_request_attempt_factory(
-            /*expected_authority*/ None,
-            MEMORIES_SUMMARIZE_ENDPOINT,
-            /*provider_override*/ None,
-            ProviderRequestAttempt::new(
-                transport.clone(),
-                client_setup.api_provider.clone(),
-                client_setup.api_auth.clone(),
-                client_setup.authority,
-                client_setup.request_initiation,
-            ),
-        );
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
             AuthRequestTelemetryContext::new(
@@ -906,14 +764,13 @@ impl ModelClient {
         );
         let client =
             ApiMemoriesClient::new(transport, client_setup.api_provider, client_setup.api_auth)
-                .with_telemetry(Some(request_telemetry))
-                .with_request_attempt_factory(Some(request_attempt_factory));
+                .with_telemetry(Some(request_telemetry));
 
         let payload = ApiMemorySummarizeInput {
             model: model_info.slug.clone(),
             raw_memories,
             reasoning: effort
-                .map(reasoning_effort_for_request)
+                .map(|effort| model_info.resolve_reasoning_effort(effort))
                 .map(|effort| Reasoning {
                     effort: Some(effort),
                     summary: None,
@@ -1011,6 +868,7 @@ impl ModelClient {
     }
 
     fn build_reasoning(
+        &self,
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
@@ -1018,7 +876,7 @@ impl ModelClient {
         Reasoning {
             effort: effort
                 .or_else(|| model_info.default_reasoning_level.clone())
-                .map(reasoning_effort_for_request),
+                .map(|effort| model_info.resolve_reasoning_effort(effort)),
             summary: (model_info.supports_reasoning_summary_parameter
                 && summary != ReasoningSummaryConfig::None)
                 .then_some(summary),
@@ -1030,10 +888,8 @@ impl ModelClient {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn build_responses_request(
         &self,
-        provider: &codex_api::Provider,
         prompt: &Prompt,
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
@@ -1043,28 +899,35 @@ impl ModelClient {
     ) -> Result<ResponsesApiRequest> {
         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
         let is_openai = self.state.provider.info().is_openai();
-        if !is_openai {
-            input
-                .iter_mut()
-                .for_each(ResponseItem::clear_internal_chat_message_metadata_passthrough);
-        }
         let (instructions, tools) = if model_info.use_responses_lite {
-            let tools = create_tools_json_for_responses_api(&prompt.tools)?;
+            // These prompt-only items are rebuilt on every request. Hash their visible payloads
+            // within the thread so retries and resumed sessions preserve their identity.
+            let prefix_namespace = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                self.state.thread_id.to_string().as_bytes(),
+            );
+            let tools = if self.state.provider.capabilities().namespace_tools {
+                create_tools_json_for_responses_lite(&prompt.tools)?
+            } else {
+                create_tools_json_for_responses_api(&prompt.tools)?
+            };
             let mut prefix = vec![ResponseItem::AdditionalTools {
-                id: None,
+                id: Some(ResponseItemId::with_suffix(
+                    "at",
+                    Uuid::new_v5(&prefix_namespace, &serde_json::to_vec(&tools)?),
+                )),
                 role: "developer".to_string(),
                 tools,
             }];
             if !prompt.base_instructions.text.is_empty() {
-                prefix.push(ResponseItem::Message {
-                    id: None,
-                    role: "developer".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: prompt.base_instructions.text.clone(),
-                    }],
-                    phase: None,
-                    internal_chat_message_metadata_passthrough: None,
-                });
+                let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
+                    prompt.base_instructions.text.clone(),
+                ));
+                instructions.set_id(Some(ResponseItemId::with_suffix(
+                    "msg",
+                    Uuid::new_v5(&prefix_namespace, prompt.base_instructions.text.as_bytes()),
+                )));
+                prefix.push(instructions);
             }
             input.splice(0..0, prefix);
             (String::new(), None)
@@ -1074,7 +937,19 @@ impl ModelClient {
                 Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
             )
         };
-        let reasoning = Self::build_reasoning(model_info, effort, summary);
+        if !is_openai {
+            for item in &mut input {
+                item.clear_internal_chat_message_metadata_passthrough();
+                if let ResponseItem::FunctionCall {
+                    encrypted_function_args,
+                    ..
+                } = item
+                {
+                    *encrypted_function_args = None;
+                }
+            }
+        }
+        let reasoning = self.build_reasoning(model_info, effort, summary);
         let stream_options = (self.state.concurrent_reasoning_summaries_enabled
             && is_openai
             && reasoning.summary.is_some())
@@ -1108,7 +983,7 @@ impl ModelClient {
             tool_choice: "auto".to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
             reasoning: Some(reasoning),
-            store: provider.is_azure_responses_endpoint(),
+            store: false,
             stream: true,
             stream_options,
             include,
@@ -1116,6 +991,7 @@ impl ModelClient {
             prompt_cache_key,
             text,
             client_metadata: Some(responses_metadata.client_metadata()),
+            access_programs: None,
         };
         Ok(request)
     }
@@ -1124,6 +1000,9 @@ impl ModelClient {
         for item in input {
             if item.id().is_some_and(|id| !id.is_prefixed()) {
                 item.set_id(/*new_id*/ None);
+            }
+            if !self.state.content_item_kinds_enabled {
+                item.clear_content_item_kinds();
             }
         }
     }
@@ -1145,137 +1024,100 @@ impl ModelClient {
     ///
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
-    async fn current_client_setup(
-        &self,
-        expected_authority: Option<ProviderAuthority>,
-    ) -> Result<CurrentClientSetup> {
-        let auth_manager = self.state.provider.auth_manager();
-        loop {
-            // Resolution may reload external auth or proactively refresh managed auth. It must run
-            // before provider-send authority so those write-side transitions cannot self-deadlock.
-            let revision_before_resolution = auth_manager
-                .as_ref()
-                .map(|auth_manager| auth_manager.auth_revision());
-            let request_auth = self
-                .state
-                .provider
-                .request_auth_for_scope(ProviderAuthScope {
-                    agent_identity_policy: self.agent_identity_policy,
-                    session_source: self.state.session_source.clone(),
-                    agent_identity_session_fallback: self
-                        .state
-                        .agent_identity_session_fallback
-                        .clone(),
-                })
-                .await?;
-            let api_provider = request_auth.api_provider;
-            let resolved_auth = request_auth.resolved.freeze();
+    async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
+        let auth = self.state.provider.auth().await;
+        let api_provider = self.state.provider.api_provider().await?;
+        let resolved_auth = self
+            .state
+            .provider
+            .api_auth_for_scope(ProviderAuthScope {
+                agent_identity_policy: self.agent_identity_policy,
+                session_source: self.state.session_source.clone(),
+                agent_identity_session_fallback: self.state.agent_identity_session_fallback.clone(),
+            })
+            .await?;
+        Ok(CurrentClientSetup {
+            auth,
+            api_provider,
+            api_auth: resolved_auth.auth,
+            agent_identity_telemetry: resolved_auth.agent_identity_telemetry,
+        })
+    }
 
-            let (revision, request_authority) = match auth_manager.as_ref() {
-                Some(auth_manager) => {
-                    let (revision, authority) = auth_manager.current_provider_request_guard().await;
-                    if revision_before_resolution != Some(revision) {
-                        drop(authority);
-                        continue;
-                    }
-                    (Some(revision), Some(authority))
-                }
-                None => (None, None),
-            };
-            let authority = complete_provider_authority(
-                self.state.provider.info(),
-                &api_provider,
-                request_auth.account_auth.as_ref(),
-                resolved_auth.authority_identity(),
-                revision,
-            );
-            if expected_authority.is_some_and(|expected| expected != authority) {
-                return Err(CodexErr::AutomaticTurnContextChanged);
-            }
-            return Ok(CurrentClientSetup {
-                auth: request_auth.account_auth,
-                api_provider,
-                api_auth: resolved_auth.auth,
-                agent_identity_telemetry: resolved_auth.agent_identity_telemetry,
-                authority,
-                request_initiation: RequestInitiation::new(request_authority),
-            });
+    fn responses_endpoint(&self, auth: Option<&CodexAuth>, model: &str) -> ResponsesEndpoint {
+        if self.free_guardian_enabled
+            && crate::guardian::is_basic_session_source(&self.state.session_source)
+            && self.uses_codex_backend(auth)
+            && self.state.provider.info().supports_codex_backend_routes()
+            && model == self.state.provider.approval_review_preferred_model()
+        {
+            ResponsesEndpoint::Guardian
+        } else {
+            ResponsesEndpoint::Responses
         }
     }
 
-    /// Resolves and freezes the complete provider authority used to admit an automatic operation.
-    pub(crate) async fn current_provider_authority(&self) -> Result<ProviderAuthority> {
-        let setup = self
-            .current_client_setup(/*expected_authority*/ None)
-            .await?;
-        let authority = setup.authority;
-        setup.request_initiation.cancel();
-        Ok(authority)
+    fn uses_codex_backend(&self, auth: Option<&CodexAuth>) -> bool {
+        let provider = self.state.provider.info();
+        auth.is_some_and(CodexAuth::uses_codex_backend)
+            && provider.is_openai()
+            && provider.requires_openai_auth
+            && provider.env_key.is_none()
+            && provider.experimental_bearer_token.is_none()
+            && provider.auth.is_none()
+            && provider.aws.is_none()
     }
 
-    /// Returns a freshly resolved provider, frozen auth, route, and initiation for every visible
-    /// retry.
-    ///
-    /// The initial setup already validated and pinned the admitted authority. Later attempts must
-    /// repeat complete provider-authority resolution before receiving a new one-use token. Ordinary
-    /// non-automatic requests retain the existing application retry behavior through the same
-    /// per-attempt gate, but only automatic work receives the automatic-context-change error. An
-    /// explicit provider override remains the request target for every attempt while each attempt's
-    /// transport is rebuilt for that target.
-    fn provider_request_attempt_factory(
+    fn set_guardian_metadata(
         &self,
-        expected_authority: Option<ProviderAuthority>,
-        endpoint: &'static str,
-        provider_override: Option<ApiProvider>,
-        initial: ProviderRequestAttempt<ReqwestTransport>,
-    ) -> ProviderRequestAttemptFactory<ReqwestTransport> {
-        let initial = Arc::new(StdMutex::new(Some(initial)));
-        let client = self.clone();
-        ProviderRequestAttemptFactory::new(move || {
-            let initial = initial
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            let client = client.clone();
-            let provider_override = provider_override.clone();
-            async move {
-                if let Some(initial) = initial {
-                    return Ok(initial);
-                }
-                let setup = client
-                    .current_client_setup(expected_authority)
-                    .await
-                    .map_err(|error| {
-                        if expected_authority.is_some()
-                            && matches!(
-                                error.details(),
-                                codex_protocol::error::CodexErrorDetails::AutomaticTurnContextChanged
-                            )
-                        {
-                            TransportError::AutomaticTurnContextChanged
-                        } else {
-                            TransportError::Build(
-                                "failed to renew provider request authority".to_string(),
-                            )
-                        }
-                    })?;
-                let api_provider = provider_override.unwrap_or(setup.api_provider);
-                let transport = client
-                    .build_api_transport(&api_provider, endpoint)
-                    .map_err(|_| {
-                        TransportError::Build(
-                            "failed to renew provider request transport".to_string(),
-                        )
-                    })?;
-                Ok(ProviderRequestAttempt::new(
-                    transport,
-                    api_provider,
-                    setup.api_auth,
-                    setup.authority,
-                    setup.request_initiation,
-                ))
-            }
-        })
+        metadata: &mut Option<HashMap<String, String>>,
+        parent_response_id: Option<&str>,
+        auth: Option<&CodexAuth>,
+        endpoint: ResponsesEndpoint,
+    ) {
+        if let Some(metadata) = metadata.as_mut() {
+            metadata.remove("guardian_credits_requested");
+            metadata.remove("parent_response_id");
+        }
+        if endpoint == ResponsesEndpoint::Guardian
+            && let Some(parent_response_id) = parent_response_id
+        {
+            metadata.get_or_insert_with(HashMap::new).insert(
+                "parent_response_id".to_owned(),
+                parent_response_id.to_owned(),
+            );
+        }
+        if self.free_guardian_enabled
+            && endpoint == ResponsesEndpoint::Responses
+            && !crate::guardian::is_basic_session_source(&self.state.session_source)
+            && matches!(
+                auth,
+                Some(CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_))
+            )
+            && self.uses_codex_backend(auth)
+            && self.state.provider.info().supports_codex_backend_routes()
+        {
+            metadata
+                .get_or_insert_with(HashMap::new)
+                .insert("guardian_credits_requested".to_owned(), "true".to_owned());
+        }
+    }
+
+    fn build_routing_hint_header(
+        &self,
+        auth: Option<&CodexAuth>,
+        model: &str,
+        service_tier: Option<&str>,
+    ) -> Option<HeaderValue> {
+        if !self.uses_codex_backend(auth) {
+            return None;
+        }
+
+        let routing_hint = match service_tier {
+            Some(tier) => format!("model={model};tier={tier}"),
+            None => format!("model={model}"),
+        };
+        HeaderValue::from_str(&routing_hint).ok()
     }
 
     fn build_api_transport(
@@ -1284,7 +1126,7 @@ impl ModelClient {
         endpoint: &str,
     ) -> Result<ReqwestTransport> {
         let request_url = api_provider.url_for_path(endpoint);
-        let client = create_credential_bound_client_for_route(
+        let client = create_client_for_route(
             &self.http_client_factory,
             &request_url,
             ClientRouteClass::Api,
@@ -1294,9 +1136,7 @@ impl ModelClient {
     }
 
     pub(crate) async fn prewarm_auth(&self) -> Result<()> {
-        self.current_client_setup(/*expected_authority*/ None)
-            .await
-            .map(|_| ())
+        self.current_client_setup().await.map(|_| ())
     }
 
     /// Opens a websocket connection using the same header and telemetry wiring as normal turns.
@@ -1312,7 +1152,7 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
-        request_initiation: RequestInitiation,
+        endpoint: ResponsesEndpoint,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
         let headers = self.build_websocket_headers(responses_metadata).await;
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(
@@ -1325,14 +1165,15 @@ impl ModelClient {
         let start = Instant::now();
         let result = match tokio::time::timeout(
             websocket_connect_timeout,
-            ApiWebSocketResponsesClient::new(api_provider, api_auth).connect_with_initiation(
-                &self.http_client_factory,
-                headers,
-                codex_login::default_client::default_headers(),
-                /*turn_state*/ None,
-                Some(websocket_telemetry),
-                request_initiation,
-            ),
+            ApiWebSocketResponsesClient::new(api_provider, api_auth)
+                .with_endpoint(endpoint)
+                .connect(
+                    &self.http_client_factory,
+                    headers,
+                    codex_login::default_client::default_headers(),
+                    /*turn_state*/ None,
+                    Some(websocket_telemetry),
+                ),
         )
         .await
         {
@@ -1408,6 +1249,9 @@ impl ModelClient {
             Some(responses_metadata.thread_id.to_string()),
         ));
         headers.extend(self.build_responses_compatibility_headers(responses_metadata));
+        if let Some(routing_hint) = &responses_metadata.routing_hint {
+            headers.insert(X_CODEX_ROUTING_HINT_HEADER, routing_hint.clone());
+        }
         if let Some(header_value) = self.generate_attestation_header_for().await {
             headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
@@ -1438,19 +1282,9 @@ impl ModelClientSession {
         Arc::clone(&self.turn_state)
     }
 
-    pub(crate) fn set_expected_authority(&mut self, expected_authority: Option<ProviderAuthority>) {
-        self.expected_authority = expected_authority;
-        if expected_authority.is_some()
-            && self.websocket_session.connection.is_some()
-            && self.websocket_session.authority != expected_authority
-        {
-            self.reset_websocket_session();
-        }
-    }
-
-    pub(crate) fn reset_websocket_session(&mut self) {
+    fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
-        self.websocket_session.authority = None;
+        self.websocket_session.endpoint = None;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
         self.websocket_session.last_response_from_untraced_warmup = false;
@@ -1539,15 +1373,13 @@ impl ModelClientSession {
     }
 
     fn get_last_response(&mut self) -> Option<LastResponse> {
-        let mut receiver = self.websocket_session.last_response_rx.take()?;
-        match receiver.try_recv() {
-            Ok(last_response) => Some(last_response),
-            Err(TryRecvError::Closed) => None,
-            Err(TryRecvError::Empty) => {
-                self.websocket_session.last_response_rx = Some(receiver);
-                None
-            }
-        }
+        self.websocket_session
+            .last_response_rx
+            .take()
+            .and_then(|mut receiver| match receiver.try_recv() {
+                Ok(last_response) => Some(last_response),
+                Err(TryRecvError::Closed) | Err(TryRecvError::Empty) => None,
+            })
     }
 
     fn prepare_websocket_request(
@@ -1583,6 +1415,7 @@ impl ModelClientSession {
     /// This performs only connection setup; it never sends prompt payloads.
     pub async fn preconnect_websocket(
         &mut self,
+        model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
         responses_metadata: &CodexResponsesMetadata,
     ) -> std::result::Result<(), ApiError> {
@@ -1593,21 +1426,20 @@ impl ModelClientSession {
             return Ok(());
         }
 
-        let client_setup = self
-            .client
-            .current_client_setup(self.expected_authority)
-            .await
-            .map_err(|err| {
-                ApiError::Stream(format!(
-                    "failed to build websocket prewarm client setup: {err}"
-                ))
-            })?;
+        let client_setup = self.client.current_client_setup().await.map_err(|err| {
+            ApiError::Stream(format!(
+                "failed to build websocket prewarm client setup: {err}"
+            ))
+        })?;
         let auth_context = AuthRequestTelemetryContext::new(
             client_setup.auth.as_ref().map(CodexAuth::auth_mode),
             client_setup.api_auth.as_ref(),
             client_setup.agent_identity_telemetry.clone(),
             PendingUnauthorizedRetry::default(),
         );
+        let endpoint = self
+            .client
+            .responses_endpoint(client_setup.auth.as_ref(), &model_info.slug);
         let connection = self
             .client
             .connect_websocket(
@@ -1616,12 +1448,12 @@ impl ModelClientSession {
                 client_setup.api_auth,
                 responses_metadata,
                 auth_context,
-                RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
-                client_setup.request_initiation,
+                RequestRouteTelemetry::for_endpoint(endpoint.path()),
+                endpoint,
             )
             .await?;
         self.websocket_session.connection = Some(connection);
-        self.websocket_session.authority = Some(client_setup.authority);
+        self.websocket_session.endpoint = Some(endpoint);
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
         Ok(())
@@ -1635,38 +1467,32 @@ impl ModelClientSession {
             provider = %self.client.state.provider.info().name,
             wire_api = %self.client.state.provider.info().wire_api,
             transport = "responses_websocket",
-            api.path = "responses",
+            api.path = params.endpoint.path(),
             turn.has_metadata_header = params.responses_metadata.has_turn_metadata()
         )
     )]
     async fn websocket_connection(
         &mut self,
         params: WebsocketConnectParams<'_>,
-    ) -> std::result::Result<Option<RequestInitiation>, ApiError> {
+    ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
         let WebsocketConnectParams {
             session_telemetry,
             api_provider,
             api_auth,
-            authority,
             responses_metadata,
             auth_context,
             request_route_telemetry,
-            request_initiation,
+            endpoint,
         } = params;
-        if self.websocket_session.connection.is_some()
-            && self.websocket_session.authority != Some(authority)
-        {
-            self.reset_websocket_session();
-        }
         let needs_new = match self.websocket_session.connection.as_ref() {
-            Some(conn) => conn.is_closed().await,
+            Some(conn) => {
+                self.websocket_session.endpoint != Some(endpoint) || conn.is_closed().await
+            }
             None => true,
         };
 
         if needs_new {
-            self.websocket_session.last_request = None;
-            self.websocket_session.last_response_rx = None;
-            self.websocket_session.last_response_from_untraced_warmup = false;
+            self.reset_websocket_session();
             let new_conn = match self
                 .client
                 .connect_websocket(
@@ -1676,7 +1502,7 @@ impl ModelClientSession {
                     responses_metadata,
                     auth_context,
                     request_route_telemetry,
-                    request_initiation,
+                    endpoint,
                 )
                 .await
             {
@@ -1689,15 +1515,20 @@ impl ModelClientSession {
                 }
             };
             self.websocket_session.connection = Some(new_conn);
-            self.websocket_session.authority = Some(authority);
+            self.websocket_session.endpoint = Some(endpoint);
             self.websocket_session
                 .set_connection_reused(/*connection_reused*/ false);
-            Ok(None)
         } else {
             self.websocket_session
                 .set_connection_reused(/*connection_reused*/ true);
-            Ok(Some(request_initiation))
         }
+
+        self.websocket_session
+            .connection
+            .as_ref()
+            .ok_or(ApiError::Stream(
+                "websocket connection is unavailable".to_string(),
+            ))
     }
 
     fn responses_request_compression(&self, auth: Option<&CodexAuth>) -> Compression {
@@ -1724,7 +1555,7 @@ impl ModelClientSession {
             wire_api = %self.client.state.provider.info().wire_api,
             transport = "responses_http",
             http.method = "POST",
-            api.path = "responses",
+            api.path = tracing::field::Empty,
             turn.has_metadata_header = responses_metadata.has_turn_metadata()
         )
     )]
@@ -1743,15 +1574,17 @@ impl ModelClientSession {
         let mut auth_recovery = auth_manager
             .as_ref()
             .map(AuthManager::unauthorized_recovery);
+        let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self
+            let client_setup = self.client.current_client_setup().await?;
+            let endpoint = self
                 .client
-                .current_client_setup(self.expected_authority)
-                .await?;
+                .responses_endpoint(client_setup.auth.as_ref(), &model_info.slug);
+            tracing::Span::current().record("api.path", endpoint.path());
             let transport = self
                 .client
-                .build_api_transport(&client_setup.api_provider, RESPONSES_ENDPOINT)?;
+                .build_api_transport(&client_setup.api_provider, endpoint.path())?;
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),
@@ -1761,7 +1594,7 @@ impl ModelClientSession {
             let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
                 session_telemetry,
                 request_auth_context,
-                RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
+                RequestRouteTelemetry::for_endpoint(endpoint.path()),
                 self.client.state.auth_env_telemetry.clone(),
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
@@ -1774,7 +1607,6 @@ impl ModelClientSession {
                 .await;
 
             let mut request = self.client.build_responses_request(
-                &client_setup.api_provider,
                 prompt,
                 model_info,
                 effort.clone(),
@@ -1782,6 +1614,30 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
+            self.client.set_guardian_metadata(
+                &mut request.client_metadata,
+                responses_metadata.parent_response_id.as_deref(),
+                client_setup.auth.as_ref(),
+                endpoint,
+            );
+            if endpoint == ResponsesEndpoint::Guardian {
+                request.service_tier = None;
+            }
+            if endpoint == ResponsesEndpoint::Responses
+                && let Some(header_value) = self.client.build_routing_hint_header(
+                    client_setup.auth.as_ref(),
+                    &request.model,
+                    request.service_tier.as_deref(),
+                )
+            {
+                options
+                    .extra_headers
+                    .insert(X_CODEX_ROUTING_HINT_HEADER, header_value);
+            }
+            request.access_programs = cyber_access_program::for_auth(
+                client_setup.auth.as_ref(),
+                prompt.cyber_access_program,
+            );
             self.client
                 .prepare_response_items_for_request(&mut request.input);
             let request_session_telemetry =
@@ -1789,25 +1645,13 @@ impl ModelClientSession {
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
-            let request_attempt_factory = self.client.provider_request_attempt_factory(
-                self.expected_authority,
-                RESPONSES_ENDPOINT,
-                /*provider_override*/ None,
-                ProviderRequestAttempt::new(
-                    transport.clone(),
-                    client_setup.api_provider.clone(),
-                    client_setup.api_auth.clone(),
-                    client_setup.authority,
-                    client_setup.request_initiation,
-                ),
-            );
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
                 client_setup.api_auth,
             )
-            .with_telemetry(Some(request_telemetry), Some(sse_telemetry))
-            .with_request_attempt_factory(Some(request_attempt_factory));
+            .with_endpoint(endpoint)
+            .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             let stream_result = client.stream_request(request, options).await;
 
             match stream_result {
@@ -1820,9 +1664,13 @@ impl ModelClientSession {
                     );
                     return Ok(stream);
                 }
-                Err(ApiError::Transport(
-                    unauthorized_transport @ TransportError::Http { status, .. },
-                )) if status == StatusCode::UNAUTHORIZED => {
+                Err(ApiError::Transport(unauthorized_transport))
+                    if self
+                        .client
+                        .state
+                        .provider
+                        .is_recoverable_auth_error(&unauthorized_transport) =>
+                {
                     let response_debug_context =
                         extract_response_debug_context(&unauthorized_transport);
                     inference_trace_attempt.record_failed(
@@ -1834,8 +1682,11 @@ impl ModelClientSession {
                         handle_unauthorized(
                             unauthorized_transport,
                             &mut auth_recovery,
+                            &mut provider_auth_recovery_attempted,
                             session_telemetry,
                             &self.client.state.provider,
+                            self.client.event_sender.as_ref(),
+                            responses_metadata.turn_id.as_deref(),
                         )
                         .await?,
                     );
@@ -1866,7 +1717,7 @@ impl ModelClientSession {
             model = %model_info.slug,
             wire_api = %self.client.state.provider.info().wire_api,
             transport = "responses_websocket",
-            api.path = "responses",
+            api.path = tracing::field::Empty,
             turn.has_metadata_header = responses_metadata.has_turn_metadata(),
             websocket.warmup = warmup
         )
@@ -1884,17 +1735,20 @@ impl ModelClientSession {
         request_trace: Option<W3cTraceContext>,
         inference_trace: &InferenceTraceContext,
     ) -> Result<WebsocketStreamOutcome> {
-        let auth_manager = self.client.state.provider.auth_manager();
+        let provider = Arc::clone(&self.client.state.provider);
+        let auth_manager = provider.auth_manager();
 
         let mut auth_recovery = auth_manager
             .as_ref()
             .map(AuthManager::unauthorized_recovery);
+        let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self
+            let client_setup = self.client.current_client_setup().await?;
+            let endpoint = self
                 .client
-                .current_client_setup(self.expected_authority)
-                .await?;
+                .responses_endpoint(client_setup.auth.as_ref(), &model_info.slug);
+            tracing::Span::current().record("api.path", endpoint.path());
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),
@@ -1902,7 +1756,6 @@ impl ModelClientSession {
                 pending_retry,
             );
             let mut request = self.client.build_responses_request(
-                &client_setup.api_provider,
                 prompt,
                 model_info,
                 effort.clone(),
@@ -1910,6 +1763,23 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
+            if endpoint == ResponsesEndpoint::Guardian {
+                request.service_tier = None;
+            }
+            request.access_programs = cyber_access_program::for_auth(
+                client_setup.auth.as_ref(),
+                prompt.cyber_access_program,
+            );
+            let mut websocket_metadata = responses_metadata.clone();
+            websocket_metadata.routing_hint = if endpoint == ResponsesEndpoint::Responses {
+                self.client.build_routing_hint_header(
+                    client_setup.auth.as_ref(),
+                    &request.model,
+                    request.service_tier.as_deref(),
+                )
+            } else {
+                None
+            };
             let request_session_telemetry = if warmup {
                 // `generate=false` prewarm is connection setup, not an inference request.
                 session_telemetry.clone()
@@ -1922,69 +1792,43 @@ impl ModelClientSession {
             if let Some(turn_state) = self.turn_state.get() {
                 client_metadata.insert(X_CODEX_TURN_STATE_HEADER.to_string(), turn_state.clone());
             }
-            let connection_authority = client_setup.authority;
-            let request_initiation = match self
+            match self
                 .websocket_connection(WebsocketConnectParams {
                     session_telemetry,
                     api_provider: client_setup.api_provider,
                     api_auth: client_setup.api_auth,
-                    authority: client_setup.authority,
-                    responses_metadata,
+                    responses_metadata: &websocket_metadata,
                     auth_context: request_auth_context,
-                    request_route_telemetry: RequestRouteTelemetry::for_endpoint(
-                        RESPONSES_ENDPOINT,
-                    ),
-                    request_initiation: client_setup.request_initiation,
+                    request_route_telemetry: RequestRouteTelemetry::for_endpoint(endpoint.path()),
+                    endpoint,
                 })
                 .await
             {
-                Ok(request_initiation) => request_initiation,
+                Ok(_) => {}
                 Err(ApiError::Transport(TransportError::Http { status, .. }))
                     if status == StatusCode::UPGRADE_REQUIRED =>
                 {
                     return Ok(WebsocketStreamOutcome::FallbackToHttp);
                 }
-                Err(ApiError::Transport(
-                    unauthorized_transport @ TransportError::Http { status, .. },
-                )) if status == StatusCode::UNAUTHORIZED => {
+                Err(ApiError::Transport(unauthorized_transport))
+                    if provider.is_recoverable_auth_error(&unauthorized_transport) =>
+                {
                     pending_retry = PendingUnauthorizedRetry::from_recovery(
                         handle_unauthorized(
                             unauthorized_transport,
                             &mut auth_recovery,
+                            &mut provider_auth_recovery_attempted,
                             session_telemetry,
-                            &self.client.state.provider,
+                            &provider,
+                            self.client.event_sender.as_ref(),
+                            responses_metadata.turn_id.as_deref(),
                         )
                         .await?,
                     );
                     continue;
                 }
-                Err(err) => {
-                    return Err(self.client.state.provider.map_api_error(err));
-                }
-            };
-            let request_initiation = match request_initiation {
-                Some(request_initiation) => request_initiation,
-                None => {
-                    match self
-                        .client
-                        .current_client_setup(Some(connection_authority))
-                        .await
-                    {
-                        Ok(setup) => setup.request_initiation,
-                        Err(err)
-                            if self.expected_authority.is_none()
-                                && matches!(
-                                    err.details(),
-                                    codex_protocol::error::CodexErrorDetails::AutomaticTurnContextChanged
-                                ) =>
-                        {
-                            self.reset_websocket_session();
-                            continue;
-                        }
-                        Err(err) => return Err(err),
-                    }
-                }
-            };
+                Err(err) => return Err(provider.map_api_error(err)),
+            }
 
             let (incremental_request, previous_response_id_from_untraced_warmup) =
                 self.prepare_websocket_request(&request);
@@ -2020,7 +1864,7 @@ impl ModelClientSession {
                     .prepare_response_items_for_request(&mut request.input);
                 Some(original_item_ids)
             };
-            let ws_payload = ResponseCreateWsRequest {
+            let mut ws_payload = ResponseCreateWsRequest {
                 previous_response_id,
                 input: incremental_items.as_deref().unwrap_or(&request.input),
                 generate: if warmup { Some(false) } else { None },
@@ -2030,6 +1874,12 @@ impl ModelClientSession {
                 ),
                 ..ResponseCreateWsRequest::from(&request)
             };
+            self.client.set_guardian_metadata(
+                &mut ws_payload.client_metadata,
+                responses_metadata.parent_response_id.as_deref(),
+                client_setup.auth.as_ref(),
+                endpoint,
+            );
             let mut ws_request = ResponsesWsRequest::ResponseCreate(ws_payload);
             stamp_ws_stream_request_start_ms(&mut ws_request);
             if !previous_response_id_from_untraced_warmup {
@@ -2043,11 +1893,10 @@ impl ModelClientSession {
                     ))
                 })?;
             let stream_result = websocket_connection
-                .stream_request_with_initiation(
+                .stream_request(
                     ws_request,
                     self.websocket_session.connection_reused(),
                     Some(Arc::clone(&self.turn_state)),
-                    request_initiation,
                 )
                 .await;
             if let Some(original_item_ids) = original_item_ids {
@@ -2297,27 +2146,6 @@ fn add_responses_lite_header(headers: &mut ApiHeaderMap, use_responses_lite: boo
     }
 }
 
-fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
-    match session_source {
-        SessionSource::SubAgent(subagent_source) => match subagent_source {
-            SubAgentSource::Review => Some("review".to_string()),
-            SubAgentSource::Compact => Some("compact".to_string()),
-            SubAgentSource::MemoryConsolidation => Some("memory_consolidation".to_string()),
-            SubAgentSource::ThreadSpawn { .. } => Some("collab_spawn".to_string()),
-            SubAgentSource::Other(label) => Some(label.clone()),
-        },
-        SessionSource::Internal(InternalSessionSource::MemoryConsolidation) => {
-            Some("memory_consolidation".to_string())
-        }
-        SessionSource::Cli
-        | SessionSource::VSCode
-        | SessionSource::Exec
-        | SessionSource::Mcp
-        | SessionSource::Custom(_)
-        | SessionSource::Unknown => None,
-    }
-}
-
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;
 const STREAM_DROPPED_REASON: &str = "response stream dropped before provider terminal event";
 
@@ -2407,6 +2235,7 @@ where
                 Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
+                    usage_metadata,
                     end_turn,
                 }) => {
                     feedback_tags!(last_model_response_id = &response_id);
@@ -2429,6 +2258,7 @@ where
                         .send(Ok(ResponseEvent::Completed {
                             response_id,
                             token_usage,
+                            usage_metadata,
                             end_turn,
                         }))
                         .await
@@ -2540,7 +2370,9 @@ impl AuthRequestTelemetryContext {
         let auth_telemetry = auth_header_telemetry(api_auth);
         Self {
             auth_mode: auth_mode.map(|mode| match mode {
-                AuthMode::ApiKey | AuthMode::BedrockApiKey => "ApiKey",
+                AuthMode::ApiKey | AuthMode::BedrockApiKey | AuthMode::BedrockAccessKeys => {
+                    "ApiKey"
+                }
                 AuthMode::Chatgpt
                 | AuthMode::ChatgptAuthTokens
                 | AuthMode::Headers
@@ -2565,20 +2397,85 @@ struct WebsocketConnectParams<'a> {
     session_telemetry: &'a SessionTelemetry,
     api_provider: codex_api::Provider,
     api_auth: SharedAuthProvider,
-    authority: ProviderAuthority,
     responses_metadata: &'a CodexResponsesMetadata,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
-    request_initiation: RequestInitiation,
+    endpoint: ResponsesEndpoint,
+}
+
+fn emit_auth_recovery_event(
+    event_sender: Option<&Sender<ProtocolEvent>>,
+    turn_id: Option<&str>,
+    provider: &SharedModelProvider,
+    message: &str,
+    event: fn(AuthRecoveryEvent) -> EventMsg,
+) {
+    if let (Some(sender), Some(turn_id)) = (event_sender, turn_id) {
+        let _ = sender.try_send(ProtocolEvent {
+            id: turn_id.to_string(),
+            msg: event(AuthRecoveryEvent {
+                provider: provider.info().name.clone(),
+                message: message.to_string(),
+            }),
+        });
+    }
 }
 
 async fn handle_unauthorized(
     transport: TransportError,
     auth_recovery: &mut Option<UnauthorizedRecovery>,
+    provider_auth_recovery_attempted: &mut bool,
     session_telemetry: &SessionTelemetry,
     provider: &SharedModelProvider,
+    event_sender: Option<&Sender<ProtocolEvent>>,
+    turn_id: Option<&str>,
 ) -> Result<UnauthorizedRecoveryExecution> {
     let debug = extract_response_debug_context(&transport);
+    if !*provider_auth_recovery_attempted {
+        *provider_auth_recovery_attempted = true;
+        let messages = provider.auth_recovery_messages();
+        if let Some(messages) = messages {
+            emit_auth_recovery_event(
+                event_sender,
+                turn_id,
+                provider,
+                messages.started,
+                EventMsg::AuthRecoveryStarted,
+            );
+        }
+        match provider.recover_from_unauthorized().await {
+            Ok(ProviderUnauthorizedRecovery::Recovered) => {
+                if let Some(messages) = messages {
+                    emit_auth_recovery_event(
+                        event_sender,
+                        turn_id,
+                        provider,
+                        messages.succeeded,
+                        EventMsg::AuthRecoveryCompleted,
+                    );
+                }
+                return Ok(UnauthorizedRecoveryExecution {
+                    mode: "provider",
+                    phase: "provider_refresh",
+                });
+            }
+            Ok(ProviderUnauthorizedRecovery::NotConfigured) => {}
+            Err(error) => {
+                let original = provider.map_api_error(ApiError::Transport(transport));
+                warn!(
+                    error = %error,
+                    original_error = %original,
+                    "provider authentication recovery failed"
+                );
+                return Err(if error.is_retryable() {
+                    original
+                } else {
+                    error
+                });
+            }
+        }
+    }
+
     if let Some(recovery) = auth_recovery
         && recovery.has_next()
     {
@@ -2723,7 +2620,7 @@ impl RequestTelemetry for ApiTelemetry {
     fn on_request(
         &self,
         attempt: u64,
-        status: Option<HttpStatusCode>,
+        status: Option<StatusCode>,
         error: Option<&TransportError>,
         duration: Duration,
     ) {

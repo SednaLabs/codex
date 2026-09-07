@@ -1,21 +1,29 @@
+use super::bedrock_auth::BedrockProviderConfig;
 use super::bedrock_auth::clear_user_model_provider_if_bedrock;
-use super::bedrock_auth::set_user_model_provider_to_bedrock;
+use super::bedrock_auth::configure_bedrock_provider;
+use super::bedrock_auth::ensure_user_model_provider_can_be_bedrock;
 use super::*;
 use crate::auth_mode::auth_mode_to_api;
 use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
+use codex_app_server_protocol::DesktopOnboardingEntrypoint;
+use codex_app_server_protocol::GetAccountRateLimitsParams;
+use codex_login::LoginOnboardingEntrypoint;
+use codex_login::login_with_bedrock_access_keys;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
+mod bedrock_setup;
 mod rate_limit_resets;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
+const THREAD_USAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 60);
 const ACCOUNT_WORKSPACE_MESSAGES_FETCH_TIMEOUT: Duration =
     Duration::from_millis(/*millis*/ 1000);
-// Login overrides are intentionally available only in debug builds.
-#[cfg(debug_assertions)]
+// Packaged clients use this together with the OAuth client ID override for staging login.
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
+// The development success-page redirect remains debug-only.
 #[cfg(debug_assertions)]
 const LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_DEV_OPEN_APP_URL";
 
@@ -49,27 +57,6 @@ impl ActiveLogin {
     }
 }
 
-fn login_completion_is_active(active_login: Option<&ActiveLogin>, login_id: Uuid) -> bool {
-    active_login.map(ActiveLogin::login_id) == Some(login_id)
-}
-
-async fn commit_staged_login_credentials(
-    active_login: Option<&ActiveLogin>,
-    login_id: Uuid,
-    auth_manager: &Arc<AuthManager>,
-    staged_auth: &AuthDotJson,
-) -> std::io::Result<bool> {
-    if !login_completion_is_active(active_login, login_id) {
-        return Ok(false);
-    }
-    auth_manager
-        .begin_credential_transition()
-        .await
-        .replace_persisted_auth(staged_auth)
-        .await?;
-    Ok(true)
-}
-
 #[derive(Clone, Copy, Debug)]
 enum CancelLoginError {
     NotFound,
@@ -81,6 +68,15 @@ enum RefreshTokenRequestOutcome {
     FailedPermanently,
 }
 
+enum BedrockLoginCredentials {
+    ApiKey(String),
+    AccessKeys {
+        access_key_id: String,
+        secret_access_key: String,
+        session_token: Option<String>,
+    },
+}
+
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.cancel();
@@ -90,33 +86,27 @@ impl Drop for ActiveLogin {
 #[derive(Clone)]
 pub(crate) struct AccountRequestProcessor {
     auth_manager: Arc<AuthManager>,
-    auth_admission: Arc<Mutex<()>>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
     config: Arc<Config>,
     config_manager: ConfigManager,
-    state_db: Option<StateDbHandle>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
 }
 
 impl AccountRequestProcessor {
     pub(crate) fn new(
         auth_manager: Arc<AuthManager>,
-        auth_admission: Arc<Mutex<()>>,
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
         config: Arc<Config>,
         config_manager: ConfigManager,
-        state_db: Option<StateDbHandle>,
     ) -> Self {
         Self {
             auth_manager,
-            auth_admission,
             thread_manager,
             outgoing,
             config,
             config_manager,
-            state_db,
             active_login: Arc::new(Mutex::new(None)),
         }
     }
@@ -165,16 +155,18 @@ impl AccountRequestProcessor {
 
     pub(crate) async fn get_account_rate_limits(
         &self,
+        params: Option<GetAccountRateLimitsParams>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.get_account_rate_limits_response()
+        self.get_account_rate_limits_response(params.unwrap_or_default())
             .await
             .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn get_account_token_usage(
         &self,
+        params: Option<GetAccountTokenUsageParams>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.get_account_token_usage_response()
+        self.get_account_token_usage_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -203,25 +195,8 @@ impl AccountRequestProcessor {
         }
     }
 
-    pub(crate) async fn clear_external_auth(&self) {
-        self.auth_manager.clear_external_auth().await;
-        self.thread_manager
-            .plugins_manager()
-            .set_auth_mode(self.auth_manager.get_api_auth_mode());
-    }
-
-    async fn invalidate_automatic_turn_capabilities(&self) -> Result<(), JSONRPCErrorError> {
-        if let Some(state_db) = self.state_db.as_ref() {
-            state_db
-                .invalidate_all_automatic_turn_capabilities()
-                .await
-                .map_err(|error| {
-                    internal_error(format!(
-                        "failed to invalidate automatic turn capabilities after auth transition: {error}"
-                    ))
-                })?;
-        }
-        Ok(())
+    pub(crate) fn clear_external_auth(&self) {
+        self.auth_manager.clear_external_auth();
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
@@ -256,9 +231,6 @@ impl AccountRequestProcessor {
     ) {
         thread_manager
             .plugins_manager()
-            .set_auth_mode(auth.as_ref().map(CodexAuth::api_auth_mode));
-        thread_manager
-            .plugins_manager()
             .clear_recommended_plugins_cache();
 
         match config_manager
@@ -270,19 +242,29 @@ impl AccountRequestProcessor {
                     Arc::clone(thread_manager),
                     config_manager.clone(),
                 );
+                let plugins_config = config.plugins_config_input();
                 let refresh_thread_manager = Arc::clone(thread_manager);
                 let refresh_config_manager = config_manager.clone();
+                let on_effective_plugins_changed: Arc<
+                    dyn Fn(codex_core_plugins::EffectivePluginsChange) + Send + Sync,
+                > = Arc::new(move |_change| {
+                    Self::spawn_effective_plugins_changed_task(
+                        Arc::clone(&refresh_thread_manager),
+                        refresh_config_manager.clone(),
+                    );
+                });
+                thread_manager
+                    .plugins_manager()
+                    .maybe_start_curated_repo_sync_for_config(
+                        &plugins_config,
+                        Some(Arc::clone(&on_effective_plugins_changed)),
+                    );
                 thread_manager
                     .plugins_manager()
                     .maybe_start_remote_plugin_caches_refresh(
-                        &config.plugins_config_input(),
+                        &plugins_config,
                         auth,
-                        Some(Arc::new(move |_change| {
-                            Self::spawn_effective_plugins_changed_task(
-                                Arc::clone(&refresh_thread_manager),
-                                refresh_config_manager.clone(),
-                            );
-                        })),
+                        Some(on_effective_plugins_changed),
                     );
             }
             Err(err) => {
@@ -311,6 +293,9 @@ impl AccountRequestProcessor {
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
     ) -> Result<(), JSONRPCErrorError> {
+        if self.auth_manager.is_workload_identity_selected() {
+            return Err(self.configured_auth_owned_by_host_error());
+        }
         match params {
             LoginAccountParams::ApiKey { api_key } => {
                 self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
@@ -355,8 +340,29 @@ impl AccountRequestProcessor {
                 .await;
             }
             LoginAccountParams::AmazonBedrock { api_key, region } => {
-                self.login_amazon_bedrock_v2(request_id, api_key, region)
-                    .await;
+                self.login_amazon_bedrock_v2(
+                    request_id,
+                    BedrockLoginCredentials::ApiKey(api_key),
+                    region,
+                )
+                .await;
+            }
+            LoginAccountParams::AmazonBedrockAccessKeys {
+                access_key_id,
+                secret_access_key,
+                session_token,
+                region,
+            } => {
+                self.login_amazon_bedrock_v2(
+                    request_id,
+                    BedrockLoginCredentials::AccessKeys {
+                        access_key_id,
+                        secret_access_key,
+                        session_token,
+                    },
+                    region,
+                )
+                .await;
             }
         }
         Ok(())
@@ -368,10 +374,30 @@ impl AccountRequestProcessor {
         )
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the auth admission gate must remain held while invalidating retry capabilities and publishing credentials"
-    )]
+    fn configured_auth_owned_by_host_error(&self) -> JSONRPCErrorError {
+        invalid_request(
+            "Configured external authentication is owned by the app-server host and cannot be changed through account RPCs.",
+        )
+    }
+
+    fn ensure_bedrock_login_allowed(&self) -> Result<(), JSONRPCErrorError> {
+        if self.auth_manager.is_workload_identity_selected() {
+            return Err(self.configured_auth_owned_by_host_error());
+        }
+        if self.auth_manager.is_external_chatgpt_auth_active() {
+            return Err(self.external_auth_active_error());
+        }
+        if !self
+            .auth_manager
+            .is_login_method_allowed(ForcedLoginMethod::Api)
+        {
+            return Err(invalid_request(
+                "Amazon Bedrock login is disabled. Use ChatGPT login instead.",
+            ));
+        }
+        Ok(())
+    }
+
     async fn login_api_key_common(
         &self,
         params: &LoginApiKeyParams,
@@ -380,10 +406,10 @@ impl AccountRequestProcessor {
             return Err(self.external_auth_active_error());
         }
 
-        if matches!(
-            self.config.forced_login_method,
-            Some(ForcedLoginMethod::Chatgpt)
-        ) {
+        if !self
+            .auth_manager
+            .is_login_method_allowed(ForcedLoginMethod::Api)
+        {
             return Err(invalid_request(
                 "API key login is disabled. Use ChatGPT login instead.",
             ));
@@ -397,15 +423,19 @@ impl AccountRequestProcessor {
             }
         }
 
-        let _auth_admission = self.auth_admission.lock().await;
-        self.invalidate_automatic_turn_capabilities().await?;
-
-        let staged_auth = api_key_auth_dot_json(&params.api_key);
-        let transition = self.auth_manager.begin_credential_transition().await;
-        transition
-            .replace_persisted_auth(&staged_auth)
-            .await
-            .map_err(|err| internal_error(format!("failed to save api key: {err}")))
+        match login_with_api_key(
+            &self.config.codex_home,
+            &params.api_key,
+            self.config.cli_auth_credentials_store_mode,
+            self.config.auth_keyring_backend_kind(),
+        ) {
+            Ok(()) => {
+                self.auth_manager.reload().await;
+                self.config_manager.clear_cloud_config_bundle_loader();
+                Ok(())
+            }
+            Err(err) => Err(internal_error(format!("failed to save api key: {err}"))),
+        }
     }
 
     async fn login_api_key_v2(&self, request_id: ConnectionRequestId, params: LoginApiKeyParams) {
@@ -422,59 +452,82 @@ impl AccountRequestProcessor {
         }
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the auth admission gate must remain held while invalidating retry capabilities and publishing credentials"
-    )]
     async fn login_amazon_bedrock_v2(
         &self,
         request_id: ConnectionRequestId,
-        api_key: String,
+        credentials: BedrockLoginCredentials,
         region: String,
     ) {
         let result = async {
-            if self.auth_manager.is_external_chatgpt_auth_active() {
-                return Err(self.external_auth_active_error());
-            }
-            if matches!(
-                self.config.forced_login_method,
-                Some(ForcedLoginMethod::Chatgpt)
-            ) {
-                return Err(invalid_request(
-                    "Amazon Bedrock login is disabled. Use ChatGPT login instead.",
-                ));
-            }
+            self.ensure_bedrock_login_allowed()?;
 
-            let api_key = api_key.trim();
-            if api_key.is_empty() {
-                return Err(invalid_request("Amazon Bedrock API key must not be empty."));
+            match &credentials {
+                BedrockLoginCredentials::ApiKey(api_key) => {
+                    if api_key.trim().is_empty() {
+                        return Err(invalid_request("Amazon Bedrock API key must not be empty."));
+                    }
+                }
+                BedrockLoginCredentials::AccessKeys {
+                    access_key_id,
+                    secret_access_key,
+                    ..
+                } => {
+                    if access_key_id.trim().is_empty() || secret_access_key.trim().is_empty() {
+                        return Err(invalid_request(
+                            "AWS access key ID and secret access key must not be empty.",
+                        ));
+                    }
+                }
             }
             let region = region.trim();
             if !is_supported_amazon_bedrock_region(region) {
                 return Err(invalid_request(format!(
-                    "Amazon Bedrock Mantle does not support region `{region}`"
+                    "Amazon Bedrock does not support region `{region}`"
                 )));
             }
 
-            {
-                let mut guard = self.active_login.lock().await;
-                if let Some(active) = guard.take() {
-                    drop(active);
+            self.cancel_active_login().await;
+            ensure_user_model_provider_can_be_bedrock(&self.config_manager).await?;
+            configure_bedrock_provider(
+                &self.config_manager,
+                BedrockProviderConfig {
+                    region: matches!(&credentials, BedrockLoginCredentials::AccessKeys { .. })
+                        .then_some(region),
+                    profile: None,
+                },
+            )
+            .await?;
+
+            match credentials {
+                BedrockLoginCredentials::ApiKey(api_key) => login_with_bedrock_api_key(
+                    &self.config.codex_home,
+                    api_key.trim(),
+                    region,
+                    self.config.cli_auth_credentials_store_mode,
+                    self.config.auth_keyring_backend_kind(),
+                ),
+                BedrockLoginCredentials::AccessKeys {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                } => {
+                    let session_token = session_token
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|token| !token.is_empty());
+                    login_with_bedrock_access_keys(
+                        &self.config.codex_home,
+                        access_key_id.trim(),
+                        secret_access_key.trim(),
+                        session_token,
+                        self.config.cli_auth_credentials_store_mode,
+                        self.config.auth_keyring_backend_kind(),
+                    )
                 }
             }
-
-            let _auth_admission = self.auth_admission.lock().await;
-            self.invalidate_automatic_turn_capabilities().await?;
-
-            let staged_auth = bedrock_api_key_auth_dot_json(api_key, region);
-            let transition = self.auth_manager.begin_credential_transition().await;
-            set_user_model_provider_to_bedrock(&self.config_manager).await?;
-            transition
-                .replace_persisted_auth(&staged_auth)
-                .await
-                .map_err(|err| {
-                    internal_error(format!("failed to save Amazon Bedrock auth: {err}"))
-                })?;
+            .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
+            self.auth_manager.reload().await;
+            self.config_manager.clear_cloud_config_bundle_loader();
             Ok(LoginAccountResponse::AmazonBedrock {})
         }
         .await;
@@ -499,43 +552,42 @@ impl AccountRequestProcessor {
             return Err(self.external_auth_active_error());
         }
 
-        if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+        if !self
+            .auth_manager
+            .is_login_method_allowed(ForcedLoginMethod::Chatgpt)
+        {
             return Err(invalid_request(
                 "ChatGPT login is disabled. Use API key login instead.",
             ));
         }
 
-        let opts = LoginServerOptions {
+        let mut opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
             login_success_page,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 oauth_client_id(),
-                config.forced_chatgpt_workspace_id.clone(),
+                self.auth_manager.effective_chatgpt_workspaces(),
                 config.cli_auth_credentials_store_mode,
                 config.auth_keyring_backend_kind(),
                 config.auth_route_config(),
             )
         };
+        if let Ok(issuer) = std::env::var(LOGIN_ISSUER_OVERRIDE_ENV_VAR)
+            && !issuer.trim().is_empty()
+        {
+            opts.issuer = issuer;
+        }
         #[cfg(debug_assertions)]
-        let opts = {
-            let mut opts = opts;
-            if let Ok(issuer) = std::env::var(LOGIN_ISSUER_OVERRIDE_ENV_VAR)
-                && !issuer.trim().is_empty()
-            {
-                opts.issuer = issuer;
-            }
-            if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
-                && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)
-                && !open_app_url.trim().is_empty()
-            {
-                *url = open_app_url
-                    .parse()
-                    .map_err(|err| internal_error(format!("invalid Codex open app URL: {err}")))?;
-            }
-            opts
-        };
+        if let LoginSuccessPage::Hosted { url, .. } = &mut opts.login_success_page
+            && let Ok(open_app_url) = std::env::var(LOGIN_OPEN_APP_URL_OVERRIDE_ENV_VAR)
+            && !open_app_url.trim().is_empty()
+        {
+            *url = open_app_url
+                .parse()
+                .map_err(|err| internal_error(format!("invalid Codex open app URL: {err}")))?;
+        }
 
         Ok(opts)
     }
@@ -569,7 +621,7 @@ impl AccountRequestProcessor {
         let opts = self
             .login_chatgpt_common(codex_streamlined_login, login_success_page)
             .await?;
-        let server = run_login_server_staged(opts)
+        let server = run_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
         let login_id = Uuid::new_v4();
         let shutdown_handle = server.cancel_handle();
@@ -590,22 +642,28 @@ impl AccountRequestProcessor {
         let config_manager = self.config_manager.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
         let config = Arc::clone(&self.config);
-        let state_db = self.state_db.clone();
         let active_login = self.active_login.clone();
-        let auth_admission = self.auth_admission.clone();
         let auth_url = server.auth_url.clone();
         tokio::spawn(async move {
-            let (staged_auth, error_msg) = match tokio::time::timeout(
+            let (success, error_msg, onboarding_entrypoint) = match tokio::time::timeout(
                 LOGIN_CHATGPT_TIMEOUT,
-                server.block_until_staged(),
+                server.block_until_done_with_callback_result(),
             )
             .await
             {
-                Ok(Ok(auth)) => (Some(auth), None),
-                Ok(Err(err)) => (None, Some(format!("Login server error: {err}"))),
+                Ok(Ok(result)) => (
+                    true,
+                    None,
+                    result
+                        .onboarding_entrypoint
+                        .map(|LoginOnboardingEntrypoint::LifeSciences| {
+                            DesktopOnboardingEntrypoint::LifeSciences
+                        }),
+                ),
+                Ok(Err(err)) => (false, Some(format!("Login server error: {err}")), None),
                 Err(_elapsed) => {
                     shutdown_handle.shutdown();
-                    (None, Some("Login timed out".to_string()))
+                    (false, Some("Login timed out".to_string()), None)
                 }
             };
 
@@ -614,12 +672,12 @@ impl AccountRequestProcessor {
                 config_manager,
                 thread_manager,
                 config,
-                state_db,
-                auth_admission,
-                Arc::clone(&active_login),
-                login_id,
-                staged_auth,
-                error_msg,
+                AccountLoginCompletedNotification {
+                    login_id: Some(login_id.to_string()),
+                    success,
+                    error: error_msg,
+                    onboarding_entrypoint,
+                },
             )
             .await;
 
@@ -674,18 +732,16 @@ impl AccountRequestProcessor {
         let config_manager = self.config_manager.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
         let config = Arc::clone(&self.config);
-        let state_db = self.state_db.clone();
         let active_login = self.active_login.clone();
-        let auth_admission = self.auth_admission.clone();
         tokio::spawn(async move {
-            let (staged_auth, error_msg) = tokio::select! {
+            let (success, error_msg) = tokio::select! {
                 _ = cancel.cancelled() => {
-                    (None, Some("Login was not completed".to_string()))
+                    (false, Some("Login was not completed".to_string()))
                 }
-                r = complete_device_code_login_staged(opts, device_code) => {
+                r = complete_device_code_login(opts, device_code) => {
                     match r {
-                        Ok(auth) => (Some(auth), None),
-                        Err(err) => (None, Some(err.to_string())),
+                        Ok(()) => (true, None),
+                        Err(err) => (false, Some(err.to_string())),
                     }
                 }
             };
@@ -695,12 +751,12 @@ impl AccountRequestProcessor {
                 config_manager,
                 thread_manager,
                 config,
-                state_db,
-                auth_admission,
-                Arc::clone(&active_login),
-                login_id,
-                staged_auth,
-                error_msg,
+                AccountLoginCompletedNotification {
+                    login_id: Some(login_id.to_string()),
+                    success,
+                    error: error_msg,
+                    onboarding_entrypoint: None,
+                },
             )
             .await;
 
@@ -765,20 +821,16 @@ impl AccountRequestProcessor {
         }
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the auth admission gate must remain held while invalidating retry capabilities and publishing credentials"
-    )]
     async fn login_chatgpt_auth_tokens_response(
         &self,
         access_token: String,
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        if matches!(
-            self.config.forced_login_method,
-            Some(ForcedLoginMethod::Api)
-        ) {
+        if !self
+            .auth_manager
+            .is_login_method_allowed(ForcedLoginMethod::Chatgpt)
+        {
             return Err(invalid_request(
                 "External ChatGPT auth is disabled. Use API key login instead.",
             ));
@@ -792,7 +844,7 @@ impl AccountRequestProcessor {
             }
         }
 
-        if let Some(expected_workspaces) = self.config.forced_chatgpt_workspace_id.as_deref()
+        if let Some(expected_workspaces) = self.auth_manager.effective_chatgpt_workspaces()
             && !expected_workspaces.contains(&chatgpt_account_id)
         {
             return Err(invalid_request(format!(
@@ -806,8 +858,6 @@ impl AccountRequestProcessor {
             chatgpt_plan_type.as_deref(),
         )
         .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
-        let _auth_admission = self.auth_admission.lock().await;
-        self.invalidate_automatic_turn_capabilities().await?;
         self.auth_manager
             .set_external_auth(Arc::new(ExternalAuthBridge::new(
                 Arc::clone(&self.outgoing),
@@ -839,6 +889,7 @@ impl AccountRequestProcessor {
             login_id: login_id.map(|id| id.to_string()),
             success: true,
             error: None,
+            onboarding_entrypoint: None,
         };
         self.outgoing
             .send_server_notification(ServerNotification::AccountLoginCompleted(
@@ -853,125 +904,55 @@ impl AccountRequestProcessor {
             .await;
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        clippy::expect_used,
-        clippy::too_many_arguments,
-        reason = "the active-login and auth admission guards serialize credential completion; staged auth is required by the success invariant"
-    )]
     async fn send_chatgpt_login_completion_notifications(
         outgoing: &OutgoingMessageSender,
         config_manager: ConfigManager,
         thread_manager: Arc<ThreadManager>,
         config: Arc<Config>,
-        state_db: Option<StateDbHandle>,
-        auth_admission: Arc<Mutex<()>>,
-        active_login: Arc<Mutex<Option<ActiveLogin>>>,
-        login_id: Uuid,
-        staged_auth: Option<AuthDotJson>,
-        mut error_msg: Option<String>,
+        payload_v2: AccountLoginCompletedNotification,
     ) {
-        // Linearize completion with cancellation, replacement, and teardown before applying any
-        // newly persisted credential state. A stale successful task may report failure, but it
-        // must not invalidate capabilities, reload auth, or update the active account.
-        let active_login_guard = active_login.lock().await;
-        let mut success = staged_auth.is_some();
-        if success && !login_completion_is_active(active_login_guard.as_ref(), login_id) {
-            success = false;
-            error_msg = Some("Login attempt is no longer active".to_string());
-        }
-        let mut account_updated = None;
-        if success {
-            let _auth_admission = auth_admission.lock().await;
-            if let Some(state_db) = state_db
-                && let Err(error) = state_db.invalidate_all_automatic_turn_capabilities().await
-            {
-                success = false;
-                error_msg = Some(format!(
-                    "failed to invalidate automatic turn capabilities after auth transition: {error}"
-                ));
-            }
-            if success {
-                let auth_manager = thread_manager.auth_manager();
-                match commit_staged_login_credentials(
-                    active_login_guard.as_ref(),
-                    login_id,
-                    &auth_manager,
-                    staged_auth
-                        .as_ref()
-                        .expect("successful login completion has staged credentials"),
-                )
-                .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        success = false;
-                        error_msg = Some("Login attempt is no longer active".to_string());
-                    }
-                    Err(error) => {
-                        success = false;
-                        error_msg = Some(format!("failed to save login credentials: {error}"));
-                    }
-                }
-            }
-            if success {
-                let auth_manager = thread_manager.auth_manager();
-                config_manager.replace_cloud_config_bundle_loader(
-                    auth_manager.clone(),
-                    config.chatgpt_base_url.clone(),
-                    config.http_client_factory(),
-                );
-                config_manager
-                    .sync_default_client_residency_requirement()
-                    .await;
-
-                let auth = auth_manager.auth_cached();
-                Self::maybe_refresh_plugin_caches_for_current_config(
-                    &config_manager,
-                    &thread_manager,
-                    auth.clone(),
-                )
-                .await;
-                account_updated = Some(AccountUpdatedNotification {
-                    auth_mode: auth
-                        .as_ref()
-                        .map(CodexAuth::api_auth_mode)
-                        .map(auth_mode_to_api),
-                    plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-                });
-            }
-        }
-        let payload_v2 = AccountLoginCompletedNotification {
-            login_id: Some(login_id.to_string()),
-            success,
-            error: error_msg,
-        };
+        let success = payload_v2.success;
         outgoing
             .send_server_notification(ServerNotification::AccountLoginCompleted(payload_v2))
             .await;
-        if let Some(payload_v2) = account_updated {
+
+        if success {
+            let auth_manager = thread_manager.auth_manager();
+            auth_manager.reload().await;
+            config_manager.replace_cloud_config_bundle_loader(
+                auth_manager.clone(),
+                config.chatgpt_base_url.clone(),
+                config.http_client_factory(),
+            );
+            config_manager
+                .sync_default_client_residency_requirement()
+                .await;
+
+            let auth = auth_manager.auth_cached();
+            Self::maybe_refresh_plugin_caches_for_current_config(
+                &config_manager,
+                &thread_manager,
+                auth.clone(),
+            )
+            .await;
+            let payload_v2 = AccountUpdatedNotification {
+                auth_mode: auth
+                    .as_ref()
+                    .map(CodexAuth::api_auth_mode)
+                    .map(auth_mode_to_api),
+                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+            };
             outgoing
                 .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
                 .await;
         }
-        drop(active_login_guard);
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the auth admission gate must remain held while invalidating retry capabilities and revoking credentials"
-    )]
     async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
-        let managed_bedrock_auth = matches!(
-            self.auth_manager.auth_cached(),
-            Some(CodexAuth::BedrockApiKey(_))
-        );
-        let config = self.load_latest_config().await;
-        if config.model_provider.is_amazon_bedrock() && !managed_bedrock_auth {
-            return Err(invalid_request(
-                "cannot log out while Amazon Bedrock is using AWS-managed credentials; manage those credentials through AWS or switch model providers before logging out Codex authentication",
-            ));
+        if self.auth_manager.is_workload_identity_selected() {
+            return Err(self.configured_auth_owned_by_host_error());
         }
+        let config = self.load_latest_config().await;
 
         // Cancel any active login attempt.
         {
@@ -981,20 +962,18 @@ impl AccountRequestProcessor {
             }
         }
 
-        let _auth_admission = self.auth_admission.lock().await;
-        self.invalidate_automatic_turn_capabilities().await?;
-        let transition = self.auth_manager.begin_credential_transition().await;
-        match transition.logout_with_revoke().await {
+        match self.auth_manager.logout_with_revoke().await {
             Ok(_) => {}
             Err(err) => {
                 return Err(internal_error(format!("logout failed: {err}")));
             }
         }
 
-        if managed_bedrock_auth {
-            clear_user_model_provider_if_bedrock(&self.config_manager).await?;
+        if config.model_provider.is_amazon_bedrock() {
+            clear_user_model_provider_if_bedrock(&self.config_manager, &config).await?;
         }
-        drop(transition);
+
+        self.config_manager.clear_cloud_config_bundle_loader();
 
         Self::maybe_refresh_plugin_caches_for_current_config(
             &self.config_manager,
@@ -1082,30 +1061,31 @@ impl AccountRequestProcessor {
                     let permanent_refresh_failure =
                         self.auth_manager.refresh_failure_for_auth(&auth).is_some();
                     let auth_mode = auth_mode_to_api(auth.api_auth_mode());
-                    let (reported_auth_method, token_opt) = if matches!(
-                        auth,
-                        CodexAuth::Headers(_)
-                            | CodexAuth::AgentIdentity(_)
-                            | CodexAuth::PersonalAccessToken(_)
-                    ) || include_token
-                        && permanent_refresh_failure
-                    {
-                        // This response cannot represent the metadata needed to reuse these
-                        // credentials.
-                        (Some(auth_mode), None)
-                    } else {
-                        match auth.get_token() {
-                            Ok(token) if !token.is_empty() => {
-                                let tok = if include_token { Some(token) } else { None };
-                                (Some(auth_mode), tok)
+                    let (reported_auth_method, token_opt) =
+                        if self.auth_manager.is_workload_identity_selected()
+                            || matches!(
+                                auth,
+                                CodexAuth::Headers(_)
+                                    | CodexAuth::AgentIdentity(_)
+                                    | CodexAuth::PersonalAccessToken(_)
+                            )
+                            || include_token && permanent_refresh_failure
+                        {
+                            // Host-owned and metadata-bearing credentials are never exported.
+                            (Some(auth_mode), None)
+                        } else {
+                            match auth.get_token() {
+                                Ok(token) if !token.is_empty() => {
+                                    let tok = if include_token { Some(token) } else { None };
+                                    (Some(auth_mode), tok)
+                                }
+                                Ok(_) => (None, None),
+                                Err(err) => {
+                                    tracing::warn!("failed to get token for auth status: {err}");
+                                    (None, None)
+                                }
                             }
-                            Ok(_) => (None, None),
-                            Err(err) => {
-                                tracing::warn!("failed to get token for auth status: {err}");
-                                (None, None)
-                            }
-                        }
-                    };
+                        };
                     GetAuthStatusResponse {
                         auth_method: reported_auth_method,
                         auth_token: token_opt,
@@ -1148,6 +1128,7 @@ impl AccountRequestProcessor {
 
     async fn get_account_rate_limits_response(
         &self,
+        params: GetAccountRateLimitsParams,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
         let Some(auth) = self.auth_manager.auth().await else {
             return Err(invalid_request(
@@ -1167,10 +1148,23 @@ impl AccountRequestProcessor {
             self.config.http_client_factory(),
         );
 
-        let (response, detailed_rate_limit_reset_credits) = tokio::join!(
-            client.get_rate_limits_with_reset_credits(),
-            Self::detailed_rate_limit_reset_credits(&client),
-        );
+        let usage_request = async {
+            if params.supports_luna_reserve
+                && auth.auth_mode() == codex_protocol::auth::AuthMode::Chatgpt
+                && !auth.is_fedramp_account()
+            {
+                client.get_rate_limits_with_luna_reserve().await
+            } else {
+                client.get_rate_limits_with_reset_credits().await
+            }
+        };
+        let (response, detailed_rate_limit_reset_credits) = tokio::join!(usage_request, async {
+            if params.exclude_reset_credit_details {
+                None
+            } else {
+                Self::detailed_rate_limit_reset_credits(&client).await
+            }
+        },);
         let response = response
             .map_err(|err| internal_error(format!("failed to fetch codex rate limits: {err}")))?;
         if response.rate_limits.is_empty() {
@@ -1207,7 +1201,21 @@ impl AccountRequestProcessor {
                 })
         });
 
+        // Match desktop's account readiness check before exposing account-bound CTA content.
+        // Normal rate limits remain available when older backends omit identity or banner data.
+        let matches_active_account = !auth.is_fedramp_account()
+            && response.account_id.is_some()
+            && response.account_id == auth.get_account_id()
+            && response.user_id.is_some()
+            && response.user_id == auth.get_chatgpt_user_id();
+        let rate_limit_upsell = response
+            .rate_limit_upsell
+            .filter(|_| matches_active_account);
+
         Ok(GetAccountRateLimitsResponse {
+            ordinary_usage_allowed: response
+                .ordinary_usage_allowed
+                .filter(|_| matches_active_account),
             rate_limits: rate_limits.into(),
             rate_limits_by_limit_id: Some(
                 rate_limits_by_limit_id
@@ -1216,12 +1224,23 @@ impl AccountRequestProcessor {
                     .collect(),
             ),
             rate_limit_reset_credits,
+            account_id: response.account_id,
+            rate_limit_upsell,
         })
     }
 
     async fn get_account_token_usage_response(
         &self,
+        params: Option<GetAccountTokenUsageParams>,
     ) -> Result<GetAccountTokenUsageResponse, JSONRPCErrorError> {
+        let thread_id = params
+            .and_then(|params| params.thread_id)
+            .map(|thread_id| {
+                ThreadId::from_string(&thread_id)
+                    .map_err(|err| invalid_request(format!("invalid thread id: {err}")))
+            })
+            .transpose()?;
+
         let Some(auth) = self.auth_manager.auth().await else {
             return Err(invalid_request(
                 "codex account authentication required to read token usage",
@@ -1239,6 +1258,61 @@ impl AccountRequestProcessor {
             &auth,
             self.config.http_client_factory(),
         );
+        if let Some(thread_id) = thread_id {
+            let thread_id = thread_id.to_string();
+            let usage = tokio::time::timeout(
+                THREAD_USAGE_FETCH_TIMEOUT,
+                client.get_thread_usage(&thread_id),
+            )
+            .await
+            .map_err(|_| internal_error("thread usage fetch timed out"))?;
+            let thread_usage = match usage {
+                Ok(usage) => Some(codex_app_server_protocol::ThreadUsage {
+                    thread_id: usage.thread_id,
+                    estimated_usage_credits_micros: usage.estimated_usage_credits_micros,
+                    estimated_usage_usd_micros: usage.estimated_usage_usd_micros,
+                    groups: usage
+                        .groups
+                        .into_iter()
+                        .map(
+                            |group| codex_app_server_protocol::ThreadUsageBreakdownGroup {
+                                model: group.model,
+                                reasoning_effort: group.reasoning_effort,
+                                speed: group.speed,
+                                estimated_usage_credits_micros: group
+                                    .estimated_usage_credits_micros,
+                                net_new_input_tokens: group.net_new_input_tokens,
+                                cached_input_tokens: group.cached_input_tokens,
+                                input_tokens: group.input_tokens,
+                                output_tokens: group.output_tokens,
+                                total_tokens: group.total_tokens,
+                            },
+                        )
+                        .collect(),
+                }),
+                Err(err)
+                    if matches!(err.status().map(|status| status.as_u16()), Some(403 | 404)) =>
+                {
+                    None
+                }
+                Err(err) => {
+                    return Err(internal_error(format!(
+                        "failed to fetch thread usage: {err}"
+                    )));
+                }
+            };
+            return Ok(GetAccountTokenUsageResponse {
+                summary: AccountTokenUsageSummary {
+                    lifetime_tokens: None,
+                    peak_daily_tokens: None,
+                    longest_running_turn_sec: None,
+                    current_streak_days: None,
+                    longest_streak_days: None,
+                },
+                daily_usage_buckets: None,
+                thread_usage,
+            });
+        }
         let profile = tokio::time::timeout(
             ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT,
             client.get_token_usage_profile(),
@@ -1313,6 +1387,7 @@ impl AccountRequestProcessor {
                     })
                     .collect()
             }),
+            thread_usage: None,
         }
     }
 
@@ -1430,142 +1505,8 @@ mod tests {
     use super::*;
     use codex_backend_client::TokenUsageProfileDailyBucket;
     use codex_backend_client::TokenUsageProfileStats;
+    use http::StatusCode;
     use pretty_assertions::assert_eq;
-    use tempfile::tempdir;
-
-    async fn empty_auth_manager(codex_home: &Path) -> Arc<AuthManager> {
-        Arc::new(
-            AuthManager::new(
-                codex_home.to_path_buf(),
-                /*enable_codex_api_key_env*/ false,
-                codex_login::AuthCredentialsStoreMode::File,
-                /*forced_chatgpt_workspace_id*/ None,
-                /*chatgpt_base_url*/ None,
-                codex_login::AuthKeyringBackendKind::default(),
-                codex_login::test_support::transport_default_auth_route_config(),
-            )
-            .await,
-        )
-    }
-
-    #[test]
-    fn login_completion_requires_the_current_attempt() {
-        let active_id = Uuid::new_v4();
-        let replaced_id = Uuid::new_v4();
-        let active_login = ActiveLogin::DeviceCode {
-            cancel: CancellationToken::new(),
-            login_id: active_id,
-        };
-
-        assert!(login_completion_is_active(Some(&active_login), active_id));
-        assert!(!login_completion_is_active(
-            Some(&active_login),
-            replaced_id
-        ));
-        assert!(!login_completion_is_active(
-            /*active_login*/ None, active_id
-        ));
-    }
-
-    #[tokio::test]
-    async fn cancelled_or_replaced_staged_login_never_commits_credentials() {
-        let codex_home = tempdir().expect("temporary codex home");
-        let auth_manager = empty_auth_manager(codex_home.path()).await;
-        let staged_auth = api_key_auth_dot_json("staged-secret");
-        let staged_id = Uuid::new_v4();
-        let replacement_id = Uuid::new_v4();
-        let replacement = ActiveLogin::DeviceCode {
-            cancel: CancellationToken::new(),
-            login_id: replacement_id,
-        };
-
-        assert!(
-            !commit_staged_login_credentials(
-                Some(&replacement),
-                staged_id,
-                &auth_manager,
-                &staged_auth,
-            )
-            .await
-            .expect("replacement check")
-        );
-        assert!(
-            !commit_staged_login_credentials(
-                /*active_login*/ None,
-                staged_id,
-                &auth_manager,
-                &staged_auth,
-            )
-            .await
-            .expect("cancellation check")
-        );
-        assert_eq!(replacement.login_id(), replacement_id);
-        assert!(auth_manager.auth_cached().is_none());
-        assert!(!codex_home.path().join("auth.json").exists());
-    }
-
-    #[tokio::test]
-    async fn active_staged_login_commits_exactly_one_credential_revision() {
-        let codex_home = tempdir().expect("temporary codex home");
-        let auth_manager = empty_auth_manager(codex_home.path()).await;
-        let staged_auth = api_key_auth_dot_json("committed-secret");
-        let login_id = Uuid::new_v4();
-        let active = ActiveLogin::DeviceCode {
-            cancel: CancellationToken::new(),
-            login_id,
-        };
-
-        assert!(
-            commit_staged_login_credentials(Some(&active), login_id, &auth_manager, &staged_auth,)
-                .await
-                .expect("active commit")
-        );
-        let committed_revision = auth_manager.auth_revision();
-        assert_eq!(committed_revision, 1);
-        assert_eq!(
-            auth_manager
-                .auth_cached()
-                .and_then(|auth| auth.get_token().ok()),
-            Some("committed-secret".to_string())
-        );
-
-        assert!(
-            commit_staged_login_credentials(Some(&active), login_id, &auth_manager, &staged_auth,)
-                .await
-                .expect("idempotent active commit")
-        );
-        assert_eq!(auth_manager.auth_revision(), committed_revision);
-    }
-
-    #[tokio::test]
-    async fn active_login_teardown_cancels_before_any_staged_commit() {
-        let codex_home = tempdir().expect("temporary codex home");
-        let auth_manager = empty_auth_manager(codex_home.path()).await;
-        let staged_auth = api_key_auth_dot_json("teardown-secret");
-        let cancel = CancellationToken::new();
-        let login_id = Uuid::new_v4();
-        let active = ActiveLogin::DeviceCode {
-            cancel: cancel.clone(),
-            login_id,
-        };
-
-        drop(active);
-        tokio::time::timeout(Duration::from_secs(1), cancel.cancelled())
-            .await
-            .expect("teardown should cancel the active login");
-        assert!(
-            !commit_staged_login_credentials(
-                /*active_login*/ None,
-                login_id,
-                &auth_manager,
-                &staged_auth,
-            )
-            .await
-            .expect("teardown completion must stay rejected")
-        );
-        assert!(auth_manager.auth_cached().is_none());
-        assert!(!codex_home.path().join("auth.json").exists());
-    }
 
     #[test]
     fn account_token_usage_response_maps_profile_stats_and_daily_buckets() {
@@ -1597,6 +1538,7 @@ mod tests {
                     start_date: "2026-05-29".to_string(),
                     tokens: 10,
                 }]),
+                thread_usage: None,
             }
         );
     }
@@ -1635,9 +1577,9 @@ mod tests {
     #[test]
     fn workspace_messages_feature_disabled_only_for_not_found() {
         let cases = [
-            (reqwest::StatusCode::NOT_FOUND, true),
-            (reqwest::StatusCode::UNAUTHORIZED, false),
-            (reqwest::StatusCode::FORBIDDEN, false),
+            (StatusCode::NOT_FOUND, true),
+            (StatusCode::UNAUTHORIZED, false),
+            (StatusCode::FORBIDDEN, false),
         ];
 
         for (status, expected) in cases {
