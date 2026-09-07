@@ -94,6 +94,7 @@ members = [
     "process-hardening",
     "protocol",
     "realtime-webrtc",
+    "voice-host",
     "prompts",
     "rollout",
     "rollout-trace",
@@ -304,6 +305,7 @@ codex-utils-string = { path = "utils/string" }
 codex-utils-template = { path = "utils/template" }
 codex-utils-version = { path = "utils/version" }
 codex-v8-poc = { path = "v8-poc" }
+codex-workload-identity = { path = "workload-identity" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
