@@ -288,6 +288,40 @@ def test_parse_args_accepts_installation_observer(monkeypatch):
     assert args.installation_observer is True
 
 
+def test_installation_observer_rejects_retry_without_mutation(monkeypatch):
+    mutation_called = False
+    gh_called = False
+
+    def unexpected_mutation(*_args, **_kwargs):
+        nonlocal mutation_called
+        mutation_called = True
+
+    def unexpected_gh(*_args, **_kwargs):
+        nonlocal gh_called
+        gh_called = True
+
+    monkeypatch.setattr(
+        gh_pr_watch.sys,
+        "argv",
+        [
+            "gh_pr_watch.py",
+            "--installation-observer",
+            "--retry-failed-now",
+            "--expected-head-sha",
+            "abc123",
+        ],
+    )
+    monkeypatch.setattr(gh_pr_watch, "retry_failed_now", unexpected_mutation)
+    monkeypatch.setattr(gh_pr_watch, "gh_json", unexpected_gh)
+
+    with pytest.raises(SystemExit) as error:
+        gh_pr_watch.main()
+
+    assert error.value.code == 2
+    assert mutation_called is False
+    assert gh_called is False
+
+
 def test_collect_snapshot_discovers_pending_workflow_failures_and_reuses_completed_jobs(
     monkeypatch, tmp_path
 ):

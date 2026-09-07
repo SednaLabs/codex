@@ -274,6 +274,11 @@ def parse_args():
     )
     args = parser.parse_args()
 
+    if args.installation_observer and args.retry_failed_now:
+        parser.error(
+            "--installation-observer cannot be combined with --retry-failed-now "
+            "(observer mode is read-only)"
+        )
     if args.poll_seconds <= 0:
         parser.error("--poll-seconds must be > 0")
     if args.max_flaky_retries < 0:
