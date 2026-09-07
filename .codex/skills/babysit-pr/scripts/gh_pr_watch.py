@@ -1646,10 +1646,20 @@ def recommend_actions(
     if actionable_review_items:
         actions.append("process_review_comment")
 
-    # GitHub's BLOCKED merge-state is not itself evidence of a conflict or a
-    # failing check. Surface it as an actionable policy blocker so a watcher
-    # does not silently idle or back off while the reason remains unexplained.
-    if str(pr.get("merge_state_status") or "").upper() == "BLOCKED":
+    # A BLOCKED merge state is actionable only when current check/review
+    # evidence does not already explain why the PR cannot proceed.
+    has_explaining_blocker = bool(
+        checks_summary.get("pending_count")
+        or checks_summary.get("failed_count")
+        or failed_jobs
+        or actionable_review_items
+        or int(review_state.get("active_unresolved_thread_count") or 0) > 0
+        or str(pr.get("review_decision") or "") in MERGE_BLOCKING_REVIEW_DECISIONS
+    )
+    if (
+        str(pr.get("merge_state_status") or "").upper() == "BLOCKED"
+        and not has_explaining_blocker
+    ):
         actions.append(ACTION_REQUIRED_MERGE_POLICY_BLOCKED)
 
     has_failed_pr_checks = checks_summary["failed_count"] > 0 or bool(failed_jobs)
@@ -2071,6 +2081,7 @@ def compact_wait_snapshot(snapshot):
     }
     return {
         "pr": compact_pr,
+        "watch_decision": snapshot.get("watch_decision"),
         "watch_context": snapshot.get("watch_context"),
         "checks": snapshot.get("checks"),
         "checks_source": snapshot.get("checks_source"),
@@ -2141,6 +2152,7 @@ def run_watch(args):
         )
         actions = set(snapshot.get("actions") or [])
         if actions & STOP_ACTIONS:
+            persist_watch_schedule(state_path, snapshot, "watch", 0)
             print_event(
                 "stop", {"actions": snapshot.get("actions"), "pr": snapshot.get("pr")}
             )
@@ -2180,6 +2192,7 @@ def run_watch_until_action(args):
                 if getattr(args, "verbose_details", False)
                 else compact_wait_snapshot(snapshot)
             )
+            persist_watch_schedule(state_path, snapshot, "watch-until-action", 0)
             print_json(
                 {
                     "elapsed_seconds": int(max(time.time() - started_at, 0)),
