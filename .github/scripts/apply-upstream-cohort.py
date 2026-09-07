@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "b493f8f276cd6c601de540d06ee7ebd2f78a59c2"
+PUSH_PREDECESSOR_SHA = "7ff51622e7ad69686017d50d78f0a028deabf6cf"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -478,6 +478,12 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES["codex-rs/config/src/profile_toml.rs"] = (
 )
 RESTORE_SOURCE_ENTRIES.update({
     "codex-rs/code-mode-protocol/src/lib.rs": ("100644", "blob", "bb47b1a4c48cf5296a739768a071166a43928307"),
+    "codex-rs/code-mode-protocol/src/host/host_tests.rs": ("100644", "blob", "dde38e87c96b054a1249920276c4f3ea9ef8938b"),
+    "codex-rs/code-mode-protocol/src/host/message.rs": ("100644", "blob", "0e83c866e4b9ce52af37b829e7c4acaaf10d7d3a"),
+    "codex-rs/code-mode-protocol/src/host/mod.rs": ("100644", "blob", "5c81b1d4a0286081ea6243a27cabac0bcc393de1"),
+    "codex-rs/code-mode-protocol/src/host/payload.rs": ("100644", "blob", "487b825109d81d59d1064e48d64dca8e8bc64d5c"),
+    "codex-rs/code-mode-protocol/src/runtime.rs": ("100644", "blob", "147822063fc1cc7b4739efb2e175decef7489385"),
+    "codex-rs/code-mode-protocol/src/session.rs": ("100644", "blob", "57669c431482febc544670d0825265a12209b6fa"),
     "codex-rs/models-manager/src/cache.rs": ("100644", "blob", "903f70b9b234569a24b37480d2ec74ac93eccd29"),
     "codex-rs/models-manager/src/model_info.rs": ("100644", "blob", "f8c2ee3ecc0dc3ba5ea01572be70c13830faab92"),
     "codex-rs/models-manager/src/manager.rs": ("100644", "blob", "a0a0348e4e509f1e2c5f7d1d0d83deda09ba572a"),
@@ -506,6 +512,12 @@ RESTORE_SOURCE_ENTRIES.update({
 })
 RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
     "codex-rs/code-mode-protocol/src/lib.rs": ("100644", "blob", "c253f5bcc789e05bbbadd7fcbcff9cb86d2e9670"),
+    "codex-rs/code-mode-protocol/src/host/host_tests.rs": ("100644", "blob", "591b29e5dd6871a4cc676b3b12809bde7e6f6dc0"),
+    "codex-rs/code-mode-protocol/src/host/message.rs": ("100644", "blob", "bc442426a3b0b1d219c9da42d6f120c995d34c43"),
+    "codex-rs/code-mode-protocol/src/host/mod.rs": ("100644", "blob", "43bb7111625e3afa0ffe8dd3ddd66318347ad06e"),
+    "codex-rs/code-mode-protocol/src/host/payload.rs": ("100644", "blob", "392a80d24acb2f63ef339dae82b44654c6066b1c"),
+    "codex-rs/code-mode-protocol/src/runtime.rs": ("100644", "blob", "afa96ebf29d348ff47869cb36a3893622494bf1a"),
+    "codex-rs/code-mode-protocol/src/session.rs": ("100644", "blob", "ffba25005cf3e7d1283ebf41997969b72a00c0d7"),
     "codex-rs/models-manager/src/cache.rs": ("100644", "blob", "15e8cf4dd8b2b5833406667d04c1969c30bfe875"),
     "codex-rs/models-manager/src/model_info.rs": ("100644", "blob", "fd9e2615c194411381634fd5806f4d91ead33c45"),
     "codex-rs/models-manager/src/manager.rs": ("100644", "blob", "45835c37cd41d28c3a6c038a3e77a1369621562a"),
@@ -533,8 +545,8 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
     "codex-rs/sandboxing/src/windows_mxc.rs": ("100644", "blob", "97b32a2f0dd73ed1ca1968d5b5281a5d95095f8d"),
 })
 RESTORE_PATHS = list(RESTORE_SOURCE_ENTRIES)
-RESTORE_PATHS_SHA256 = "9405186f4638054f2b82036dd548bc54d0f2b5a9e122d283cdc38cb6c598e040"
-RESTORE_ENTRIES_SHA256 = "407113e557e923787d99f37fb9b2ae25845244364b024a1054c2eb649f3a0450"
+RESTORE_PATHS_SHA256 = "a2f5522a2a53d8dd22e610605e0fb98ac41a74274f88745f3c4267ac3ef51caf"
+RESTORE_ENTRIES_SHA256 = "7bc4755d49533affd0d3234a2a772173a0e8795e679b6f68c59540857fd04336"
 
 OVERLAY_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items())
@@ -547,13 +559,13 @@ OVERLAY_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     }.items())
 )
 OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
-OVERLAY_PATHS_SHA256 = "c3211d81d51e693ea39ae3449a66747ea1258c67f4a32ca173c4305e3bc764b7"
+OVERLAY_PATHS_SHA256 = "40b782c6b51bd7c4114f5f9dc3d5cb200b6cda7780671096d9377f9a37ef3e95"
 OVERLAY_CHANGED_PATHS = [
     path
     for path in OVERLAY_PATHS
     if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]
 ]
-OVERLAY_CHANGED_PATHS_SHA256 = "b691c98e474ec1b47f8560b7380ed598a7adc3d944182830003e05ae7a735f1e"
+OVERLAY_CHANGED_PATHS_SHA256 = "d28784b5eab5aeadfd600f986aa931601d9f9e0a571b29026b6e40d5dcb19aa6"
 
 PATCH_DEPENDENCIES: dict[str, tuple[str, str, str]] = {
     "patches/rules_rs_windows_msvc_linker.patch": (
