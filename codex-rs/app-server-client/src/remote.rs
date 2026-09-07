@@ -518,7 +518,6 @@ impl RemoteAppServerClient {
                         }
                     }
                     message = stream.next(), if event_delivery_enabled
-                        && skipped_events == 0
                         && pending_required_event.is_none()
                         && terminal_state.is_none() => {
                         match message {
