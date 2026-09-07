@@ -98,7 +98,7 @@ jobs:
           workflow_tree = sys.argv[3]
           push = {
               "ref": "refs/heads/worker/w13825-sdk-build-consumer",
-              "before": "de8749b65a85014c535740f761ab3d23377d6fee",
+              "before": "4588637dac86d427a7a5dae1958cd40b71e53d58",
               "after": workflow_sha,
               "created": False,
               "deleted": False,
@@ -252,7 +252,7 @@ jobs:
       - name: Check out exact reviewed build source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 5628fffa86a9e9a7dcc0cfd8d18f4cc09906ad39
+          ref: 85b4fbedb76d439d64b6421fcbc213d54a7a89a9
           fetch-depth: 0
           persist-credentials: false
           path: source-candidate
