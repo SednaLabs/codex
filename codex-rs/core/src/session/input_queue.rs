@@ -229,7 +229,7 @@ impl InputQueue {
                 (communication, sequence)
             })
             .collect();
-        for (communication, sequence) in queued.rev() {
+        for (communication, sequence) in queued.into_iter().rev() {
             pending.push_front(communication);
             sequences.push_front(sequence);
         }

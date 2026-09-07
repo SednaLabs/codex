@@ -4804,6 +4804,8 @@ async fn turn_event_counts_completed_tool_items() {
             effective_model: None,
             effective_reasoning_effort: None,
             agents_states: Default::default(),
+            wake_notifications: None,
+            completion_reason: None,
         },
         ThreadItem::SubAgentActivity {
             id: "sub-agent-activity-1".to_string(),

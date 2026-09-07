@@ -312,7 +312,7 @@ impl Handler {
             receiver_agents,
             statuses_by_id,
             completion_reason,
-            result.wake_notifications.clone(),
+            result.wake_notifications.clone().unwrap_or_default(),
         )
         .await;
 
