@@ -254,6 +254,11 @@ BUILD_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str]] = {
         "blob",
         "628ae7a9ac94eee0e0dd66c927964a0ad06544d7",
     ),
+    "codex-rs/utils/plugins/src/plugin_namespace.rs": (
+        "100644",
+        "blob",
+        "b4da61deabe3a03a2acb66f25e20956719d2cfb8",
+    ),
 }
 CORE_SKILLS_SOURCE_ENTRIES: dict[str, tuple[str, str, str]] = {
     "codex-rs/core-skills/BUILD.bazel": ("100644", "blob", "77c4253e73ba223700cac0be15235a4e468aa701"),
