@@ -99,7 +99,7 @@ jobs:
           workflow_tree = sys.argv[3]
           push = {
               "ref": "refs/heads/worker/w13825-sdk-build-consumer",
-              "before": "b0cfb702efe679fd7d7edf1a31afbfefe621aecd",
+              "before": "ebd130a761ef5d98bac31bf1c0ab5883db3ac26f",
               "after": workflow_sha,
               "created": False,
               "deleted": False,
@@ -353,7 +353,7 @@ jobs:
           path: ${{ runner.temp }}/w13825-sdk-build-candidate/diagnostics
           if-no-files-found: ignore
 
-  sandboxing-diagnostic:
+  sdk-runtime-surfaces-preimage-diagnostic:
     if: github.ref_name == 'worker/w13825-sdk-network-proxy-diagnostic'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -368,10 +368,10 @@ jobs:
       SDK_ARTIFACT_HEAD_SHA: 0384d8ae9205e142fa4b352256d8c85a9e05f8c4
       SDK_CANDIDATE_SHA: 3a26f7dad12e96ea41dae025e77472af0dd273a8
       SDK_CANDIDATE_TREE: 6867e9e14ea8f416ee3075f959b880d038fe2cc0
-      BUILD_SOURCE_SHA: b593ff0ba02ff08d0c44f6db95840c6cc59f0598
-      BUILD_SOURCE_TREE: 8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47
+      BUILD_SOURCE_SHA: b58f58149a0f86a2919847a519c0c594e3b68f57
+      BUILD_SOURCE_TREE: c5a046c80730ea3107bea553cd2fad1701c819f6
       TARGET_HELPER_BRANCH: worker/w13825-sdk-build-consumer
-      TARGET_HELPER_SHA: 80e0e192172f9fc998a635915f17a6011af6cbd6
+      TARGET_HELPER_SHA: 7f44b7362f7bd17cc2792b9c68c0baa7b935e004
     steps:
       - name: Check out exact diagnostic workflow
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -397,7 +397,7 @@ jobs:
       - name: Check out exact reviewed build source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: b593ff0ba02ff08d0c44f6db95840c6cc59f0598
+          ref: b58f58149a0f86a2919847a519c0c594e3b68f57
           fetch-depth: 0
           persist-credentials: false
           path: source-candidate
@@ -425,8 +425,8 @@ jobs:
           IFS=$'\t' read -r target_helper_commit target_helper_tree target_helper_parent <<<"${target_helper_packet}"
           test "${target_helper_sha}" = "${TARGET_HELPER_SHA}"
           test "${target_helper_commit}" = "${TARGET_HELPER_SHA}"
-          test "${target_helper_tree}" = "64cae3373df656ba533248cfd740bd672c6f19d6"
-          test "${target_helper_parent}" = "809f0c9c5ddf1da876a99c028e7f36bb7277283b"
+          test "${target_helper_tree}" = "64b0a741da59614121e0b82624ce35ad2df2bad6"
+          test "${target_helper_parent}" = "8a870731d9421d17fe9f6d141854e45ab651bef9"
           jq -n \
             --arg id "${artifact_id}" \
             --arg name "${artifact_name}" \
@@ -455,22 +455,22 @@ jobs:
           path: ${{ runner.temp }}/w13825-sdk-input
           merge-multiple: true
 
-      - name: Probe exact SDK sandboxing preimages
+      - name: Probe exact SDK runtime-surfaces preimage
         shell: bash
         run: |
           set -euo pipefail
           python3 "${GITHUB_WORKSPACE}/helper-checkout/.github/scripts/apply-upstream-cohort.py" \
-            --probe-sdk-paths-only \
+            --probe-sdk-runtime-surfaces-only \
             --repo-root "${GITHUB_WORKSPACE}/source-candidate" \
             --artifact-dir "${RUNNER_TEMP}/w13825-sdk-input" \
-            --output-dir "${RUNNER_TEMP}/w13825-sdk-sandboxing-diagnostic" \
+            --output-dir "${RUNNER_TEMP}/w13825-sdk-runtime-surfaces-diagnostic" \
             --provider-receipt "${RUNNER_TEMP}/w13825-sdk-provider.json" \
             --expected-workflow-sha "${EXPECTED_WORKFLOW_SHA}" \
             --expected-workflow-tree "${EXPECTED_WORKFLOW_TREE}"
 
-      - name: Upload SDK sandboxing preimage diagnostic
+      - name: Upload SDK runtime-surfaces preimage diagnostic
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: sdk-sandboxing-preimage-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/w13825-sdk-sandboxing-diagnostic
+          name: sdk-runtime-surfaces-preimage-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/w13825-sdk-runtime-surfaces-diagnostic
           if-no-files-found: error
