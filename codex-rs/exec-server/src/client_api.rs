@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use codex_http_client::HttpClientFactory;
 use futures::future::BoxFuture;
-use futures::future::Shared;
-use tokio::sync::oneshot;
+use http::HeaderMap;
+use tokio::sync::watch;
 
 use crate::ExecServerError;
 use crate::HttpRequestParams;
@@ -93,7 +93,7 @@ pub(crate) struct StdioExecServerCommand {
     pub cwd: Option<PathBuf>,
 }
 
-pub(crate) type DeferredEnvironmentReadiness = Shared<oneshot::Receiver<Result<(), String>>>;
+pub(crate) type DeferredEnvironmentReadiness = watch::Receiver<Option<Result<(), String>>>;
 
 #[derive(Clone)]
 pub(crate) struct Deferred<T> {
@@ -109,6 +109,7 @@ pub(crate) enum ExecServerTransportParams {
         websocket_url: String,
         connect_timeout: Duration,
         initialize_timeout: Duration,
+        http_headers: HeaderMap,
     },
     NoiseRendezvous {
         provider: Arc<dyn NoiseRendezvousConnectProvider>,
@@ -132,11 +133,13 @@ impl std::fmt::Debug for ExecServerTransportParams {
                 websocket_url,
                 connect_timeout,
                 initialize_timeout,
+                ..
             } => f
                 .debug_struct("WebSocketUrl")
                 .field("websocket_url", websocket_url)
                 .field("connect_timeout", connect_timeout)
                 .field("initialize_timeout", initialize_timeout)
+                .field("http_headers", &"<redacted>")
                 .finish(),
             Self::NoiseRendezvous { .. } => {
                 f.debug_struct("NoiseRendezvous").finish_non_exhaustive()
@@ -159,6 +162,7 @@ impl ExecServerTransportParams {
             websocket_url,
             connect_timeout,
             initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
+            http_headers: HeaderMap::new(),
         }
     }
 }

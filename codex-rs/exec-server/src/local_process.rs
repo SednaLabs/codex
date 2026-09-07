@@ -7,7 +7,12 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use crate::process_telemetry::ProcessTelemetry;
+use crate::process_telemetry::ProcessTelemetryEvent;
 use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_network_proxy::NetworkPolicyAuditEvent;
+use codex_network_proxy::NetworkPolicyAuditObserver;
+use codex_network_proxy::NetworkProtocol;
 use codex_network_proxy::NetworkProxyHandle;
 use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -18,11 +23,15 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::is_likely_sandbox_denied;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::ProcessSignal as PtyProcessSignal;
+use opentelemetry::trace::SpanContext;
+use opentelemetry::trace::TraceContextExt;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 
 use crate::ExecBackend;
 use crate::ExecBackendFuture;
@@ -36,7 +45,8 @@ use crate::ProcessId;
 use crate::StartedExecProcess;
 use crate::network_policy_decisions::network_policy_decider;
 use crate::process::ExecProcessEventLog;
-use crate::process_sandbox::prepare_exec_request;
+use crate::process::sandbox_type_from_protocol;
+use crate::process_sandbox::prepare_exec_request_with_telemetry;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecEnvPolicy;
@@ -45,8 +55,12 @@ use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecServerNetworkProtocol;
 use crate::protocol::MAX_NETWORK_POLICY_PROCESS_ID_BYTES;
+use crate::protocol::NETWORK_POLICY_DECISION_METHOD;
+use crate::protocol::NetworkPolicyDecisionNotification;
 use crate::protocol::ProcessOutputChunk;
+use crate::protocol::ProcessSandboxType;
 use crate::protocol::ProcessSignal;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
@@ -63,6 +77,8 @@ use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 use crate::rpc_server_requests::RpcServerRequestSender;
+#[cfg(unix)]
+use crate::shell_snapshot::CapturePurpose;
 use crate::telemetry::ExecServerTelemetry;
 use crate::telemetry::ProcessMetricGuard;
 
@@ -150,6 +166,8 @@ struct Inner {
     notifications: std::sync::RwLock<Option<RpcNotificationSender>>,
     requests: Arc<std::sync::RwLock<Option<RpcServerRequestSender>>>,
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
+    #[cfg(unix)]
+    shell_snapshots: crate::shell_snapshot::ShellSnapshotCache,
     telemetry: ExecServerTelemetry,
 }
 
@@ -207,6 +225,8 @@ impl LocalProcess {
                 notifications: std::sync::RwLock::new(Some(notifications)),
                 requests: Arc::new(std::sync::RwLock::new(Some(requests))),
                 processes: Mutex::new(HashMap::new()),
+                #[cfg(unix)]
+                shell_snapshots: crate::shell_snapshot::ShellSnapshotCache::default(),
                 telemetry,
             }),
             runtime_paths,
@@ -261,37 +281,122 @@ impl LocalProcess {
     async fn start_process(
         &self,
         params: ExecParams,
+        mut telemetry: ProcessTelemetry,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
+        telemetry.launch_context = telemetry.launch_context.filter(SpanContext::is_valid);
+        let metadata = params.metadata.as_ref();
+        telemetry.thread_id = metadata
+            .and_then(|metadata| metadata.thread_id.as_ref())
+            .map(ToString::to_string);
+        // Correlation is controller-supplied, not authorization or arbitrary diagnostic text.
+        telemetry.tool_call_id = metadata
+            .and_then(|metadata| metadata.tool_call_id.as_ref())
+            .filter(|id| {
+                !id.is_empty()
+                    && id.len() <= 256
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"_-.:".contains(&byte))
+            })
+            .cloned();
         let process_id = params.process_id.clone();
-        let request_policy_decisions = params
+        let policy_decision_timeout_ms = params
             .network_proxy
             .as_ref()
-            .is_some_and(|launch| launch.proxy.request_policy_decisions);
-        if request_policy_decisions
+            .and_then(|launch| launch.policy_decision_timeout_ms);
+        if policy_decision_timeout_ms == Some(0) {
+            return Err(invalid_params(
+                "network policy decision callback timeout must be nonzero".to_string(),
+            ));
+        }
+        if policy_decision_timeout_ms.is_some()
             && (process_id.is_empty() || process_id.len() > MAX_NETWORK_POLICY_PROCESS_ID_BYTES)
         {
             return Err(invalid_params(format!(
                 "callback-enabled process ID must be non-empty and at most {MAX_NETWORK_POLICY_PROCESS_ID_BYTES} bytes"
             )));
         }
-        let network_policy_shutdown = request_policy_decisions.then(CancellationToken::new);
-        let network_policy_decider = network_policy_shutdown.as_ref().map(|process_shutdown| {
-            network_policy_decider(
-                process_id.clone(),
-                Arc::clone(&self.inner.requests),
-                process_shutdown.clone(),
-            )
+        let policy_decision_timeout = policy_decision_timeout_ms.map(Duration::from_millis);
+        let network_policy_shutdown = policy_decision_timeout.map(|_| CancellationToken::new());
+        let network_policy_decider = network_policy_shutdown
+            .as_ref()
+            .zip(policy_decision_timeout)
+            .map(|(process_shutdown, controller_timeout)| {
+                network_policy_decider(
+                    process_id.clone(),
+                    Arc::clone(&self.inner.requests),
+                    controller_timeout,
+                    process_shutdown.clone(),
+                )
+            });
+        let network_policy_audit_observer = params.network_proxy.as_ref().map(|_| {
+            let process_id = process_id.clone();
+            let inner = Arc::downgrade(&self.inner);
+            Arc::new(move |event: NetworkPolicyAuditEvent| {
+                let Some(inner) = inner.upgrade() else {
+                    return;
+                };
+                let Some(notifications) = notification_sender(&inner) else {
+                    return;
+                };
+                let notification = NetworkPolicyDecisionNotification {
+                    process_id: process_id.clone(),
+                    timestamp: event.timestamp,
+                    scope: event.scope,
+                    decision: event.decision,
+                    source: event.source,
+                    reason: event.reason,
+                    protocol: match event.protocol {
+                        NetworkProtocol::Http => ExecServerNetworkProtocol::Http,
+                        NetworkProtocol::HttpsConnect => ExecServerNetworkProtocol::HttpsConnect,
+                        NetworkProtocol::Socks5Tcp => ExecServerNetworkProtocol::Socks5Tcp,
+                        NetworkProtocol::Socks5Udp => ExecServerNetworkProtocol::Socks5Udp,
+                    },
+                    host: event.host,
+                    port: event.port,
+                    method: event.method,
+                    client: event.client,
+                    policy_override: event.policy_override,
+                };
+                let _ = notifications.try_notify(NETWORK_POLICY_DECISION_METHOD, &notification);
+            }) as NetworkPolicyAuditObserver
         });
-        let prepared = prepare_exec_request(
+        #[cfg(not(unix))]
+        if params.shell_snapshot.is_some() {
+            return Err(invalid_params(
+                "shell snapshots are unsupported on this platform".to_string(),
+            ));
+        }
+        let prepared = prepare_exec_request_with_telemetry(
             &params,
             child_env(&params),
             self.runtime_paths.as_ref(),
             network_policy_decider,
+            network_policy_audit_observer,
+            &telemetry,
         )
         .await?;
+        #[cfg(unix)]
+        let mut prepared = prepared;
+        #[cfg(unix)]
+        self.inner
+            .shell_snapshots
+            .prepare(
+                &params,
+                &mut prepared,
+                &self.inner.telemetry,
+                CapturePurpose::Execution,
+            )
+            .await?;
         if prepared.command.is_empty() {
             return Err(invalid_params("argv must not be empty".to_string()));
         }
+        let sandbox_type = match prepared.sandbox {
+            SandboxType::None => Some(ProcessSandboxType::None),
+            SandboxType::MacosSeatbelt => Some(ProcessSandboxType::MacosSeatbelt),
+            SandboxType::LinuxSeccomp => Some(ProcessSandboxType::LinuxSeccomp),
+            SandboxType::WindowsRestrictedToken => Some(ProcessSandboxType::WindowsRestrictedToken),
+        };
 
         let start = Arc::new(ProcessStart);
         {
@@ -322,6 +427,7 @@ impl LocalProcess {
         let spawned = match spawned_result {
             Ok(spawned) => spawned,
             Err(err) => {
+                telemetry.log(ProcessTelemetryEvent::SpawnFailed, prepared.sandbox);
                 let mut process_map = self.inner.processes.lock().await;
                 if matches!(
                     process_map.get(&process_id),
@@ -332,6 +438,7 @@ impl LocalProcess {
                 return Err(internal_error(err.to_string()));
             }
         };
+        let metrics = self.inner.telemetry.process_started(&process_id);
 
         let output_notify = Arc::new(Notify::new());
         let (wake_tx, _wake_rx) = watch::channel(0);
@@ -347,6 +454,7 @@ impl LocalProcess {
             ) {
                 drop(process_map);
                 spawned.session.terminate();
+                metrics.finish("terminated");
                 return Err(invalid_request(format!(
                     "process {process_id} start was cancelled"
                 )));
@@ -369,7 +477,7 @@ impl LocalProcess {
                     output_notify: Arc::clone(&output_notify),
                     open_streams: 2,
                     closed: false,
-                    metrics: Some(self.inner.telemetry.process_started()),
+                    metrics: Some(metrics),
                     termination_requested: false,
                     sandbox: prepared.sandbox,
                     sandbox_denied: false,
@@ -378,6 +486,7 @@ impl LocalProcess {
                 })),
             );
         }
+        telemetry.log(ProcessTelemetryEvent::Start, prepared.sandbox);
         tokio::spawn(stream_output(
             process_id.clone(),
             if params.tty {
@@ -400,18 +509,34 @@ impl LocalProcess {
             Arc::clone(&self.inner),
             Arc::clone(&output_notify),
         ));
-        tokio::spawn(watch_exit(
-            process_id.clone(),
-            spawned.exit_rx,
-            Arc::clone(&self.inner),
-            output_notify,
-        ));
+        // Keep the subscriber, but let the request span close independently of process completion.
+        tokio::spawn(
+            watch_exit(
+                process_id.clone(),
+                spawned.exit_rx,
+                Arc::clone(&self.inner),
+                output_notify,
+                telemetry,
+            )
+            .with_current_subscriber(),
+        );
 
-        Ok((ExecResponse { process_id }, wake_tx, events))
+        Ok((
+            ExecResponse {
+                process_id,
+                sandbox_type,
+            },
+            wake_tx,
+            events,
+        ))
     }
 
-    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
-        self.start_process(params)
+    pub(crate) async fn exec(
+        &self,
+        params: ExecParams,
+        telemetry: ProcessTelemetry,
+    ) -> Result<ExecResponse, JSONRPCErrorError> {
+        self.start_process(params, telemetry)
             .await
             .map(|(response, _, _)| response)
     }
@@ -614,17 +739,21 @@ impl LocalProcess {
 }
 
 fn child_env(params: &ExecParams) -> HashMap<String, String> {
-    let Some(env_policy) = &params.env_policy else {
-        return params.env.clone();
+    let mut env = match &params.env_policy {
+        Some(env_policy) => {
+            let policy = shell_environment_policy(env_policy);
+            let mut env = shell_environment::create_env(&policy, /*thread_id*/ None);
+            env.extend(params.env.clone());
+            env
+        }
+        None => params.env.clone(),
     };
-
-    let policy = shell_environment_policy(env_policy);
-    let mut env = shell_environment::create_env(&policy, /*thread_id*/ None);
-    env.extend(params.env.clone());
+    env.remove(crate::CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE_ENV_VAR);
+    env.retain(|name, _| !shell_environment::is_non_inheritable_env_var(name));
     env
 }
 
-fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvironmentPolicy {
+pub(crate) fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvironmentPolicy {
     ShellEnvironmentPolicy {
         inherit: env_policy.inherit.clone(),
         ignore_default_excludes: env_policy.ignore_default_excludes,
@@ -646,9 +775,10 @@ fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvironmentPolic
 impl LocalProcess {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
         let (response, wake_tx, events) = self
-            .start_process(params)
+            .start_process(params, ProcessTelemetry::default())
             .await
             .map_err(map_handler_error)?;
+        let sandbox_type = sandbox_type_from_protocol(response.sandbox_type);
         Ok(StartedExecProcess {
             process: Arc::new(LocalExecProcess {
                 process_id: response.process_id,
@@ -656,6 +786,7 @@ impl LocalProcess {
                 wake_tx,
                 events,
             }),
+            sandbox_type,
         })
     }
 }
@@ -663,6 +794,40 @@ impl LocalProcess {
 impl ExecBackend for LocalProcess {
     fn start(&self, params: ExecParams) -> ExecBackendFuture<'_> {
         Box::pin(LocalProcess::start(self, params))
+    }
+
+    #[cfg(unix)]
+    fn prewarm_shell_snapshot(&self, params: ExecParams) -> ExecProcessFuture<'_, ()> {
+        Box::pin(async move {
+            if params.enforce_managed_network
+                || params.managed_network.is_some()
+                || params.network_proxy.is_some()
+            {
+                return Err(ExecServerError::Protocol(
+                    "shell snapshot prewarming does not support managed networking".to_string(),
+                ));
+            }
+            let mut prepared = prepare_exec_request_with_telemetry(
+                &params,
+                child_env(&params),
+                self.runtime_paths.as_ref(),
+                /*network_policy_decider*/ None,
+                /*network_policy_audit_observer*/ None,
+                &ProcessTelemetry::default(),
+            )
+            .await
+            .map_err(map_handler_error)?;
+            self.inner
+                .shell_snapshots
+                .prepare(
+                    &params,
+                    &mut prepared,
+                    &self.inner.telemetry,
+                    CapturePurpose::Prewarm,
+                )
+                .await
+                .map_err(map_handler_error)
+        })
     }
 }
 
@@ -858,91 +1023,115 @@ async fn stream_output(
     finish_output_stream(process_id, inner).await;
 }
 
-async fn watch_exit(
+fn watch_exit(
     process_id: ProcessId,
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
     inner: Arc<Inner>,
     output_notify: Arc<Notify>,
-) {
-    let exit_code = exit_rx.await.unwrap_or(-1);
-    let sandboxed = {
-        let mut processes = inner.processes.lock().await;
-        match processes.get_mut(&process_id) {
-            Some(ProcessEntry::Running(process)) => {
-                let sandboxed = process.sandbox != SandboxType::None;
-                if let Some(metrics) = process.metrics.take() {
-                    metrics.finish(if process.termination_requested {
-                        "terminated"
-                    } else if exit_code == 0 {
-                        "success"
-                    } else {
-                        "error"
-                    });
-                }
-                sandboxed
-            }
-            Some(ProcessEntry::Starting(_)) | None => false,
-        }
-    };
-    if sandboxed {
-        let _ = tokio::time::timeout(Duration::from_millis(20), output_notify.notified()).await;
+    telemetry: ProcessTelemetry,
+) -> impl std::future::Future<Output = ()> + Send {
+    // Set the copied OTEL parent before entering; never retain the RPC tracing span.
+    let process_span = tracing::info_span!(parent: None, "codex.exec_server.process");
+    if let Some(launch_context) = &telemetry.launch_context {
+        codex_otel::set_parent_from_context(
+            &process_span,
+            opentelemetry::Context::new().with_remote_span_context(launch_context.clone()),
+        );
     }
-    let notification = {
-        let mut processes = inner.processes.lock().await;
-        if let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) {
-            let seq = process.next_seq;
-            process.next_seq += 1;
-            process.exit_code = Some(exit_code);
-            if process.sandbox != SandboxType::None {
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-                let mut aggregated = Vec::new();
-                for chunk in &process.output {
-                    match chunk.stream {
-                        ExecOutputStream::Stdout | ExecOutputStream::Pty => {
-                            stdout.extend_from_slice(&chunk.chunk);
-                        }
-                        ExecOutputStream::Stderr => stderr.extend_from_slice(&chunk.chunk),
+    async move {
+        let exit_code = exit_rx.await.unwrap_or(-1);
+        let sandboxed = {
+            let mut processes = inner.processes.lock().await;
+            match processes.get_mut(&process_id) {
+                Some(ProcessEntry::Running(process)) => {
+                    let sandboxed = process.sandbox != SandboxType::None;
+                    if let Some(metrics) = process.metrics.take() {
+                        metrics.finish(if process.termination_requested {
+                            "terminated"
+                        } else if exit_code == 0 {
+                            "success"
+                        } else {
+                            "error"
+                        });
                     }
-                    aggregated.extend_from_slice(&chunk.chunk);
+                    sandboxed
                 }
-                let exec_output = ExecToolCallOutput {
-                    exit_code,
-                    stdout: StreamOutput::new(String::from_utf8_lossy(&stdout).into_owned()),
-                    stderr: StreamOutput::new(String::from_utf8_lossy(&stderr).into_owned()),
-                    aggregated_output: StreamOutput::new(
-                        String::from_utf8_lossy(&aggregated).into_owned(),
-                    ),
-                    ..Default::default()
-                };
-                process.sandbox_denied = is_likely_sandbox_denied(process.sandbox, &exec_output);
+                Some(ProcessEntry::Starting(_)) | None => false,
             }
-            let _ = process.wake_tx.send(seq);
-            process.events.publish(ExecProcessEvent::Exited {
-                seq,
-                exit_code,
-                sandbox_denied: Some(process.sandbox_denied),
-            });
-            Some(ExecExitedNotification {
-                process_id: process_id.clone(),
-                seq,
-                exit_code,
-                sandbox_denied: Some(process.sandbox_denied),
-            })
-        } else {
-            None
+        };
+        if sandboxed {
+            let _ = tokio::time::timeout(Duration::from_millis(20), output_notify.notified()).await;
         }
-    };
-    output_notify.notify_waiters();
-    if let Some(notification) = notification
-        && let Some(notifications) = notification_sender(&inner)
-    {
-        let _ = notifications
-            .notify(crate::protocol::EXEC_EXITED_METHOD, &notification)
-            .await;
-    }
+        let notification = {
+            let mut processes = inner.processes.lock().await;
+            if let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) {
+                let seq = process.next_seq;
+                process.next_seq += 1;
+                process.exit_code = Some(exit_code);
+                if process.sandbox != SandboxType::None {
+                    let mut stdout = Vec::new();
+                    let mut stderr = Vec::new();
+                    let mut aggregated = Vec::new();
+                    for chunk in &process.output {
+                        match chunk.stream {
+                            ExecOutputStream::Stdout | ExecOutputStream::Pty => {
+                                stdout.extend_from_slice(&chunk.chunk);
+                            }
+                            ExecOutputStream::Stderr => stderr.extend_from_slice(&chunk.chunk),
+                        }
+                        aggregated.extend_from_slice(&chunk.chunk);
+                    }
+                    let exec_output = ExecToolCallOutput {
+                        exit_code,
+                        stdout: StreamOutput::new(String::from_utf8_lossy(&stdout).into_owned()),
+                        stderr: StreamOutput::new(String::from_utf8_lossy(&stderr).into_owned()),
+                        aggregated_output: StreamOutput::new(
+                            String::from_utf8_lossy(&aggregated).into_owned(),
+                        ),
+                        ..Default::default()
+                    };
+                    // Keep the classification in the result for caller approval/retry handling.
+                    process.sandbox_denied =
+                        is_likely_sandbox_denied(process.sandbox, &exec_output);
+                    if process.sandbox_denied {
+                        telemetry.log(ProcessTelemetryEvent::SandboxDenied, process.sandbox);
+                    }
+                }
+                telemetry.log(
+                    ProcessTelemetryEvent::Exit {
+                        exit_code,
+                        termination_requested: process.termination_requested,
+                    },
+                    process.sandbox,
+                );
+                let _ = process.wake_tx.send(seq);
+                process.events.publish(ExecProcessEvent::Exited {
+                    seq,
+                    exit_code,
+                    sandbox_denied: Some(process.sandbox_denied),
+                });
+                Some(ExecExitedNotification {
+                    process_id: process_id.clone(),
+                    seq,
+                    exit_code,
+                    sandbox_denied: Some(process.sandbox_denied),
+                })
+            } else {
+                None
+            }
+        };
+        output_notify.notify_waiters();
+        if let Some(notification) = notification
+            && let Some(notifications) = notification_sender(&inner)
+        {
+            let _ = notifications
+                .notify(crate::protocol::EXEC_EXITED_METHOD, &notification)
+                .await;
+        }
 
-    maybe_emit_closed(process_id, Arc::clone(&inner)).await;
+        maybe_emit_closed(process_id, Arc::clone(&inner)).await;
+    }
+    .instrument(process_span)
 }
 
 async fn finish_output_stream(process_id: ProcessId, inner: Arc<Inner>) {
@@ -1063,10 +1252,12 @@ mod tests {
 
     fn test_exec_params(env: HashMap<String, String>) -> ExecParams {
         ExecParams {
+            metadata: None,
             process_id: ProcessId::from("env-test"),
             argv: vec!["true".to_string()],
             cwd: PathUri::from_host_native_path(std::env::current_dir().expect("cwd"))
                 .expect("cwd URI"),
+            shell_snapshot: None,
             env_policy: None,
             env,
             tty: false,
@@ -1077,6 +1268,102 @@ mod tests {
             managed_network: None,
             network_proxy: None,
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn executor_proxy_sends_final_network_policy_notification() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+        let backend = LocalProcess::with_runtime_paths(
+            RpcNotificationSender::new(outgoing_tx),
+            ExecServerTelemetry::default(),
+            /*runtime_paths*/ None,
+        );
+        let proxy_config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
+            enabled: true,
+            ..NetworkProxyConfig::default()
+        })
+        .expect("build remote network proxy config");
+        let mut params = test_exec_params(HashMap::new());
+        params.process_id = ProcessId::from("audit-process");
+        params.argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "printf '%s\\n' \"$HTTP_PROXY\"; exec sleep 60".to_string(),
+        ];
+        params.network_proxy = Some(
+            RemoteNetworkProxyLaunchConfig::new(proxy_config)
+                .for_execution("environment-1".to_string(), "execution-1".to_string()),
+        );
+        backend
+            .exec(params, ProcessTelemetry::default())
+            .await
+            .expect("start process with proxy");
+        let output = backend
+            .exec_read(ReadParams {
+                process_id: ProcessId::from("audit-process"),
+                after_seq: None,
+                max_bytes: None,
+                wait_ms: Some(1_000),
+            })
+            .await
+            .expect("read executor proxy address");
+        let proxy_addr = String::from_utf8(
+            output
+                .chunks
+                .into_iter()
+                .find(|chunk| matches!(chunk.stream, ExecOutputStream::Stdout))
+                .expect("executor proxy address output")
+                .chunk
+                .into_inner(),
+        )
+        .expect("UTF-8 proxy address");
+        let proxy_addr = proxy_addr
+            .trim()
+            .strip_prefix("http://")
+            .expect("HTTP executor proxy address");
+        let mut stream = tokio::net::TcpStream::connect(proxy_addr)
+            .await
+            .expect("connect to executor proxy");
+        stream
+            .write_all(b"CONNECT 8.8.8.8:443 HTTP/1.1\r\nHost: 8.8.8.8:443\r\n\r\n")
+            .await
+            .expect("write CONNECT request");
+        let mut response = [0_u8; 256];
+        let response_len = timeout(Duration::from_secs(2), stream.read(&mut response))
+            .await
+            .expect("proxy response timeout")
+            .expect("read proxy response");
+        assert!(String::from_utf8_lossy(&response[..response_len]).starts_with("HTTP/1.1 403"));
+
+        let notification = timeout(Duration::from_secs(2), async {
+            loop {
+                match outgoing_rx.recv().await {
+                    Some(RpcServerOutboundMessage::Notification(notification))
+                        if notification.method == NETWORK_POLICY_DECISION_METHOD =>
+                    {
+                        break serde_json::from_value::<NetworkPolicyDecisionNotification>(
+                            notification
+                                .params
+                                .expect("network policy notification params"),
+                        )
+                        .expect("deserialize network policy notification");
+                    }
+                    Some(_) => {}
+                    None => panic!("outbound notifications closed"),
+                }
+            }
+        })
+        .await
+        .expect("network policy notification timeout");
+        assert_eq!(notification.process_id, ProcessId::from("audit-process"));
+        assert_eq!(notification.decision, "deny");
+        assert_eq!(notification.host, "8.8.8.8");
+        assert_eq!(
+            notification.protocol,
+            ExecServerNetworkProtocol::HttpsConnect
+        );
+        backend.shutdown().await;
     }
 
     fn telemetry_backend() -> (
@@ -1151,7 +1438,9 @@ mod tests {
         let mut params = test_exec_params(HashMap::new());
         params.cwd = cwd;
 
-        let result = LocalProcess::default().start_process(params).await;
+        let result = LocalProcess::default()
+            .start_process(params, ProcessTelemetry::default())
+            .await;
         let Err(error) = result else {
             panic!("non-native cwd should be rejected");
         };
@@ -1161,11 +1450,11 @@ mod tests {
 
     #[tokio::test]
     async fn callback_enabled_start_bounds_process_id_before_proxy_launch() {
-        let mut proxy_config =
+        let proxy_config =
             RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig::default())
                 .expect("remote proxy config");
-        proxy_config.request_policy_decisions = true;
-        let proxy = RemoteNetworkProxyLaunchConfig::new(proxy_config);
+        let mut proxy = RemoteNetworkProxyLaunchConfig::new(proxy_config);
+        proxy.policy_decision_timeout_ms = Some(1_000);
         let expected = invalid_params(format!(
             "callback-enabled process ID must be non-empty and at most {MAX_NETWORK_POLICY_PROCESS_ID_BYTES} bytes"
         ));
@@ -1178,7 +1467,7 @@ mod tests {
             params.process_id = ProcessId::from(process_id);
             params.network_proxy = Some(proxy.clone());
             let error = LocalProcess::default()
-                .start_process(params)
+                .start_process(params, ProcessTelemetry::default())
                 .await
                 .err()
                 .expect("invalid callback process ID should be rejected");
@@ -1191,7 +1480,7 @@ mod tests {
         boundary.network_proxy = Some(proxy);
         boundary.argv.clear();
         let error = LocalProcess::default()
-            .start_process(boundary)
+            .start_process(boundary, ProcessTelemetry::default())
             .await
             .err()
             .expect("valid boundary process ID should proceed to process preparation");
@@ -1212,7 +1501,7 @@ mod tests {
             ordinary.process_id = ProcessId::from(process_id);
             ordinary.argv.clear();
             let error = LocalProcess::default()
-                .start_process(ordinary)
+                .start_process(ordinary, ProcessTelemetry::default())
                 .await
                 .err()
                 .expect("empty argv should be rejected after ID validation");
@@ -1236,12 +1525,19 @@ mod tests {
         let mut params = test_exec_params(HashMap::from([
             ("OVERLAY".to_string(), "overlay".to_string()),
             ("POLICY_SET".to_string(), "overlay-wins".to_string()),
+            (
+                "openai_identity_token_file".to_string(),
+                "/run/identity-token".to_string(),
+            ),
         ]));
         params.env_policy = Some(ExecEnvPolicy {
             inherit: ShellEnvironmentPolicyInherit::None,
             ignore_default_excludes: true,
             exclude: Vec::new(),
-            r#set: HashMap::from([("POLICY_SET".to_string(), "policy".to_string())]),
+            r#set: HashMap::from([
+                ("POLICY_SET".to_string(), "policy".to_string()),
+                ("OpenAI_Federation_Rule_Id".to_string(), "rule".to_string()),
+            ]),
             include_only: Vec::new(),
         });
 
@@ -1511,6 +1807,7 @@ mod tests {
         let decider = network_policy_decider(
             process.process_id.clone(),
             Arc::clone(&backend.inner.requests),
+            Duration::from_secs(30),
             network_policy_shutdown.clone(),
         );
         let config = NetworkProxyConfig {
@@ -1562,11 +1859,7 @@ mod tests {
             .expect("proxy should remain available to a child holding inherited output streams");
         #[cfg(target_os = "windows")]
         {
-            assert!(
-                proxy
-                    .network_proxy_restricting_sid(/*environment_id*/ None)
-                    .is_some()
-            );
+            assert!(proxy.network_proxy_restricting_sid(None).is_some());
             drop(stream);
         }
         #[cfg(not(target_os = "windows"))]
@@ -1617,10 +1910,7 @@ mod tests {
         assert!(closed_response.closed);
         assert!(network_policy_shutdown.is_cancelled());
         #[cfg(target_os = "windows")]
-        assert_eq!(
-            proxy.network_proxy_restricting_sid(/*environment_id*/ None),
-            None
-        );
+        assert_eq!(proxy.network_proxy_restricting_sid(None), None);
         #[cfg(not(target_os = "windows"))]
         assert!(tokio::net::TcpStream::connect(proxy_addr).await.is_err());
         backend.shutdown().await;
@@ -1706,7 +1996,7 @@ mod tests {
                 output_notify: Arc::clone(&output_notify),
                 open_streams: 2,
                 closed: false,
-                metrics: Some(backend.inner.telemetry.process_started()),
+                metrics: Some(backend.inner.telemetry.process_started(&process_id)),
                 termination_requested: false,
                 sandbox: SandboxType::None,
                 sandbox_denied: false,
@@ -1736,6 +2026,7 @@ mod tests {
             exit_rx,
             Arc::clone(&backend.inner),
             output_notify,
+            ProcessTelemetry::default(),
         ));
 
         TestProcess {
@@ -1760,6 +2051,8 @@ mod tests {
             terminator: None,
             writer_handle: None,
             resizer: None,
+            #[cfg(windows)]
+            tty: false,
         })
         .session
     }

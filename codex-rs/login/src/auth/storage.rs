@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::warn;
 
+use super::BedrockAccessKeysAuth;
 use super::BedrockApiKeyAuth;
 use crate::token_data::TokenData;
 use codex_agent_identity::AgentIdentityJwtClaims;
@@ -58,6 +59,9 @@ pub struct AuthDotJson {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bedrock_api_key: Option<BedrockApiKeyAuth>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bedrock_access_keys: Option<BedrockAccessKeysAuth>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -239,20 +243,9 @@ fn compute_store_key(codex_home: &Path) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
     hasher.update(path_str.as_bytes());
     let digest = hasher.finalize();
-    let hex = digest_hex(digest);
+    let hex = format!("{digest:x}");
     let truncated = hex.get(..16).unwrap_or(&hex);
     Ok(format!("cli|{truncated}"))
-}
-
-fn digest_hex(digest: impl AsRef<[u8]>) -> String {
-    use std::fmt::Write as _;
-
-    let digest = digest.as_ref();
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for &byte in digest {
-        let _ = write!(&mut hex, "{byte:02x}");
-    }
-    hex
 }
 
 #[derive(Clone, Debug)]

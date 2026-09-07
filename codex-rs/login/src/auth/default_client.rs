@@ -12,7 +12,6 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 pub use codex_http_client::RequestBuilder as CodexRequestBuilder;
 use codex_terminal_detection::user_agent;
-use codex_utils_version::RELEASE_VERSION;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::header::USER_AGENT;
@@ -105,6 +104,11 @@ pub fn set_default_client_residency_requirement(enforce_residency: Option<Reside
     *guard = enforce_residency;
 }
 
+/// Returns the current process-wide residency requirement.
+pub fn read_default_client_residency_requirement() -> Option<ResidencyRequirement> {
+    REQUIREMENTS_RESIDENCY.read().ok().and_then(|guard| *guard)
+}
+
 pub fn originator() -> Originator {
     if let Ok(guard) = ORIGINATOR.read()
         && let Some(originator) = guard.as_ref()
@@ -158,12 +162,12 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
+    let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(
-        "{}/{} ({} {}; {}) {}",
+        "{}/{build_version} ({} {}; {}) {}",
         originator.value.as_str(),
-        RELEASE_VERSION,
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
@@ -223,6 +227,15 @@ pub fn create_client() -> HttpClient {
     build_default_client(default_http_client_builder())
 }
 
+/// Creates the default client with configured ChatGPT cookies and no sensitive-response logging.
+pub fn create_client_with_chatgpt_cookies(http_client_factory: &HttpClientFactory) -> HttpClient {
+    build_default_client(
+        default_http_client_builder()
+            .with_chatgpt_cookies(http_client_factory)
+            .without_request_logging(),
+    )
+}
+
 /// Create the default HTTP client without request URL or response-header diagnostics.
 ///
 /// This preserves the default client's legacy custom-CA fallback and transport proxy behavior while
@@ -258,27 +271,6 @@ pub fn create_client_for_route(
         request_url,
         route_class,
     )
-}
-
-/// Builds a route-aware model API client that neither redirects nor performs hidden transport
-/// retries with an already-authorized request.
-pub fn create_credential_bound_client_for_route(
-    http_client_factory: &HttpClientFactory,
-    request_url: &str,
-    route_class: ClientRouteClass,
-) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
-    let builder = default_http_client_builder()
-        .without_redirects()
-        .without_retries();
-    if matches!(
-        http_client_factory.outbound_proxy_policy(),
-        OutboundProxyPolicy::ReqwestDefault
-    ) || is_sandboxed()
-    {
-        return Ok(build_default_client(builder));
-    }
-
-    builder.build_respecting_outbound_proxy_policy(http_client_factory, request_url, route_class)
 }
 
 /// Builds the default Codex HTTP client for a concrete outbound route without blocking the

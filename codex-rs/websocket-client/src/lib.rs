@@ -2,6 +2,8 @@
 
 mod dialer;
 
+use std::io;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
@@ -9,8 +11,9 @@ use std::task::Poll;
 
 use codex_http_client::BuildCustomCaTransportError;
 use codex_http_client::HttpClientFactory;
-use codex_http_client::RequestInitiation;
+use codex_http_client::OutboundProxyRoute;
 use codex_http_client::build_rustls_client_config_with_custom_ca;
+use futures::FutureExt;
 use futures::Sink;
 use futures::Stream;
 use rustls::ClientConfig;
@@ -23,6 +26,7 @@ use tokio_tungstenite::tungstenite::Error as WebSocketError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
+use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 /// Connects WebSockets using the outbound proxy policy resolved by application configuration.
@@ -94,41 +98,72 @@ impl WebSocketConnector {
         request: Request,
         config: WebSocketConfig,
     ) -> Result<(WebSocketConnection, Response), WebSocketError> {
-        self.connect_with_initiation(request, config, /*initiation*/ None)
-            .await
-    }
-
-    /// Connects a WebSocket while retaining single-use request authority until the dialer owns
-    /// the immutable handshake request.
-    pub async fn connect_with_initiation(
-        &self,
-        request: Request,
-        config: WebSocketConfig,
-        initiation: Option<RequestInitiation>,
-    ) -> Result<(WebSocketConnection, Response), WebSocketError> {
         let proxy_route = self
             .http_client_factory
             .resolve_proxy_route_async(request.uri().to_string())
             .await
             .map_err(WebSocketError::Io)?;
-        let claim = initiation
-            .map(|initiation| initiation.claim())
-            .transpose()
-            .map_err(|error| WebSocketError::Io(std::io::Error::other(error)))?;
-        let connection = dialer::connect(
+        self.connect_with_route(request, config, proxy_route, /*loopback_direct*/ false)
+            .await
+    }
+
+    /// Connects to a validated loopback destination without consulting proxy settings.
+    ///
+    /// This is limited to loopback destinations because bypassing configured proxy policy is
+    /// only safe for local connections.
+    pub async fn connect_loopback_direct(
+        &self,
+        request: Request,
+        config: WebSocketConfig,
+    ) -> Result<(WebSocketConnection, Response), WebSocketError> {
+        if !is_loopback_destination(request.uri()) {
+            return Err(WebSocketError::Io(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "direct WebSocket connections require a loopback destination",
+            )));
+        }
+        self.connect_with_route(
+            request,
+            config,
+            OutboundProxyRoute::Direct,
+            /*loopback_direct*/ true,
+        )
+        .await
+    }
+
+    async fn connect_with_route(
+        &self,
+        request: Request,
+        config: WebSocketConfig,
+        proxy_route: OutboundProxyRoute,
+        loopback_direct: bool,
+    ) -> Result<(WebSocketConnection, Response), WebSocketError> {
+        let (inner, response) = dialer::connect(
             request,
             config,
             self.tls_config.clone(),
             proxy_route,
             self.tcp_nodelay,
-            false,
-        );
-        if let Some(claim) = claim {
-            claim.acknowledge();
-        }
-        let (inner, response) = connection.await?;
+            loopback_direct,
+        )
+        .boxed()
+        .await?;
         Ok((WebSocketConnection { inner }, response))
     }
+}
+
+fn is_loopback_destination(uri: &Uri) -> bool {
+    let Some(host) = uri.host() else {
+        return false;
+    };
+    let ip_address = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || ip_address
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 /// An established WebSocket independent of its direct, proxy, and TLS transport layers.
@@ -200,3 +235,7 @@ pub(crate) enum ConnectionInner {
 pub(crate) trait AsyncIo: AsyncRead + AsyncWrite + Send + Unpin {}
 
 impl<T> AsyncIo for T where T: AsyncRead + AsyncWrite + Send + Unpin {}
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;

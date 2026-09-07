@@ -182,20 +182,6 @@ pub async fn complete_device_code_login(
     opts: ServerOptions,
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
-    let auth = complete_device_code_login_staged(opts.clone(), device_code).await?;
-    crate::server::persist_auth_dot_json_async(
-        &opts.codex_home,
-        auth,
-        opts.cli_auth_credentials_store_mode,
-        opts.auth_keyring_backend_kind,
-    )
-    .await
-}
-
-pub async fn complete_device_code_login_staged(
-    opts: ServerOptions,
-    device_code: DeviceCode,
-) -> std::io::Result<crate::auth::AuthDotJson> {
     let base_url = opts.issuer.trim_end_matches('/');
     let client = create_raw_auth_client(base_url, &opts.auth_route_config)?;
     let api_base_url = format!("{base_url}/api/accounts");
@@ -233,11 +219,14 @@ pub async fn complete_device_code_login_staged(
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
     }
 
-    crate::server::build_auth_from_tokens_async(
+    crate::server::persist_tokens_async(
+        &opts.codex_home,
         /*api_key*/ None,
         tokens.id_token,
         tokens.access_token,
         tokens.refresh_token,
+        opts.cli_auth_credentials_store_mode,
+        opts.auth_keyring_backend_kind,
     )
     .await
 }

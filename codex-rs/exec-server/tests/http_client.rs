@@ -35,9 +35,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
 use tokio::time::timeout;
-use tokio::time::timeout_at;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -138,6 +136,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
                 headers: vec![HttpHeader {
                     name: "accept".to_string(),
                     value: "text/event-stream".to_string(),
+                    value_env_var: None,
                 }],
                 body: None,
                 timeout_ms: None,
@@ -156,6 +155,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
                 headers: vec![HttpHeader {
                     name: "content-type".to_string(),
                     value: "text/event-stream".to_string(),
+                    value_env_var: None,
                 }],
                 body: Vec::new().into(),
             },
@@ -224,6 +224,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
             headers: vec![HttpHeader {
                 name: "accept".to_string(),
                 value: "text/event-stream".to_string(),
+                value_env_var: None,
             }],
             body: None,
             timeout_ms: None,
@@ -241,6 +242,7 @@ async fn http_response_body_stream_uses_generated_ids_and_receives_ordered_delta
             headers: vec![HttpHeader {
                 name: "content-type".to_string(),
                 value: "text/event-stream".to_string(),
+                value_env_var: None,
             }],
             body: Vec::new().into(),
         }
@@ -851,6 +853,16 @@ async fn http_response_body_stream_enforces_queued_byte_budget() -> Result<()> {
                 stream_response: true,
             }
         );
+        peer.write_response(
+            request_id,
+            HttpRequestResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: Vec::new().into(),
+            },
+        )
+        .await?;
+
         let frame_count = HTTP_BODY_DELTA_BYTE_BUDGET / MAX_HTTP_BODY_DELTA_BYTES + 1;
         for seq in 1..=frame_count as u64 {
             peer.write_body_delta(HttpRequestBodyDeltaNotification {
@@ -862,15 +874,6 @@ async fn http_response_body_stream_enforces_queued_byte_budget() -> Result<()> {
             })
             .await?;
         }
-        peer.write_response(
-            request_id,
-            HttpRequestResponse {
-                status: 200,
-                headers: Vec::new(),
-                body: Vec::new().into(),
-            },
-        )
-        .await?;
 
         let (barrier_request_id, barrier_params) = peer.read_http_request().await?;
         assert_eq!(
@@ -908,10 +911,9 @@ async fn http_response_body_stream_enforces_queued_byte_budget() -> Result<()> {
     })
     .await?;
     let client = server.connect_client().await?;
-    let byte_budget_deadline = Instant::now() + BYTE_BUDGET_TEST_TIMEOUT;
 
-    let (_response, mut body_stream) = timeout_at(
-        byte_budget_deadline,
+    let (_response, mut body_stream) = timeout(
+        TEST_TIMEOUT,
         client.http_request_stream(HttpRequestParams {
             method: "GET".to_string(),
             url: "https://example.test/mcp/byte-budget".to_string(),
@@ -928,8 +930,8 @@ async fn http_response_body_stream_enforces_queued_byte_budget() -> Result<()> {
 
     // Receiving this terminal notification proves the earlier byte-budget
     // notifications have all passed through the ordered notification handler.
-    let (_response, mut barrier_stream) = timeout_at(
-        byte_budget_deadline,
+    let (_response, mut barrier_stream) = timeout(
+        BYTE_BUDGET_TEST_TIMEOUT,
         client.http_request_stream(HttpRequestParams {
             method: "GET".to_string(),
             url: "https://example.test/mcp/byte-budget-barrier".to_string(),
@@ -944,7 +946,7 @@ async fn http_response_body_stream_enforces_queued_byte_budget() -> Result<()> {
     .await
     .context("barrier http/request should return headers")??;
     assert_eq!(
-        timeout_at(byte_budget_deadline, barrier_stream.recv())
+        timeout(TEST_TIMEOUT, barrier_stream.recv())
             .await
             .context("barrier body stream should finish")??,
         None
@@ -952,7 +954,7 @@ async fn http_response_body_stream_enforces_queued_byte_budget() -> Result<()> {
 
     let mut delivered_bytes = 0;
     let error = loop {
-        match timeout_at(byte_budget_deadline, body_stream.recv())
+        match timeout(TEST_TIMEOUT, body_stream.recv())
             .await
             .context("queued body stream should finish")?
         {
@@ -1073,10 +1075,9 @@ async fn http_response_body_streams_share_queued_byte_budget() -> Result<()> {
     })
     .await?;
     let client = server.connect_client().await?;
-    let byte_budget_deadline = Instant::now() + BYTE_BUDGET_TEST_TIMEOUT;
 
-    let (_response, mut first_stream) = timeout_at(
-        byte_budget_deadline,
+    let (_response, mut first_stream) = timeout(
+        TEST_TIMEOUT,
         client.http_request_stream(HttpRequestParams {
             method: "GET".to_string(),
             url: "https://example.test/mcp/shared-budget-one".to_string(),
@@ -1090,8 +1091,8 @@ async fn http_response_body_streams_share_queued_byte_budget() -> Result<()> {
     )
     .await
     .context("first streamed http/request should return headers")??;
-    let (_response, mut second_stream) = timeout_at(
-        byte_budget_deadline,
+    let (_response, mut second_stream) = timeout(
+        TEST_TIMEOUT,
         client.http_request_stream(HttpRequestParams {
             method: "GET".to_string(),
             url: "https://example.test/mcp/shared-budget-two".to_string(),
@@ -1108,8 +1109,8 @@ async fn http_response_body_streams_share_queued_byte_budget() -> Result<()> {
 
     // This terminal notification is ordered after both streams contend for the
     // budget, so neither stream is drained before the overflow is observed.
-    let (_response, mut barrier_stream) = timeout_at(
-        byte_budget_deadline,
+    let (_response, mut barrier_stream) = timeout(
+        BYTE_BUDGET_TEST_TIMEOUT,
         client.http_request_stream(HttpRequestParams {
             method: "GET".to_string(),
             url: "https://example.test/mcp/shared-budget-barrier".to_string(),
@@ -1124,7 +1125,7 @@ async fn http_response_body_streams_share_queued_byte_budget() -> Result<()> {
     .await
     .context("barrier http/request should return headers")??;
     assert_eq!(
-        timeout_at(byte_budget_deadline, barrier_stream.recv())
+        timeout(TEST_TIMEOUT, barrier_stream.recv())
             .await
             .context("barrier body stream should finish")??,
         None
@@ -1132,7 +1133,7 @@ async fn http_response_body_streams_share_queued_byte_budget() -> Result<()> {
 
     let mut failed_stream_bytes = 0;
     let error = loop {
-        match timeout_at(byte_budget_deadline, second_stream.recv())
+        match timeout(TEST_TIMEOUT, second_stream.recv())
             .await
             .context("second body stream should finish")?
         {
@@ -1150,7 +1151,7 @@ async fn http_response_body_streams_share_queued_byte_budget() -> Result<()> {
     );
 
     let mut surviving_stream_bytes = 0;
-    while let Some(chunk) = timeout_at(byte_budget_deadline, first_stream.recv())
+    while let Some(chunk) = timeout(TEST_TIMEOUT, first_stream.recv())
         .await
         .context("first body stream should finish")??
     {
@@ -1439,6 +1440,7 @@ impl JsonRpcPeer {
             request.id,
             InitializeResponse {
                 session_id: "session-1".to_string(),
+                environment_info: None,
             },
         )
         .await?;

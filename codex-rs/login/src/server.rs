@@ -21,13 +21,14 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
-use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use crate::auth::AuthDotJson;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
+use crate::callback_params::LoginCallbackResult;
+use crate::callback_params::login_callback_result_from_state;
 use crate::default_client::create_raw_auth_client;
 use crate::default_client::originator;
 use crate::outbound_proxy::AuthRouteConfig;
@@ -112,28 +113,23 @@ impl ServerOptions {
 pub struct LoginServer {
     pub auth_url: String,
     pub actual_port: u16,
-    server_handle: tokio::task::JoinHandle<io::Result<()>>,
+    server_handle: tokio::task::JoinHandle<io::Result<LoginCallbackResult>>,
     shutdown_handle: ShutdownHandle,
-    staged_auth: Arc<Mutex<Option<AuthDotJson>>>,
 }
 
 impl LoginServer {
     /// Waits for the login callback loop to finish.
     pub async fn block_until_done(self) -> io::Result<()> {
+        self.block_until_done_with_callback_result()
+            .await
+            .map(|_| ())
+    }
+
+    /// Waits for login to finish and returns allowlisted callback metadata.
+    pub async fn block_until_done_with_callback_result(self) -> io::Result<LoginCallbackResult> {
         self.server_handle
             .await
             .map_err(|err| io::Error::other(format!("login server thread panicked: {err:?}")))?
-    }
-
-    pub async fn block_until_staged(self) -> io::Result<AuthDotJson> {
-        self.server_handle
-            .await
-            .map_err(|err| io::Error::other(format!("login server thread panicked: {err:?}")))??;
-        self.staged_auth
-            .lock()
-            .map_err(|_| io::Error::other("staged login auth lock is poisoned"))?
-            .take()
-            .ok_or_else(|| io::Error::other("login completed without staged credentials"))
     }
 
     /// Requests shutdown of the callback server.
@@ -162,10 +158,6 @@ impl ShutdownHandle {
 
 /// Starts a local callback server and returns the browser auth URL.
 pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
-    run_login_server_inner(opts, /*defer_persistence*/ false)
-}
-
-fn run_login_server_inner(opts: ServerOptions, defer_persistence: bool) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
@@ -214,12 +206,11 @@ fn run_login_server_inner(opts: ServerOptions, defer_persistence: bool) -> io::R
     };
 
     let shutdown_notify = Arc::new(tokio::sync::Notify::new());
-    let staged_auth = Arc::new(Mutex::new(None));
     let server_handle = {
         let shutdown_notify = shutdown_notify.clone();
         let server = server;
-        let staged_auth = Arc::clone(&staged_auth);
         tokio::spawn(async move {
+            let mut callback_result = LoginCallbackResult::default();
             let result = loop {
                 tokio::select! {
                     _ = shutdown_notify.notified() => {
@@ -239,8 +230,6 @@ fn run_login_server_inner(opts: ServerOptions, defer_persistence: bool) -> io::R
                                 &pkce,
                                 actual_port,
                                 &state,
-                                &staged_auth,
-                                defer_persistence,
                             )
                             .await;
 
@@ -249,7 +238,8 @@ fn run_login_server_inner(opts: ServerOptions, defer_persistence: bool) -> io::R
                                 let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
                                 None
                             }
-                            HandledRequest::RedirectWithHeader(header) => {
+                            HandledRequest::RedirectWithHeader { header, result } => {
+                                callback_result = result;
                                 let redirect = Response::empty(302).with_header(header);
                                 let _ = tokio::task::spawn_blocking(move || req.respond(redirect)).await;
                                 None
@@ -268,9 +258,9 @@ fn run_login_server_inner(opts: ServerOptions, defer_persistence: bool) -> io::R
                                     )
                                 })
                                 .await;
-                                Some(result)
+                                Some(result.map(|()| callback_result))
                             }
-                            HandledRequest::RedirectAndExit(header) => {
+                            HandledRequest::RedirectAndExit { header, result } => {
                                 match tokio::task::spawn_blocking(move || {
                                     send_response_with_disconnect(
                                         req,
@@ -289,7 +279,7 @@ fn run_login_server_inner(opts: ServerOptions, defer_persistence: bool) -> io::R
                                         warn!("hosted login redirect task failed: {err}");
                                     }
                                 }
-                                Some(Ok(()))
+                                Some(Ok(result))
                             }
                         };
 
@@ -312,19 +302,20 @@ fn run_login_server_inner(opts: ServerOptions, defer_persistence: bool) -> io::R
         actual_port,
         server_handle,
         shutdown_handle: ShutdownHandle { shutdown_notify },
-        staged_auth,
     })
-}
-
-pub fn run_login_server_staged(opts: ServerOptions) -> io::Result<LoginServer> {
-    run_login_server_inner(opts, /*defer_persistence*/ true)
 }
 
 /// Internal callback handling outcome.
 enum HandledRequest {
     Response(Response<Cursor<Vec<u8>>>),
-    RedirectWithHeader(Header),
-    RedirectAndExit(Header),
+    RedirectWithHeader {
+        header: Header,
+        result: LoginCallbackResult,
+    },
+    RedirectAndExit {
+        header: Header,
+        result: LoginCallbackResult,
+    },
     ResponseAndExit {
         headers: Vec<Header>,
         body: Vec<u8>,
@@ -332,11 +323,6 @@ enum HandledRequest {
     },
 }
 
-// Keep these security-sensitive callback inputs explicit: each is independently validated or
-// controls a distinct auth, redirect, PKCE, persistence, or lifecycle boundary. Grouping them
-// into a context object would obscure those boundaries without changing the flow, so this narrow
-// allowance documents the intentional shape rather than relaxing the lint for the module.
-#[allow(clippy::too_many_arguments)]
 async fn process_request(
     url_raw: &str,
     opts: &ServerOptions,
@@ -344,8 +330,6 @@ async fn process_request(
     pkce: &PkceCodes,
     actual_port: u16,
     state: &str,
-    staged_auth: &Arc<Mutex<Option<AuthDotJson>>>,
-    defer_persistence: bool,
 ) -> HandledRequest {
     let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
         Ok(u) => u,
@@ -365,7 +349,10 @@ async fn process_request(
             let has_code = params.get("code").is_some_and(|code| !code.is_empty());
             let has_state = params.get("state").is_some_and(|state| !state.is_empty());
             let has_error = params.get("error").is_some_and(|error| !error.is_empty());
-            let state_valid = params.get("state").map(String::as_str) == Some(state);
+            let callback_result = params
+                .get("state")
+                .and_then(|callback_state| login_callback_result_from_state(callback_state, state));
+            let state_valid = callback_result.is_some();
             info!(
                 path = %path,
                 has_code,
@@ -413,6 +400,7 @@ async fn process_request(
                     );
                 }
             };
+            let callback_result = callback_result.unwrap_or_default();
 
             match exchange_code_for_tokens(
                 &opts.issuer,
@@ -446,40 +434,17 @@ async fn process_request(
                     )
                     .await
                     .ok();
-                    let staged = match build_auth_from_tokens_async(
+                    if let Err(err) = persist_tokens_async(
+                        &opts.codex_home,
                         api_key.clone(),
                         tokens.id_token.clone(),
                         tokens.access_token.clone(),
                         tokens.refresh_token.clone(),
+                        opts.cli_auth_credentials_store_mode,
+                        opts.auth_keyring_backend_kind,
                     )
                     .await
                     {
-                        Ok(auth) => auth,
-                        Err(err) => {
-                            eprintln!("Persist error: {err}");
-                            return login_error_response(
-                                "Sign-in completed but credentials could not be saved locally.",
-                                io::ErrorKind::Other,
-                                Some("persist_failed"),
-                                Some(&err.to_string()),
-                            );
-                        }
-                    };
-                    let persist_result = if defer_persistence {
-                        staged_auth
-                            .lock()
-                            .map_err(|_| io::Error::other("staged login auth lock is poisoned"))
-                            .map(|mut slot| *slot = Some(staged))
-                    } else {
-                        persist_auth_dot_json_async(
-                            &opts.codex_home,
-                            staged,
-                            opts.cli_auth_credentials_store_mode,
-                            opts.auth_keyring_backend_kind,
-                        )
-                        .await
-                    };
-                    if let Err(err) = persist_result {
                         eprintln!("Persist error: {err}");
                         return login_error_response(
                             "Sign-in completed but credentials could not be saved locally.",
@@ -502,12 +467,14 @@ async fn process_request(
                     };
                     match tiny_http::Header::from_bytes(&b"Location"[..], url.as_bytes()) {
                         Ok(header) => match redirect {
-                            LoginSuccessRedirect::Local(_) => {
-                                HandledRequest::RedirectWithHeader(header)
-                            }
-                            LoginSuccessRedirect::Hosted(_) => {
-                                HandledRequest::RedirectAndExit(header)
-                            }
+                            LoginSuccessRedirect::Local(_) => HandledRequest::RedirectWithHeader {
+                                header,
+                                result: callback_result,
+                            },
+                            LoginSuccessRedirect::Hosted(_) => HandledRequest::RedirectAndExit {
+                                header,
+                                result: callback_result,
+                            },
                         },
                         Err(_) => login_error_response(
                             "Sign-in completed but redirecting back to Codex failed.",
@@ -915,12 +882,18 @@ pub(crate) async fn exchange_code_for_tokens(
     })
 }
 
-pub(crate) async fn build_auth_from_tokens_async(
+/// Persists exchanged credentials using the configured local auth store.
+pub(crate) async fn persist_tokens_async(
+    codex_home: &Path,
     api_key: Option<String>,
     id_token: String,
     access_token: String,
     refresh_token: String,
-) -> io::Result<AuthDotJson> {
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+) -> io::Result<()> {
+    // Reuse existing synchronous logic but run it off the async runtime.
+    let codex_home = codex_home.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let mut tokens = TokenData {
             id_token: parse_chatgpt_jwt_claims(&id_token).map_err(io::Error::other)?,
@@ -934,7 +907,7 @@ pub(crate) async fn build_auth_from_tokens_async(
         {
             tokens.account_id = Some(acc.to_string());
         }
-        Ok(AuthDotJson {
+        let auth = AuthDotJson {
             auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: api_key,
             tokens: Some(tokens),
@@ -942,20 +915,8 @@ pub(crate) async fn build_auth_from_tokens_async(
             agent_identity: None,
             personal_access_token: None,
             bedrock_api_key: None,
-        })
-    })
-    .await
-    .map_err(|e| io::Error::other(format!("credential staging task failed: {e}")))?
-}
-
-pub(crate) async fn persist_auth_dot_json_async(
-    codex_home: &Path,
-    auth: AuthDotJson,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-    keyring_backend_kind: AuthKeyringBackendKind,
-) -> io::Result<()> {
-    let codex_home = codex_home.to_path_buf();
-    tokio::task::spawn_blocking(move || {
+            bedrock_access_keys: None,
+        };
         save_auth(
             &codex_home,
             &auth,

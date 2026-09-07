@@ -9,6 +9,8 @@ use std::time::Duration;
 use codex_exec_server::CODEX_ARG0_EXEC_HELPER_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_exec_server::ExecServerRuntimePaths;
+use codex_exec_server::ExecServerTelemetry;
+use codex_exec_server::RequestDispatchMode;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
@@ -161,10 +163,21 @@ fn maybe_run_exec_server_from_test_binary(guard: Option<&TestBinaryDispatchGuard
         eprintln!("expected listen URL");
         std::process::exit(1);
     };
-    if args.next().is_some() {
-        eprintln!("unexpected extra arguments");
-        std::process::exit(1);
-    }
+    let remaining_args = args.collect::<Vec<_>>();
+    let request_dispatch_mode = match remaining_args.as_slice() {
+        [] => RequestDispatchMode::Inline,
+        [flag, value] if flag == "--concurrent-requests" => match value.parse() {
+            Ok(mode) => mode,
+            Err(error) => {
+                eprintln!("invalid concurrent request count: {error}");
+                std::process::exit(1);
+            }
+        },
+        args => {
+            eprintln!("unexpected exec-server arguments: {args:?}");
+            std::process::exit(1);
+        }
+    };
 
     let current_exe = match env::current_exe() {
         Ok(current_exe) => current_exe,
@@ -209,11 +222,32 @@ fn maybe_run_exec_server_from_test_binary(guard: Option<&TestBinaryDispatchGuard
             std::process::exit(1);
         }
     };
-    let exit_code = match runtime.block_on(codex_exec_server::run_main(
-        &listen_url,
-        runtime_paths,
-        http_client_factory,
-    )) {
+    let exit_code = match runtime.block_on(async {
+        #[cfg(target_os = "macos")]
+        let runtime_paths = {
+            let home = codex_utils_home_dir::find_codex_home()?;
+            let config = codex_config::loader::load_config_layers_state(
+                &codex_exec_server::LocalFileSystem::unsandboxed(),
+                home.as_path(),
+                /*cwd*/ None,
+                &[],
+                codex_config::LoaderOverrides::default(),
+                &codex_config::NoopThreadConfigLoader,
+            )
+            .await?;
+            runtime_paths.with_allowed_symlinked_codex_home(
+                codex_config::allowed_symlinked_codex_home(&config, &home),
+            )
+        };
+        codex_exec_server::run_main_with_telemetry(
+            &listen_url,
+            runtime_paths,
+            ExecServerTelemetry::default(),
+            http_client_factory,
+            request_dispatch_mode,
+        )
+        .await
+    }) {
         Ok(()) => 0,
         Err(error) => {
             eprintln!("exec-server failed: {error}");
