@@ -243,9 +243,20 @@ fn compute_store_key(codex_home: &Path) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
     hasher.update(path_str.as_bytes());
     let digest = hasher.finalize();
-    let hex = format!("{digest:x}");
+    let hex = digest_hex(digest);
     let truncated = hex.get(..16).unwrap_or(&hex);
     Ok(format!("cli|{truncated}"))
+}
+
+fn digest_hex(digest: impl AsRef<[u8]>) -> String {
+    use std::fmt::Write as _;
+
+    let digest = digest.as_ref();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for &byte in digest {
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    hex
 }
 
 #[derive(Clone, Debug)]
