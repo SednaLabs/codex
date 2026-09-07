@@ -9,6 +9,9 @@ use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::default_client::RESIDENCY_HEADER_NAME;
+use codex_login::default_client::ResidencyRequirement;
+use codex_login::default_client::read_default_client_residency_requirement;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -16,6 +19,7 @@ use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
+use http::HeaderValue;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::ProviderAuthScope;
@@ -24,6 +28,15 @@ use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use crate::models_endpoint::OpenAiModelsEndpoint;
+
+pub(crate) fn enforce_managed_residency(provider: &mut Provider) {
+    if let Some(requirement) = read_default_client_residency_requirement() {
+        let value = match requirement {
+            ResidencyRequirement::Us => HeaderValue::from_static("us"),
+        };
+        provider.headers.insert(RESIDENCY_HEADER_NAME, value);
+    }
+}
 
 /// Optional provider-backed features that Codex may expose at runtime.
 ///
@@ -165,8 +178,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
         Box::pin(async move {
             let auth = self.auth().await;
-            self.info()
-                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
+            let mut provider = self
+                .info()
+                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+            enforce_managed_residency(&mut provider);
+            Ok(provider)
         })
     }
 
@@ -351,7 +367,7 @@ impl ModelProvider for ConfiguredModelProvider {
                 })
                 .map(|auth| match &auth {
                     CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
-                    CodexAuth::BedrockApiKey(_) => {
+                    CodexAuth::BedrockApiKey(_) | CodexAuth::BedrockAccessKeys(_) => {
                         Err(ProviderAccountError::UnsupportedBedrockApiKeyAuth)
                     }
                     CodexAuth::Chatgpt(_)
@@ -609,6 +625,7 @@ mod tests {
             ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
                 profile: Some("codex-bedrock".to_string()),
                 region: None,
+                auth_refresh: None,
             })),
             Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
                 "openai-api-key",

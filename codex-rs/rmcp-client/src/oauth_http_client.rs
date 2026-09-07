@@ -79,6 +79,7 @@ impl OAuthHttpClientAdapter {
                         .to_str()
                         .map_err(|error| OAuthHttpClientError::new(error.to_string()))?
                         .to_string(),
+                    value_env_var: None,
                 })
             })
             .collect::<Result<Vec<_>, OAuthHttpClientError>>()?;

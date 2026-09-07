@@ -506,6 +506,7 @@ impl ExecutorStdioServerLauncher {
         // rmcp write JSON-RPC requests after the process starts.
         let started = exec_backend
             .start(ExecParams {
+                metadata: Default::default(),
                 process_id,
                 argv,
                 cwd,
@@ -518,6 +519,7 @@ impl ExecutorStdioServerLauncher {
                 enforce_managed_network: false,
                 managed_network: None,
                 network_proxy: None,
+                shell_snapshot: None,
             })
             .await
             .map_err(io::Error::other)?;

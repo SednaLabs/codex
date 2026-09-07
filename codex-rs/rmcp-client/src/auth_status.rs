@@ -384,12 +384,14 @@ fn oauth_discovery_protocol_headers(default_headers: &HeaderMap) -> Result<Vec<H
             Ok(HttpHeader {
                 name: name.as_str().to_string(),
                 value: value.to_str()?.to_string(),
+                value_env_var: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
     headers.push(HttpHeader {
         name: OAUTH_DISCOVERY_HEADER.to_string(),
         value: OAUTH_DISCOVERY_VERSION.to_string(),
+        value_env_var: None,
     });
     Ok(headers)
 }

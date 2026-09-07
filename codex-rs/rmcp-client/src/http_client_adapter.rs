@@ -501,6 +501,7 @@ fn protocol_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
             Some(HttpHeader {
                 name: name.as_str().to_string(),
                 value: value.to_str().ok()?.to_string(),
+                value_env_var: None,
             })
         })
         .collect()

@@ -58,6 +58,7 @@ impl AmazonBedrockModelProvider {
             .unwrap_or(ModelProviderAwsAuthInfo {
                 profile: None,
                 region: None,
+                auth_refresh: None,
             });
         Self {
             info: provider_info,
@@ -72,7 +73,8 @@ impl AmazonBedrockModelProvider {
             .and_then(|auth_manager| auth_manager.auth_cached())
             .and_then(|auth| match auth {
                 CodexAuth::BedrockApiKey(auth) => Some(auth),
-                CodexAuth::ApiKey(_)
+                CodexAuth::BedrockAccessKeys(_)
+                | CodexAuth::ApiKey(_)
                 | CodexAuth::Chatgpt(_)
                 | CodexAuth::ChatgptAuthTokens(_)
                 | CodexAuth::Headers(_)
@@ -289,6 +291,7 @@ mod tests {
         provider_info.aws = Some(ModelProviderAwsAuthInfo {
             profile: Some("aws-profile-that-should-not-be-loaded".to_string()),
             region: Some("us-west-2".to_string()),
+            auth_refresh: None,
         });
         let provider = AmazonBedrockModelProvider::new(provider_info, /*auth_manager*/ None);
 
@@ -328,6 +331,7 @@ mod tests {
             ModelProviderInfo::create_amazon_bedrock_provider(Some(ModelProviderAwsAuthInfo {
                 profile: Some("aws-profile-that-should-not-be-loaded".to_string()),
                 region: Some("us-west-2".to_string()),
+                auth_refresh: None,
             })),
             Some(auth_manager.clone()),
         );
