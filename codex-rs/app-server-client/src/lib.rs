@@ -1331,6 +1331,21 @@ mod tests {
         )
     }
 
+    fn remote_thread_closed_notification(thread_id: &str) -> ServerNotification {
+        ServerNotification::ThreadClosed(codex_app_server_protocol::ThreadClosedNotification {
+            thread_id: thread_id.to_string(),
+        })
+    }
+
+    fn remote_get_account_request(request_id: i64) -> ClientRequest {
+        ClientRequest::GetAccount {
+            request_id: RequestId::Integer(request_id),
+            params: codex_app_server_protocol::GetAccountParams {
+                refresh_token: false,
+            },
+        }
+    }
+
     fn agent_message_delta_notification(delta: &str) -> ServerNotification {
         ServerNotification::AgentMessageDelta(
             codex_app_server_protocol::AgentMessageDeltaNotification {
@@ -2632,6 +2647,97 @@ mod tests {
             .await
             .expect("disconnect event should arrive");
         assert!(matches!(event, AppServerEvent::Disconnected { .. }));
+    }
+
+    #[tokio::test]
+    async fn remote_pending_required_event_keeps_request_control_responsive() {
+        let (done_tx, done_rx) = oneshot::channel();
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            for thread_id in ["queued", "pending"] {
+                let notification = remote_thread_closed_notification(thread_id);
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Notification(
+                        serde_json::from_value(serde_json::to_value(notification).unwrap())
+                            .unwrap(),
+                    ),
+                )
+                .await;
+            }
+            let request = read_websocket_message(&mut websocket).await;
+            let JSONRPCMessage::Request(request) = request else {
+                panic!("expected account request");
+            };
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(GetAccountResponse {
+                        account: None,
+                        requires_openai_auth: false,
+                    })
+                    .unwrap(),
+                }),
+            )
+            .await;
+            let _ = done_rx.await;
+        })
+        .await;
+        let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            channel_capacity: 1,
+            ..test_remote_connect_args(websocket_url)
+        })
+        .await
+        .unwrap();
+        timeout(Duration::from_secs(1), client._test_pending_required_event.notified())
+            .await
+            .expect("second required event should enter custody");
+        let request = timeout(
+            Duration::from_secs(1),
+            client.request_typed::<GetAccountResponse>(remote_get_account_request(92)),
+        )
+        .await
+        .expect("request control should remain responsive")
+        .unwrap();
+        assert!(!request.requires_openai_auth);
+        assert!(matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued"));
+        assert!(matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "pending"));
+        done_tx.send(()).unwrap();
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remote_shutdown_preserves_pending_required_event_order() {
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            for thread_id in ["queued", "pending"] {
+                let notification = remote_thread_closed_notification(thread_id);
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Notification(
+                        serde_json::from_value(serde_json::to_value(notification).unwrap())
+                            .unwrap(),
+                    ),
+                )
+                .await;
+            }
+            let _ = websocket.next().await;
+        })
+        .await;
+        let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            channel_capacity: 1,
+            ..test_remote_connect_args(websocket_url)
+        })
+        .await
+        .unwrap();
+        timeout(Duration::from_secs(1), client._test_pending_required_event.notified())
+            .await
+            .expect("second required event should enter custody");
+        timeout(Duration::from_secs(1), client.shutdown())
+            .await
+            .expect("shutdown should not wait for pending event")
+            .unwrap();
     }
 
     #[test]

@@ -254,6 +254,7 @@ impl RemoteAppServerClient {
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let mut stream = stream;
+        let mut inbound_server_request_ledger = InboundServerRequestLedger::new(channel_capacity);
         let (pending_events, server_version, codex_home) = initialize_remote_connection(
             &mut stream,
             &endpoint,
