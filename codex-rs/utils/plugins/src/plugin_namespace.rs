@@ -1,6 +1,8 @@
 //! Resolve plugin namespace from skill file paths by walking ancestors for `plugin.json`.
 
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_exec_server_protocol::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -63,7 +65,10 @@ pub fn plugin_namespace_for_root_uri<'a>(
         let mut manifest_path = None;
         for relative_path in DISCOVERABLE_PLUGIN_MANIFEST_PATHS {
             let candidate = plugin_root.join(relative_path).ok()?;
-            match fs.get_metadata(&candidate, /*sandbox*/ None).await {
+            match fs
+                .get_metadata(&candidate, GetMetadataOptions::default(), /*sandbox*/ None)
+                .await
+            {
                 Ok(metadata) if metadata.is_file => {
                     manifest_path = Some(candidate);
                     break;
@@ -72,7 +77,11 @@ pub fn plugin_namespace_for_root_uri<'a>(
             }
         }
         let contents = fs
-            .read_file_text(&manifest_path?, /*sandbox*/ None)
+            .read_file_text(
+                &manifest_path?,
+                ReadFileOptions::default(),
+                /*sandbox*/ None,
+            )
             .await
             .ok()?;
         let RawPluginManifestName { name: raw_name } = serde_json::from_str(&contents).ok()?;
