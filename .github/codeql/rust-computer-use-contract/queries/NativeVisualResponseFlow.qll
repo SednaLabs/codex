@@ -69,8 +69,8 @@ predicate responseVariableExpr(Expr expr, Variable variable) {
  */
 predicate localValueFlow(Expr sourceExpr, Expr sinkExpr) {
   exists(DataFlow::ExprNode source, DataFlow::ExprNode sink |
-    source.asExpr().getExpr() = sourceExpr and
-    sink.asExpr().getExpr() = sinkExpr and
+    source.asExpr() = sourceExpr and
+    sink.asExpr() = sinkExpr and
     DataFlow::localFlow(source, sink)
   )
 }
@@ -127,7 +127,7 @@ predicate blockNodeOrder(BasicBlock block, CfgNode earlier, CfgNode later) {
   )
 }
 
-predicate guardDominatesExit(Function function, Call guard, Expr exitExpr) {
+predicate guardDominatesExit(Call guard, Expr exitExpr) {
   exists(CfgNode guardNode, CfgNode exitNode, BasicBlock guardBlock, BasicBlock exitBlock |
     exists(CallCfgNode callNode |
       callNode.getCall() = guard and
@@ -145,8 +145,21 @@ predicate guardDominatesExit(Function function, Call guard, Expr exitExpr) {
 
 /** Calls whose contract already returns `success: false`; they are safe. */
 predicate definitelyFailedResponse(Expr responseExpr) {
-  responseExpr.toString().regexpMatch(
-    "(?s).*\\b(action_failure_response|failed_response)\\s*\\(.*"
+  exists(Call call |
+    (
+      call = responseExpr or
+      exists(AwaitExpr await |
+        await = responseExpr and
+        call = await.getExpr()
+      )
+    ) and
+    exists(Function target |
+      target = call.getStaticTarget() and
+      (
+        target.getName().getText() = "action_failure_response" or
+        target.getName().getText() = "failed_response"
+      )
+    )
   )
 }
 
@@ -156,6 +169,41 @@ predicate definitelyFailedResponse(Expr responseExpr) {
  * catches image removal and success restoration while leaving metadata-only
  * edits alone.
  */
+predicate nodeBefore(CfgNode earlier, CfgNode later) {
+  exists(BasicBlock earlierBlock, BasicBlock laterBlock |
+    earlierBlock.getANode() = earlier and
+    laterBlock.getANode() = later and
+    (
+      earlierBlock.strictlyDominates(laterBlock) or
+      earlierBlock = laterBlock and blockNodeOrder(earlierBlock, earlier, later)
+    )
+  )
+}
+
+predicate cfgNodeBetween(Call guard, AssignmentExpr assignment, Expr exitExpr) {
+  exists(CallCfgNode guardNode, CfgNode writeNode, CfgNode exitNode |
+    guardNode.getCall() = guard and
+    cfgNodeForExpr(assignment, writeNode) and
+    cfgNodeForExpr(exitExpr, exitNode) and
+    nodeBefore(guardNode, writeNode) and
+    nodeBefore(writeNode, exitNode)
+  )
+}
+
+predicate responseFieldWrite(AssignmentExpr assignment, Variable variable) {
+  exists(FieldExpr field |
+    assignment.getLhs() = field and
+    field.hasContainer() and
+    field.hasIdentifier() and
+    responseVariableExpr(field.getContainer(), variable) and
+    (
+      field.getIdentifier().getText() = "content_items" or
+      field.getIdentifier().getText() = "success" or
+      field.getIdentifier().getText() = "error"
+    )
+  )
+}
+
 predicate responseWriteAfterGuard(
   Function function,
   Call guard,
@@ -165,16 +213,13 @@ predicate responseWriteAfterGuard(
   exists(Variable variable, AssignmentExpr assignment |
     responseVariableExpr(responseExpr, variable) and
     assignment.getEnclosingCallable() = function and
-    assignment.getLocation().getStartLine() > guard.getLocation().getStartLine() and
-    assignment.getLocation().getStartLine() < exitExpr.getLocation().getStartLine() and
+    cfgNodeBetween(guard, assignment, exitExpr) and
     (
       exists(VariableWriteAccess write |
         write = assignment.getAWriteAccess() and
         write.getVariable() = variable
       ) or
-      assignment.toString().regexpMatch(
-        "(?s).*\\b" + variable.getText() + "\\.(content_items|success|error)\\s*=.*"
-      )
+      responseFieldWrite(assignment, variable)
     )
   )
 }
@@ -191,13 +236,19 @@ predicate guardBodyDowngrades(Call guard) {
       // production paths must satisfy the body-backed helper check below.
       not productionVisualProviderFile(target.getFile()) or
       (
-        exists(AssignmentExpr successWrite |
+        exists(AssignmentExpr successWrite, FieldExpr successField, BooleanLiteralExpr falseValue |
           successWrite.getEnclosingCallable() = target and
-          successWrite.toString().regexpMatch("(?s).*\\.success\\s*=\\s*false.*")
+          successWrite.getLhs() = successField and
+          successField.hasIdentifier() and
+          successField.getIdentifier().getText() = "success" and
+          falseValue = successWrite.getRhs() and
+          falseValue.getTextValue() = "false"
         ) and
-        exists(AssignmentExpr errorWrite |
+        exists(AssignmentExpr errorWrite, FieldExpr errorField |
           errorWrite.getEnclosingCallable() = target and
-          errorWrite.toString().regexpMatch("(?s).*\\.error\\s*=.*")
+          errorWrite.getLhs() = errorField and
+          errorField.hasIdentifier() and
+          errorField.getIdentifier().getText() = "error"
         )
       )
     )
@@ -212,7 +263,7 @@ predicate responseVersionGuarded(
   exists(Call guard |
     visualGuardCall(guard, function) and
     guardUsesReturnedResponse(guard, responseExpr) and
-    guardDominatesExit(function, guard, exitExpr) and
+    guardDominatesExit(guard, exitExpr) and
     not responseWriteAfterGuard(function, guard, exitExpr, responseExpr) and
     guardBodyDowngrades(guard)
   )
