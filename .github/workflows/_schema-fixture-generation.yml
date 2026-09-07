@@ -1,0 +1,99 @@
+name: _schema-fixture-generation
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact candidate commit SHA to check out
+        required: true
+        type: string
+      base:
+        description: Exact base commit SHA used for the generated-file diff
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: Generate app-server schema fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Verify exact candidate and base inputs
+        shell: bash
+        env:
+          CANDIDATE_REF: ${{ inputs.ref }}
+          BASE_REF: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_REF" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "$BASE_REF" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$(printf '%s' "$CANDIDATE_REF" | tr '[:upper:]' '[:lower:]')"
+          git cat-file -e "$BASE_REF^{commit}"
+
+      - name: Generate schema fixtures
+        shell: bash
+        run: just write-app-server-schema
+
+      - name: Collect generated schema changes
+        shell: bash
+        env:
+          CANDIDATE_REF: ${{ inputs.ref }}
+          BASE_REF: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          schema_root='codex-rs/app-server-protocol/schema'
+          artifact_root="$RUNNER_TEMP/schema-fixture-artifact"
+          rm -rf "$artifact_root"
+          mkdir -p "$artifact_root"
+
+          mapfile -t changed_paths < <(
+            {
+              git diff --name-only "$BASE_REF" -- "$schema_root"
+              git ls-files --others --exclude-standard -- "$schema_root"
+            } | sort -u
+          )
+          mapfile -t all_changes < <(git status --porcelain=v1 | sed -E 's/^.. //')
+          for path in "${all_changes[@]}"; do
+            [[ "$path" == "$schema_root"/* ]] || {
+              echo "unexpected generated change outside schema subtree: $path" >&2
+              exit 1
+            }
+          done
+          ((${#changed_paths[@]} > 0)) || {
+            echo 'schema generation produced no changed files' >&2
+            exit 1
+          }
+
+          for path in "${changed_paths[@]}"; do
+            [[ "$path" == "$schema_root"/* ]] || {
+              echo "artifact path escaped schema subtree: $path" >&2
+              exit 1
+            }
+            mkdir -p "$artifact_root/$(dirname "$path")"
+            cp -- "$path" "$artifact_root/$path"
+          done
+
+          {
+            printf 'repository=%s\n' "$(git remote get-url origin)"
+            printf 'head=%s\n' "$(git rev-parse HEAD)"
+            printf 'base=%s\n' "$(git rev-parse "$BASE_REF^{commit}")"
+            printf 'command=just write-app-server-schema\n'
+            printf 'paths:\n'
+            printf '  %s\n' "${changed_paths[@]}"
+          } > "$artifact_root/manifest.txt"
+
+      - name: Upload generated schema fixtures
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: app-server-schema-fixtures-${{ inputs.ref }}
+          path: ${{ runner.temp }}/schema-fixture-artifact
+          if-no-files-found: error
