@@ -1,16 +1,9 @@
 name: _schema-fixture-generation
 
 on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: Exact candidate commit SHA to check out
-        required: true
-        type: string
-      base:
-        description: Exact base commit SHA used for the generated-file diff
-        required: true
-        type: string
+  push:
+    branches:
+      - repair/w13867-mailbox-visibility
 
 permissions:
   contents: read
@@ -20,18 +13,18 @@ jobs:
     name: Generate app-server schema fixtures
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      CANDIDATE_REF: e3b9896a806e94d744d681be9e4e38eb5c41df7e
+      BASE_REF: 186e29dbfe35a6124fcedf4e1dbc11a4888caa99
     steps:
       - name: Check out exact candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ env.CANDIDATE_REF }}
           fetch-depth: 0
 
       - name: Verify exact candidate and base inputs
         shell: bash
-        env:
-          CANDIDATE_REF: ${{ inputs.ref }}
-          BASE_REF: ${{ inputs.base }}
         run: |
           set -euo pipefail
           [[ "$CANDIDATE_REF" =~ ^[0-9a-fA-F]{40}$ ]]
@@ -45,9 +38,6 @@ jobs:
 
       - name: Collect generated schema changes
         shell: bash
-        env:
-          CANDIDATE_REF: ${{ inputs.ref }}
-          BASE_REF: ${{ inputs.base }}
         run: |
           set -euo pipefail
           schema_root='codex-rs/app-server-protocol/schema'
@@ -94,6 +84,6 @@ jobs:
       - name: Upload generated schema fixtures
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: app-server-schema-fixtures-${{ inputs.ref }}
+          name: app-server-schema-fixtures-${{ env.CANDIDATE_REF }}
           path: ${{ runner.temp }}/schema-fixture-artifact
           if-no-files-found: error
