@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "8a870731d9421d17fe9f6d141854e45ab651bef9"
+PUSH_PREDECESSOR_SHA = "7f44b7362f7bd17cc2792b9c68c0baa7b935e004"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -82,6 +82,12 @@ COMMON_STAGED_PATHS_SHA256 = "90b44134bb538a07fa03dfd674e96f08de4ba04a40252f6dc9
 BUILD_SOURCE_SHA = "b58f58149a0f86a2919847a519c0c594e3b68f57"
 BUILD_SOURCE_TREE = "c5a046c80730ea3107bea553cd2fad1701c819f6"
 BUILD_SOURCE_PARENT = "7dc8818d8cf5b27ddbba9776bc035feb30846408"
+DIAGNOSTIC_PREDECESSOR_SOURCE_SHA = "b593ff0ba02ff08d0c44f6db95840c6cc59f0598"
+DIAGNOSTIC_PREDECESSOR_SOURCE_TREE = "8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47"
+DIAGNOSTIC_PREDECESSOR_SOURCE_PARENT = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
+TARGET_HELPER_SHA = "7f44b7362f7bd17cc2792b9c68c0baa7b935e004"
+TARGET_HELPER_TREE = "64b0a741da59614121e0b82624ce35ad2df2bad6"
+TARGET_HELPER_PARENT = "8a870731d9421d17fe9f6d141854e45ab651bef9"
 BUILD_SOURCE_BRANCH = "worker/w13825-build-source-authoring-20260907"
 RUNTIME_SURFACES_PREIMAGE_RECEIPT_SHA256 = "ecd4e62e6868a9ecbaa2e455645ca1f2a9093d373f25148c7a263f0169bf288d"
 RUNTIME_SURFACES_PREIMAGE_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
@@ -1053,6 +1059,8 @@ def configure_runtime_source_contract(repo: pathlib.Path, receipt_path: pathlib.
     require(receipt.get("source_sha") == BUILD_SOURCE_SHA, "runtime-surface receipt source SHA mismatch")
     require(receipt.get("source_tree") == BUILD_SOURCE_TREE, "runtime-surface receipt source tree mismatch")
     require(receipt.get("source_parent") == BUILD_SOURCE_PARENT, "runtime-surface receipt source parent mismatch")
+    require(run("git", "rev-parse", f"{DIAGNOSTIC_PREDECESSOR_SOURCE_SHA}^{{tree}}", cwd=repo).strip() == DIAGNOSTIC_PREDECESSOR_SOURCE_TREE, "diagnostic predecessor source tree mismatch")
+    require(run("git", "show", "-s", "--format=%P", DIAGNOSTIC_PREDECESSOR_SOURCE_SHA, cwd=repo).split() == [DIAGNOSTIC_PREDECESSOR_SOURCE_PARENT], "diagnostic predecessor source parent mismatch")
     require(receipt.get("candidate_sha") == RUNTIME_SURFACES_PREIMAGE_CANDIDATE_SHA, "runtime-surface candidate SHA mismatch")
     require(receipt.get("candidate_tree") == RUNTIME_SURFACES_PREIMAGE_CANDIDATE_TREE, "runtime-surface candidate tree mismatch")
     require(receipt.get("diagnostic_workflow_sha") == RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA, "runtime-surface diagnostic SHA mismatch")
@@ -1083,7 +1091,7 @@ def configure_runtime_source_contract(repo: pathlib.Path, receipt_path: pathlib.
     global OVERLAY_CHANGED_PATHS, OVERLAY_CHANGED_PATHS_SHA256, ALLOWED_MUTABLE_PATHS
     BUILD_PATHS = list(BUILD_SOURCE_ENTRIES)
     BUILD_PATHS_SHA256 = path_digest(BUILD_PATHS)
-    runtime_delta = run("git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", DIAGNOSTIC_SOURCE_SHA, BUILD_SOURCE_SHA, cwd=repo).splitlines()
+    runtime_delta = run("git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", DIAGNOSTIC_PREDECESSOR_SOURCE_SHA, BUILD_SOURCE_SHA, cwd=repo).splitlines()
     require(runtime_delta == paths, "runtime-surface source delta does not match receipt")
     BUILD_SOURCE_DIFF_PATHS = sorted(set(BUILD_SOURCE_DIFF_PATHS) | set(runtime_delta))
     BUILD_SOURCE_DIFF_PATHS_SHA256 = path_digest(BUILD_SOURCE_DIFF_PATHS)
