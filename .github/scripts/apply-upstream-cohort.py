@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "9d655af9fe31cda0223fa43e9352747275e3d786"
+PUSH_PREDECESSOR_SHA = "0af0d7b809cc9a127d2bbed03b316ff39a39c420"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -477,13 +477,6 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES["codex-rs/config/src/profile_toml.rs"] = (
     "cfd82d1aaac577c57c472d06731ba030426feb02",
 )
 RESTORE_SOURCE_ENTRIES.update({
-    "codex-rs/code-mode-protocol/src/lib.rs": ("100644", "blob", "bb47b1a4c48cf5296a739768a071166a43928307"),
-    "codex-rs/code-mode-protocol/src/host/host_tests.rs": ("100644", "blob", "dde38e87c96b054a1249920276c4f3ea9ef8938b"),
-    "codex-rs/code-mode-protocol/src/host/message.rs": ("100644", "blob", "0e83c866e4b9ce52af37b829e7c4acaaf10d7d3a"),
-    "codex-rs/code-mode-protocol/src/host/mod.rs": ("100644", "blob", "5c81b1d4a0286081ea6243a27cabac0bcc393de1"),
-    "codex-rs/code-mode-protocol/src/host/payload.rs": ("100644", "blob", "487b825109d81d59d1064e48d64dca8e8bc64d5c"),
-    "codex-rs/code-mode-protocol/src/runtime.rs": ("100644", "blob", "147822063fc1cc7b4739efb2e175decef7489385"),
-    "codex-rs/code-mode-protocol/src/session.rs": ("100644", "blob", "57669c431482febc544670d0825265a12209b6fa"),
     "codex-rs/models-manager/src/cache.rs": ("100644", "blob", "903f70b9b234569a24b37480d2ec74ac93eccd29"),
     "codex-rs/models-manager/src/model_info.rs": ("100644", "blob", "f8c2ee3ecc0dc3ba5ea01572be70c13830faab92"),
     "codex-rs/models-manager/src/manager.rs": ("100644", "blob", "a0a0348e4e509f1e2c5f7d1d0d83deda09ba572a"),
@@ -511,13 +504,6 @@ RESTORE_SOURCE_ENTRIES.update({
     "codex-rs/sandboxing/src/windows_mxc.rs": ("100644", "blob", "97b32a2f0dd73ed1ca1968d5b5281a5d95095f8d"),
 })
 RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
-    "codex-rs/code-mode-protocol/src/lib.rs": ("100644", "blob", "c253f5bcc789e05bbbadd7fcbcff9cb86d2e9670"),
-    "codex-rs/code-mode-protocol/src/host/host_tests.rs": ("100644", "blob", "591b29e5dd6871a4cc676b3b12809bde7e6f6dc0"),
-    "codex-rs/code-mode-protocol/src/host/message.rs": ("100644", "blob", "bc442426a3b0b1d219c9da42d6f120c995d34c43"),
-    "codex-rs/code-mode-protocol/src/host/mod.rs": ("100644", "blob", "43bb7111625e3afa0ffe8dd3ddd66318347ad06e"),
-    "codex-rs/code-mode-protocol/src/host/payload.rs": ("100644", "blob", "e8a2faa8507d2fbecd347582ae928cccda811b15"),
-    "codex-rs/code-mode-protocol/src/runtime.rs": ("100644", "blob", "afa96ebf29d348ff47869cb36a3893622494bf1a"),
-    "codex-rs/code-mode-protocol/src/session.rs": ("100644", "blob", "ffba25005cf3e7d1283ebf41997969b72a00c0d7"),
     "codex-rs/models-manager/src/cache.rs": ("100644", "blob", "15e8cf4dd8b2b5833406667d04c1969c30bfe875"),
     "codex-rs/models-manager/src/model_info.rs": ("100644", "blob", "fd9e2615c194411381634fd5806f4d91ead33c45"),
     "codex-rs/models-manager/src/manager.rs": ("100644", "blob", "45835c37cd41d28c3a6c038a3e77a1369621562a"),
@@ -544,9 +530,16 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
     "codex-rs/sandboxing/src/windows.rs": ("100644", "blob", "2629cb1bffc445158ad4ec1cfe6b830f8ecac2b0"),
     "codex-rs/sandboxing/src/windows_mxc.rs": ("100644", "blob", "97b32a2f0dd73ed1ca1968d5b5281a5d95095f8d"),
 })
+CODE_MODE_PROTOCOL_LIB_PATH = "codex-rs/code-mode-protocol/src/lib.rs"
+CODE_MODE_PROTOCOL_LIB_PREIMAGE = ("100644", "blob", "c253f5bcc789e05bbbadd7fcbcff9cb86d2e9670")
+CODE_MODE_PROTOCOL_LIB_BUILD_SOURCE = ("100644", "blob", "bb47b1a4c48cf5296a739768a071166a43928307")
+CODE_MODE_PROTOCOL_LIB_OUTPUT = ("100644", "blob", "58e58be3c1f024797199c17660d2c82230c0997a")
+CODE_MODE_PROTOCOL_LIB_REMOVAL = b"pub use description::ImageDetailVisibility;\n"
+RESTORE_SOURCE_ENTRIES[CODE_MODE_PROTOCOL_LIB_PATH] = CODE_MODE_PROTOCOL_LIB_OUTPUT
+RESTORE_SOURCE_PREIMAGE_ENTRIES[CODE_MODE_PROTOCOL_LIB_PATH] = CODE_MODE_PROTOCOL_LIB_PREIMAGE
 RESTORE_PATHS = list(RESTORE_SOURCE_ENTRIES)
-RESTORE_PATHS_SHA256 = "a2f5522a2a53d8dd22e610605e0fb98ac41a74274f88745f3c4267ac3ef51caf"
-RESTORE_ENTRIES_SHA256 = "2e007adae07d61c64cbc975d1cd299ee503a33588f5167f40fa2a1232df69d1d"
+RESTORE_PATHS_SHA256 = "2967cd93f454784b6029d6738d932372b2137fc245277b593a3fb7988c72ad75"
+RESTORE_ENTRIES_SHA256 = "606c9cbca69a0f1d494fe10b4e94a6e1478935a788ce0516f43087a2e8896a0c"
 
 OVERLAY_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items())
@@ -559,13 +552,13 @@ OVERLAY_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     }.items())
 )
 OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
-OVERLAY_PATHS_SHA256 = "40b782c6b51bd7c4114f5f9dc3d5cb200b6cda7780671096d9377f9a37ef3e95"
+OVERLAY_PATHS_SHA256 = "0a13be899095d98652c2cdc62e5ab57240a9845bcf5c9e7bfeafa4eaabec231e"
 OVERLAY_CHANGED_PATHS = [
     path
     for path in OVERLAY_PATHS
     if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]
 ]
-OVERLAY_CHANGED_PATHS_SHA256 = "d28784b5eab5aeadfd600f986aa931601d9f9e0a571b29026b6e40d5dcb19aa6"
+OVERLAY_CHANGED_PATHS_SHA256 = "89ff32d02ca4793cb10dfe3db35cd780aae268dc253032d6de400a2c35137e0a"
 
 PATCH_DEPENDENCIES: dict[str, tuple[str, str, str]] = {
     "patches/rules_rs_windows_msvc_linker.patch": (
@@ -962,6 +955,18 @@ def overlay_operation(
     return "M"
 
 
+def code_mode_protocol_compatibility_bytes(repo: pathlib.Path) -> bytes:
+    preimage = run_bytes("git", "cat-file", "-p", CODE_MODE_PROTOCOL_LIB_PREIMAGE[2], cwd=repo)
+    require(
+        preimage.count(CODE_MODE_PROTOCOL_LIB_REMOVAL) == 1,
+        "code-mode compatibility removal must occur exactly once",
+    )
+    output = preimage.replace(CODE_MODE_PROTOCOL_LIB_REMOVAL, b"", 1)
+    oid = hashlib.sha1(f"blob {len(output)}\0".encode() + output).hexdigest()
+    require(oid == CODE_MODE_PROTOCOL_LIB_OUTPUT[2], "code-mode compatibility output blob mismatch")
+    return output
+
+
 def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
     require(list(BUILD_SOURCE_ENTRIES) == BUILD_PATHS, "build source path set mismatch")
     require(list(BUILD_SOURCE_PREIMAGE_ENTRIES) == BUILD_PATHS, "build source preimage set mismatch")
@@ -1010,7 +1015,14 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
         operation = overlay_operation(preimage, postimage)
         operations[operation].append(path)
         require(tree_entry(repo, SDK_CANDIDATE_SHA, path) == preimage, f"overlay preimage mismatch: {path}")
-        require(tree_entry(repo, BUILD_SOURCE_SHA, path) == postimage, f"overlay postimage mismatch: {path}")
+        if path == CODE_MODE_PROTOCOL_LIB_PATH:
+            require(
+                tree_entry(repo, BUILD_SOURCE_SHA, path) == CODE_MODE_PROTOCOL_LIB_BUILD_SOURCE,
+                f"code-mode compatibility source tuple mismatch: {path}",
+            )
+            require(code_mode_protocol_compatibility_bytes(repo), "empty code-mode compatibility output")
+        else:
+            require(tree_entry(repo, BUILD_SOURCE_SHA, path) == postimage, f"overlay postimage mismatch: {path}")
     changed = sorted([*operations["A"], *operations["M"], *operations["D"]])
     require(changed == OVERLAY_CHANGED_PATHS, "overlay changed path set mismatch")
     require(not operations["D"], "unexpected current overlay deletion")
@@ -3348,12 +3360,20 @@ def prepare_candidate_worktree(repo: pathlib.Path, temp: pathlib.Path) -> pathli
     run("git", "clone", "--shared", "--no-checkout", str(repo), str(worktree))
     run("git", "checkout", "--detach", SDK_CANDIDATE_SHA, cwd=worktree)
     require(not run("git", "status", "--porcelain", cwd=worktree), "candidate worktree is not initially clean")
-    selected_paths = [path for path in OVERLAY_PATHS if OVERLAY_SOURCE_ENTRIES[path] is not None]
+    selected_paths = [
+        path
+        for path in OVERLAY_PATHS
+        if OVERLAY_SOURCE_ENTRIES[path] is not None and path != CODE_MODE_PROTOCOL_LIB_PATH
+    ]
     deleted_paths = [path for path in OVERLAY_PATHS if OVERLAY_SOURCE_ENTRIES[path] is None]
     if selected_paths:
         run("git", "checkout", BUILD_SOURCE_SHA, "--", *selected_paths, cwd=worktree)
     if deleted_paths:
         run("git", "rm", "--", *deleted_paths, cwd=worktree)
+    compatibility_path = worktree / CODE_MODE_PROTOCOL_LIB_PATH
+    compatibility_path.parent.mkdir(parents=True, exist_ok=True)
+    compatibility_path.write_bytes(code_mode_protocol_compatibility_bytes(repo))
+    run("git", "add", "--", CODE_MODE_PROTOCOL_LIB_PATH, cwd=worktree)
     for path, expected in OVERLAY_SOURCE_ENTRIES.items():
         require(index_entry(worktree, path) == expected, f"selected build source index tuple mismatch: {path}")
     staged_source = run("git", "diff", "--cached", "--name-only", SDK_CANDIDATE_SHA, cwd=worktree).splitlines()
@@ -3818,14 +3838,22 @@ def main() -> None:
         for path in disposition_paths:
             parent_entry = tree_entry(worktree, SDK_CANDIDATE_SHA, path)
             selected_entry = tree_entry(worktree, candidate_sha, path)
-            role = "generated" if path in GENERATED_PATHS else "build-source"
+            role = (
+                "generated"
+                if path in GENERATED_PATHS
+                else "compatibility-overlay" if path == CODE_MODE_PROTOCOL_LIB_PATH else "build-source"
+            )
             changed = path in candidate_path_set
-            if role == "build-source":
+            if role in {"build-source", "compatibility-overlay"}:
                 source_entry = tree_entry(worktree, BUILD_SOURCE_SHA, path)
                 expected_preimage = OVERLAY_SOURCE_PREIMAGE_ENTRIES[path]
                 expected_postimage = OVERLAY_SOURCE_ENTRIES[path]
                 require(parent_entry == expected_preimage, f"final overlay preimage mismatch: {path}")
-                require(source_entry == expected_postimage, f"final overlay source tuple mismatch: {path}")
+                if role == "compatibility-overlay":
+                    require(source_entry == CODE_MODE_PROTOCOL_LIB_BUILD_SOURCE, f"final compatibility source tuple mismatch: {path}")
+                    require(code_mode_protocol_compatibility_bytes(worktree) == worktree.joinpath(path).read_bytes(), f"final compatibility bytes mismatch: {path}")
+                else:
+                    require(source_entry == expected_postimage, f"final overlay source tuple mismatch: {path}")
                 require(selected_entry == expected_postimage, f"final overlay selected tuple mismatch: {path}")
                 require(
                     changed == (expected_preimage != expected_postimage),
@@ -3838,6 +3866,8 @@ def main() -> None:
                     "D": "selected-build-source-deletion",
                     "E": "verified-build-source-exact",
                 }[operation]
+                if role == "compatibility-overlay":
+                    disposition = "synthesized-fork-upstream-compatibility"
             else:
                 source_entry = (
                     tree_entry(worktree, BUILD_SOURCE_SHA, path)
