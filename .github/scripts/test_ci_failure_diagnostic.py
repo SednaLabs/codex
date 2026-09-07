@@ -181,6 +181,29 @@ class FailureDiagnosticTests(unittest.TestCase):
         self.assertEqual(first["evidence"]["fingerprint_scope"], "ci-diagnostic-v1")
         self.assertEqual(first["evidence"]["fingerprint"], second["evidence"]["fingerprint"])
 
+    def test_successful_empty_text_still_emits_a_typed_capsule(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            empty_log = root / "rustfmt.log"
+            empty_log.write_text("", encoding="utf-8")
+            payload = run_producer(
+                root,
+                "--outcome",
+                "success",
+                "--diagnostic-kind",
+                "rustfmt",
+                "--log-file",
+                str(empty_log),
+                "--reproducer-id",
+                "cargo-fmt-check",
+                "--reproducer-args-json",
+                "{}",
+            )
+
+        self.assertEqual(payload["status"], "unexercised")
+        self.assertEqual(payload["diagnostic"]["kind"], "rustfmt")
+        self.assertEqual(payload["diagnostic"]["code"], "format_diff")
+
     def test_malformed_oversized_secret_and_missing_inputs_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
