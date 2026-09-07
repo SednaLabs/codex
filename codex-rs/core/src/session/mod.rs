@@ -2058,7 +2058,7 @@ impl Session {
                 .thread_extension_data
                 .get::<crate::agent::goal_notifications::GoalNotificationStore>()
         {
-            let _ = store.publish_turn_complete(token, event.last_agent_message.clone());
+            let _ = store.publish_turn_complete(&token, event.last_agent_message.clone());
         }
 
         // Only a normal, error-free TurnComplete may be deferred. Aborts and
