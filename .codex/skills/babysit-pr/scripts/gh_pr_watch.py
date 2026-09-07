@@ -51,6 +51,7 @@ MERGE_CONFLICT_OR_BLOCKING_STATES = {
 COMMAND_ONLY_ISSUE_COMMENT_MAX_TOKENS = 4
 GREEN_STATE_MAX_POLL_SECONDS = 60 * 60
 WATCH_UNTIL_ACTION_MAX_POLL_SECONDS = 20 * 60
+ACTION_REQUIRED_MERGE_POLICY_BLOCKED = "action_required_merge_policy_blocked"
 STOP_ACTIONS = {
     "stop_pr_closed",
     "stop_exhausted_retries",
@@ -598,6 +599,60 @@ def save_state(path, state):
         except OSError:
             pass
         raise
+
+
+def build_watch_decision(snapshot, recorded_at=None):
+    """Build a compact decision receipt bound to the observed PR head."""
+    pr = snapshot.get("pr") or {}
+    checks = snapshot.get("checks") or {}
+    review_state = snapshot.get("review_state") or {}
+    actions = [str(action) for action in snapshot.get("actions") or []]
+    if recorded_at is None:
+        recorded_at = int(time.time())
+    return {
+        "schema_version": 1,
+        "recorded_at": int(recorded_at),
+        "repo": str(pr.get("repo") or ""),
+        "number": pr.get("number"),
+        "head_sha": str(pr.get("head_sha") or ""),
+        "decision": (
+            "action_required" if any(action != "idle" for action in actions) else "idle"
+        ),
+        "primary_action": actions[0] if actions else "idle",
+        "actions": actions,
+        "check_counts": {
+            "total": int(checks.get("total_count") or 0),
+            "passed": int(checks.get("passed_count") or 0),
+            "failed": int(checks.get("failed_count") or 0),
+            "pending": int(checks.get("pending_count") or 0),
+        },
+        "review_counts": {
+            "active_unresolved": int(review_state.get("active_unresolved_thread_count") or 0),
+            "ignored_unresolved": int(review_state.get("ignored_unresolved_thread_count") or 0),
+        },
+    }
+
+
+def persist_watch_schedule(
+    state_path, snapshot, mode, next_poll_seconds, scheduled_at=None
+):
+    """Persist the next wake, bound to the exact head observed by this snapshot."""
+    state, _ = load_state(state_path)
+    pr = snapshot.get("pr") or {}
+    if scheduled_at is None:
+        scheduled_at = int(time.time())
+    delay = max(int(next_poll_seconds), 0)
+    state["watch_schedule"] = {
+        "schema_version": 1,
+        "mode": str(mode),
+        "repo": str(pr.get("repo") or ""),
+        "number": pr.get("number"),
+        "head_sha": str(pr.get("head_sha") or ""),
+        "poll_seconds": delay,
+        "scheduled_at": int(scheduled_at),
+        "wake_at": int(scheduled_at) + delay,
+    }
+    save_state(state_path, state)
 
 
 def safe_state_file_name(name):
@@ -1591,6 +1646,12 @@ def recommend_actions(
     if actionable_review_items:
         actions.append("process_review_comment")
 
+    # GitHub's BLOCKED merge-state is not itself evidence of a conflict or a
+    # failing check. Surface it as an actionable policy blocker so a watcher
+    # does not silently idle or back off while the reason remains unexplained.
+    if str(pr.get("merge_state_status") or "").upper() == "BLOCKED":
+        actions.append(ACTION_REQUIRED_MERGE_POLICY_BLOCKED)
+
     has_failed_pr_checks = checks_summary["failed_count"] > 0 or bool(failed_jobs)
     if has_failed_pr_checks:
         if checks_summary["all_terminal"] and retries_used >= max_retries:
@@ -1712,6 +1773,12 @@ def collect_snapshot(args, cache=None):
             "max_flaky_retries": args.max_flaky_retries,
         },
     }
+    observed_at = int(time.time())
+    state, _ = load_state(state_path)
+    watch_decision = build_watch_decision(snapshot, recorded_at=observed_at)
+    state["last_watch_decision"] = watch_decision
+    save_state(state_path, state)
+    snapshot["watch_decision"] = watch_decision
     return snapshot, state_path
 
 
@@ -2046,7 +2113,9 @@ def next_watch_poll_seconds(
     changed = current_change_key != last_change_key
     green = is_ci_green(snapshot)
 
-    if not green:
+    actions = set(snapshot.get("actions") or [])
+    policy_blocked = ACTION_REQUIRED_MERGE_POLICY_BLOCKED in actions
+    if not green or policy_blocked:
         next_poll_seconds = args.poll_seconds
     elif changed or last_change_key is None:
         next_poll_seconds = args.poll_seconds
@@ -2084,6 +2153,7 @@ def run_watch(args):
             poll_seconds,
             GREEN_STATE_MAX_POLL_SECONDS,
         )
+        persist_watch_schedule(state_path, snapshot, "watch", poll_seconds)
         time.sleep(poll_seconds)
 
 
@@ -2128,6 +2198,7 @@ def run_watch_until_action(args):
             poll_seconds,
             WATCH_UNTIL_ACTION_MAX_POLL_SECONDS,
         )
+        persist_watch_schedule(state_path, snapshot, "watch-until-action", poll_seconds)
         if getattr(args, "progress", False):
             print_status(
                 "gh_pr_watch.py waiting: "

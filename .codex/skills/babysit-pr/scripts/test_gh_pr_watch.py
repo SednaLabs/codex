@@ -464,6 +464,71 @@ def test_recommend_actions_prioritizes_review_comments():
     ]
 
 
+def test_blocked_merge_policy_is_action_required_but_clean_is_ready():
+    blocked = sample_pr()
+    blocked["merge_state_status"] = "BLOCKED"
+    actions = gh_pr_watch.recommend_actions(
+        blocked,
+        sample_checks(),
+        [],
+        [],
+        [],
+        {},
+        0,
+        3,
+    )
+    assert actions == [gh_pr_watch.ACTION_REQUIRED_MERGE_POLICY_BLOCKED]
+
+    clean = sample_pr()
+    assert gh_pr_watch.recommend_actions(
+        clean, sample_checks(), [], [], [], {}, 0, 3
+    ) == ["stop_ready_to_merge"]
+
+
+def test_policy_blocker_does_not_backoff_and_decision_is_exact_head(monkeypatch):
+    args = argparse.Namespace(poll_seconds=30)
+    snapshot = {
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123"},
+        "checks": sample_checks(),
+        "review_state": {},
+        "actions": [gh_pr_watch.ACTION_REQUIRED_MERGE_POLICY_BLOCKED],
+    }
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(
+        args, snapshot, ("unchanged",), 600, 3600
+    )
+    assert delay == 30
+    decision = gh_pr_watch.build_watch_decision(snapshot, recorded_at=100)
+    assert decision["head_sha"] == "abc123"
+    assert decision["decision"] == "action_required"
+    assert decision["primary_action"] == gh_pr_watch.ACTION_REQUIRED_MERGE_POLICY_BLOCKED
+
+
+def test_schedule_persists_exact_head_and_fake_clock(monkeypatch, tmp_path):
+    saved = {}
+    monkeypatch.setattr(gh_pr_watch, "load_state", lambda _path: ({}, True))
+    monkeypatch.setattr(gh_pr_watch, "save_state", lambda _path, state: saved.update(state))
+    snapshot = {"pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123"}}
+
+    gh_pr_watch.persist_watch_schedule(
+        tmp_path / "state.json",
+        snapshot,
+        "watch-until-action",
+        30,
+        scheduled_at=100,
+    )
+
+    assert saved["watch_schedule"] == {
+        "schema_version": 1,
+        "mode": "watch-until-action",
+        "repo": "openai/codex",
+        "number": 123,
+        "head_sha": "abc123",
+        "poll_seconds": 30,
+        "scheduled_at": 100,
+        "wake_at": 130,
+    }
+
+
 def test_pending_review_feedback_surfaces_only_after_publication(monkeypatch):
     state = {
         "seen_review_comment_ids": ["20"],
