@@ -999,3 +999,14 @@ for a removed crate path.
   Playwright shim, and tool-registry lanes above for the generic contract. Use
   Android harness, external browser provider, or consumer-app validation only
   when the question is runtime capability or app behavior outside Codex.
+
+## GitHub App installation observer
+
+The hosted babysitter lane must cover the explicit
+`--installation-observer` path: parser selection; no `gh api user` lookup for
+installation-token observers; unchanged default-mode login lookup; and
+conservative filtering of `OWNER`/`MEMBER`/`COLLABORATOR`, approved Codex bots,
+and untrusted/`NONE` authors when identity is blank. The observer remains
+read-only and does not mint, print, persist, or activate credentials. Its
+permission contract is documented in
+`.codex/skills/babysit-pr/references/github-app-installation-broker.md`.

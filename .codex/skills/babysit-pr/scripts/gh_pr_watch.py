@@ -165,6 +165,14 @@ def parse_args():
     parser.add_argument("--pr", default="auto", help="auto, PR number, or PR URL")
     parser.add_argument("--repo", help="Optional OWNER/REPO override")
     parser.add_argument(
+        "--installation-observer",
+        action="store_true",
+        help=(
+            "Use an explicitly supplied GitHub App installation token as a read-only "
+            "observer; do not query the unavailable /user endpoint"
+        ),
+    )
+    parser.add_argument(
         "--poll-seconds", type=int, default=30, help="Watch poll interval"
     )
     parser.add_argument(
@@ -266,6 +274,11 @@ def parse_args():
     )
     args = parser.parse_args()
 
+    if args.installation_observer and args.retry_failed_now:
+        parser.error(
+            "--installation-observer cannot be combined with --retry-failed-now "
+            "(observer mode is read-only)"
+        )
     if args.poll_seconds <= 0:
         parser.error("--poll-seconds must be > 0")
     if args.max_flaky_retries < 0:
@@ -1609,7 +1622,13 @@ def collect_snapshot(args, cache=None):
     if not state.get("started_at"):
         state["started_at"] = int(time.time())
 
-    authenticated_login = get_authenticated_login(cache)
+    # GitHub App installation tokens do not support GET /user.  In the explicit
+    # observer mode, leave identity unbound and retain the conservative
+    # association/bot filtering in fetch_new_review_items.  The ordinary mode
+    # deliberately keeps its existing login lookup and behavior.
+    authenticated_login = None
+    if not getattr(args, "installation_observer", False):
+        authenticated_login = get_authenticated_login(cache)
     new_review_items = fetch_new_review_items(
         pr,
         state,

@@ -172,8 +172,154 @@ def test_collect_snapshot_fetches_review_items_before_ci(monkeypatch, tmp_path):
 
     gh_pr_watch.collect_snapshot(args)
 
+    assert "auth" in call_order
     assert call_order.index("review") < call_order.index("checks")
     assert call_order.index("review") < call_order.index("workflow")
+
+
+def test_installation_observer_skips_user_lookup_and_passes_unbound_identity(
+    monkeypatch, tmp_path
+):
+    pr = sample_pr()
+    observed = {}
+
+    monkeypatch.setattr(gh_pr_watch, "resolve_pr", lambda *_args, **_kwargs: pr)
+    monkeypatch.setattr(gh_pr_watch, "detect_local_git_context", lambda: {})
+    monkeypatch.setattr(gh_pr_watch, "load_state", lambda _path: ({}, True))
+
+    def unexpected_user_lookup(*_args, **_kwargs):
+        raise AssertionError("installation observer must not query gh api user")
+
+    monkeypatch.setattr(gh_pr_watch, "get_authenticated_login", unexpected_user_lookup)
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "fetch_new_review_items",
+        lambda *_args, **kwargs: (
+            observed.setdefault("authenticated_login", kwargs["authenticated_login"])
+            or []
+        ),
+    )
+    monkeypatch.setattr(gh_pr_watch, "get_review_threads", lambda *_args: [])
+    monkeypatch.setattr(
+        gh_pr_watch, "partition_unresolved_review_threads", lambda *_args: ([], [])
+    )
+    monkeypatch.setattr(gh_pr_watch, "build_actionable_review_items", lambda *_args: [])
+    monkeypatch.setattr(gh_pr_watch, "get_pr_checks", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(gh_pr_watch, "summarize_checks", lambda _checks: sample_checks())
+    monkeypatch.setattr(gh_pr_watch, "get_workflow_runs_for_sha", lambda *_args: [])
+    monkeypatch.setattr(gh_pr_watch, "failed_runs_from_workflow_runs", lambda *_args: [])
+    monkeypatch.setattr(
+        gh_pr_watch, "failed_jobs_from_workflow_runs", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(gh_pr_watch, "recommend_actions", lambda *_args: ["idle"])
+    monkeypatch.setattr(gh_pr_watch, "save_state", lambda *_args: None)
+
+    args = argparse.Namespace(
+        pr="123",
+        repo="openai/codex",
+        state_file=f"{tmp_path.name}-watcher-state.json",
+        ignore_review_thread=[],
+        max_flaky_retries=3,
+        reset_seen_feedback=False,
+        installation_observer=True,
+    )
+
+    gh_pr_watch.collect_snapshot(args)
+
+    assert observed["authenticated_login"] is None
+
+
+def test_installation_observer_filters_untrusted_items_without_identity(monkeypatch):
+    state = {}
+    items = [
+        {
+            "id": 1,
+            "user": {"login": "owner"},
+            "author_association": "OWNER",
+            "body": "ok",
+        },
+        {
+            "id": 2,
+            "user": {"login": "member"},
+            "author_association": "MEMBER",
+            "body": "ok",
+        },
+        {
+            "id": 3,
+            "user": {"login": "collab"},
+            "author_association": "COLLABORATOR",
+            "body": "ok",
+        },
+        {
+            "id": 4,
+            "user": {"login": "codex-review[bot]"},
+            "author_association": "NONE",
+            "body": "ok",
+        },
+        {
+            "id": 5,
+            "user": {"login": "outsider"},
+            "author_association": "NONE",
+            "body": "ignore",
+        },
+    ]
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "gh_api_list_paginated",
+        lambda endpoint, **_kwargs: (
+            items if endpoint.endswith("/issues/123/comments") else []
+        ),
+    )
+
+    surfaced = gh_pr_watch.fetch_new_review_items(
+        sample_pr(), state, fresh_state=True, authenticated_login=None
+    )
+
+    assert {item["id"] for item in surfaced} == {"1", "2", "3", "4"}
+
+
+def test_parse_args_accepts_installation_observer(monkeypatch):
+    monkeypatch.setattr(
+        gh_pr_watch.sys, "argv", ["gh_pr_watch.py", "--installation-observer"]
+    )
+
+    args = gh_pr_watch.parse_args()
+
+    assert args.installation_observer is True
+
+
+def test_installation_observer_rejects_retry_without_mutation(monkeypatch):
+    mutation_called = False
+    gh_called = False
+
+    def unexpected_mutation(*_args, **_kwargs):
+        nonlocal mutation_called
+        mutation_called = True
+
+    def unexpected_gh(*_args, **_kwargs):
+        nonlocal gh_called
+        gh_called = True
+
+    monkeypatch.setattr(
+        gh_pr_watch.sys,
+        "argv",
+        [
+            "gh_pr_watch.py",
+            "--installation-observer",
+            "--retry-failed-now",
+            "--expected-head-sha",
+            "abc123",
+        ],
+    )
+    monkeypatch.setattr(gh_pr_watch, "retry_failed_now", unexpected_mutation)
+    monkeypatch.setattr(gh_pr_watch, "gh_json", unexpected_gh)
+
+    with pytest.raises(SystemExit) as error:
+        gh_pr_watch.main()
+
+    assert error.value.code == 2
+    assert mutation_called is False
+    assert gh_called is False
 
 
 def test_collect_snapshot_discovers_pending_workflow_failures_and_reuses_completed_jobs(
