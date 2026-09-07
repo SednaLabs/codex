@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "c314d3cf98fa4dab0be8140edde01e8e61ed0c5f"
+PUSH_PREDECESSOR_SHA = "9d655af9fe31cda0223fa43e9352747275e3d786"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -515,7 +515,7 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
     "codex-rs/code-mode-protocol/src/host/host_tests.rs": ("100644", "blob", "591b29e5dd6871a4cc676b3b12809bde7e6f6dc0"),
     "codex-rs/code-mode-protocol/src/host/message.rs": ("100644", "blob", "bc442426a3b0b1d219c9da42d6f120c995d34c43"),
     "codex-rs/code-mode-protocol/src/host/mod.rs": ("100644", "blob", "43bb7111625e3afa0ffe8dd3ddd66318347ad06e"),
-    "codex-rs/code-mode-protocol/src/host/payload.rs": ("100644", "blob", "392a80d24acb2f63ef339dae82b44654c6066b1c"),
+    "codex-rs/code-mode-protocol/src/host/payload.rs": ("100644", "blob", "e8a2faa8507d2fbecd347582ae928cccda811b15"),
     "codex-rs/code-mode-protocol/src/runtime.rs": ("100644", "blob", "afa96ebf29d348ff47869cb36a3893622494bf1a"),
     "codex-rs/code-mode-protocol/src/session.rs": ("100644", "blob", "ffba25005cf3e7d1283ebf41997969b72a00c0d7"),
     "codex-rs/models-manager/src/cache.rs": ("100644", "blob", "15e8cf4dd8b2b5833406667d04c1969c30bfe875"),
