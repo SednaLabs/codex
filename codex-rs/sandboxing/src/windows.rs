@@ -29,36 +29,8 @@ pub struct WindowsSandboxFilesystemOverrides {
     pub additional_deny_write_paths: Vec<AbsolutePathBuf>,
 }
 
-pub fn windows_sandbox_uses_elevated_backend(
-    sandbox_level: WindowsSandboxLevel,
-    proxy_enforced: bool,
-) -> bool {
-    codex_windows_sandbox::windows_sandbox_uses_elevated_backend(sandbox_level, proxy_enforced)
-}
-
-pub fn resolve_windows_sandbox_filesystem_overrides(
-    sandbox: SandboxType,
-    permission_profile: &PermissionProfile,
-    sandbox_policy_cwd: &AbsolutePathBuf,
-    windows_sandbox_level: WindowsSandboxLevel,
-    proxy_enforced: bool,
-) -> std::result::Result<Option<WindowsSandboxFilesystemOverrides>, String> {
-    let use_elevated = windows_sandbox_uses_elevated_backend(windows_sandbox_level, proxy_enforced);
-    if use_elevated {
-        resolve_windows_elevated_filesystem_overrides(
-            sandbox,
-            permission_profile,
-            sandbox_policy_cwd,
-            use_elevated,
-        )
-    } else {
-        resolve_windows_restricted_token_filesystem_overrides(
-            sandbox,
-            permission_profile,
-            sandbox_policy_cwd,
-            windows_sandbox_level,
-        )
-    }
+pub fn windows_sandbox_uses_elevated_backend(sandbox_level: WindowsSandboxLevel) -> bool {
+    matches!(sandbox_level, WindowsSandboxLevel::Elevated)
 }
 
 pub fn permission_profile_supports_windows_restricted_token_sandbox(
@@ -282,8 +254,10 @@ pub fn resolve_windows_elevated_filesystem_overrides(
         .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd);
     let has_explicit_write_carveouts = split_writable_roots.iter().any(|writable_root| {
         writable_root.read_only_subpaths.iter().any(|path| {
-            file_system_sandbox_policy
-                .has_explicit_non_write_entry_for_path_with_cwd(path.as_path(), sandbox_policy_cwd)
+            file_system_sandbox_policy.has_explicit_non_write_entry_for_local_path_with_cwd(
+                path.as_path(),
+                sandbox_policy_cwd,
+            )
         })
     });
     let normalize_path = |path: PathBuf| dunce::canonicalize(&path).unwrap_or(path);
@@ -350,7 +324,7 @@ pub fn resolve_windows_elevated_filesystem_overrides(
                     })
                 });
                 let explicitly_configured = file_system_sandbox_policy
-                    .has_explicit_non_write_entry_for_path_with_cwd(
+                    .has_explicit_non_write_entry_for_local_path_with_cwd(
                         read_only_subpath.as_path(),
                         sandbox_policy_cwd,
                     );
@@ -398,7 +372,7 @@ fn windows_policy_has_root_read_access(
     let Some(root) = cwd.as_path().ancestors().last() else {
         return false;
     };
-    file_system_sandbox_policy.can_read_path_with_cwd(root, cwd.as_path())
+    file_system_sandbox_policy.can_read_local_path_with_cwd(root, cwd.as_path())
 }
 
 fn permission_profile_display_name(permission_profile: &PermissionProfile) -> &'static str {
