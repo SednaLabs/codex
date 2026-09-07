@@ -35,6 +35,7 @@
         "all",
         "core-carry"
       ],
+      "explicit_only": true,
       "setup_class": "rust_minimal",
       "working_directory": ".",
       "script_path": ".github/scripts/validation-lanes/run-just-recipe.sh",
