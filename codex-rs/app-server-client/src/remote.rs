@@ -1311,6 +1311,23 @@ fn try_deliver_event(
     pending_event: &mut Option<AppServerEvent>,
     event: AppServerEvent,
 ) -> RemoteEventForwardResult {
+    // A lag marker is a FIFO barrier: events decoded after a dropped
+    // best-effort notification must not overtake it, even if the consumer
+    // drains a queue slot before the worker's permit branch runs.
+    if *skipped_events > 0 {
+        if remote_event_requires_delivery(&event) {
+            debug_assert!(
+                pending_event.is_none(),
+                "worker must stop polling the WebSocket while required custody is occupied"
+            );
+            *pending_event = Some(event);
+            return RemoteEventForwardResult::Pending;
+        }
+        *skipped_events = skipped_events.saturating_add(1);
+        warn!("dropping remote app-server event because consumer queue is full");
+        return RemoteEventForwardResult::DroppedBestEffort;
+    }
+
     if remote_event_requires_delivery(&event) {
         match event_tx.try_send(event) {
             Ok(()) => RemoteEventForwardResult::Forwarded,
@@ -1419,6 +1436,64 @@ fn websocket_close_error_is_already_closed(err: &TungsteniteError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn lag_barrier_prevents_required_event_overtake_after_consumer_drain() {
+        let (event_tx, mut event_rx) = mpsc::channel(1);
+        let mut skipped_events = 0;
+        let mut pending_event = None;
+
+        event_tx
+            .try_send(AppServerEvent::Lagged { skipped: 1 })
+            .expect("test queue should start full");
+        assert_eq!(
+            try_deliver_event(
+                &event_tx,
+                &mut skipped_events,
+                &mut pending_event,
+                AppServerEvent::Lagged { skipped: 1 },
+            ),
+            RemoteEventForwardResult::DroppedBestEffort
+        );
+        assert_eq!(skipped_events, 1);
+
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(AppServerEvent::Lagged { .. })
+        ));
+        assert_eq!(
+            try_deliver_event(
+                &event_tx,
+                &mut skipped_events,
+                &mut pending_event,
+                AppServerEvent::Disconnected {
+                    message: "required".to_string(),
+                },
+            ),
+            RemoteEventForwardResult::Pending
+        );
+
+        event_tx
+            .try_send(AppServerEvent::Lagged {
+                skipped: std::mem::take(&mut skipped_events),
+            })
+            .expect("lag marker should be delivered first");
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(AppServerEvent::Lagged { skipped: 1 })
+        ));
+        event_tx
+            .try_send(
+                pending_event
+                    .take()
+                    .expect("required event should be retained"),
+            )
+            .expect("required event should follow lag marker");
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(AppServerEvent::Disconnected { message }) if message == "required"
+        ));
+    }
 
     #[test]
     fn close_error_after_close_frame_is_idempotent() {
