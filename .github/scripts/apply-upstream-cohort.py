@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "ebd130a761ef5d98bac31bf1c0ab5883db3ac26f"
+PUSH_PREDECESSOR_SHA = "7a80f886b7ebf979b8324f7e3527afdbe83a65b3"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -68,14 +68,14 @@ SDK_INPUT_RECEIPT_SHA256 = "811992f09b22f610b8ab01983a01da0950ed090931813c67e91f
 SDK_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
 SDK_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
 SDK_CANDIDATE_PARENT = MATERIALIZED_SHA
-DIAGNOSTIC_SOURCE_SHA = "b58f58149a0f86a2919847a519c0c594e3b68f57"
-DIAGNOSTIC_SOURCE_TREE = "c5a046c80730ea3107bea553cd2fad1701c819f6"
-DIAGNOSTIC_SOURCE_PARENT = "7dc8818d8cf5b27ddbba9776bc035feb30846408"
-DIAGNOSTIC_HELPER_SHA = "7f44b7362f7bd17cc2792b9c68c0baa7b935e004"
+DIAGNOSTIC_SOURCE_SHA = "cb3c6b5abd9b08d93f38aec0a959703a5915c6dd"
+DIAGNOSTIC_SOURCE_TREE = "97459288bcebe0fbcff352778293d95ed79aeef1"
+DIAGNOSTIC_SOURCE_PARENT = "c56b0290e019a536da55cc4ae902ac4db55676c5"
+DIAGNOSTIC_HELPER_SHA = "7a80f886b7ebf979b8324f7e3527afdbe83a65b3"
 TARGET_HELPER_BRANCH = "worker/w13825-sdk-build-consumer"
-TARGET_HELPER_SHA = "7f44b7362f7bd17cc2792b9c68c0baa7b935e004"
-TARGET_HELPER_TREE = "64b0a741da59614121e0b82624ce35ad2df2bad6"
-TARGET_HELPER_PARENT = "8a870731d9421d17fe9f6d141854e45ab651bef9"
+TARGET_HELPER_SHA = "c989b54e24385559d8be2243a3fd9c1756cb598b"
+TARGET_HELPER_TREE = "85966159f29a883da63c5a3ecca521eb5fae9d19"
+TARGET_HELPER_PARENT = "88c06eebaf1354517447268f63cd900885131f3a"
 
 COMMON_SOURCE_RUN_ID = "34035744523"
 COMMON_SOURCE_RUN_ATTEMPT = "1"
@@ -629,6 +629,91 @@ SDK_BUNDLE_PROBE_PATHS = [
     "codex-rs/websocket-client/src/lib_tests.rs",
 ]
 SDK_BUNDLE_PROBE_PATHS_SHA256 = "bafd2e6ed26638c260c5979c65db9a60ea5b085c69189439bdd7a9759c9e114d"
+RMCP_PREIMAGE_PATHS = [
+    "codex-rs/rmcp-client/Cargo.toml",
+    "codex-rs/rmcp-client/src/auth_status.rs",
+    "codex-rs/rmcp-client/src/bin/rmcp_test_server.rs",
+    "codex-rs/rmcp-client/src/bin/test_mcp_2026_discovery_stdio_server.rs",
+    "codex-rs/rmcp-client/src/bin/test_mcp_2026_stdio_server.rs",
+    "codex-rs/rmcp-client/src/bin/test_stdio_server.rs",
+    "codex-rs/rmcp-client/src/bin/test_streamable_http_server.rs",
+    "codex-rs/rmcp-client/src/bounded_stdio_transport.rs",
+    "codex-rs/rmcp-client/src/elicitation_client_service.rs",
+    "codex-rs/rmcp-client/src/ema_auth_policy.rs",
+    "codex-rs/rmcp-client/src/ema_auth_policy_tests.rs",
+    "codex-rs/rmcp-client/src/ema_claims.rs",
+    "codex-rs/rmcp-client/src/ema_exchange.rs",
+    "codex-rs/rmcp-client/src/ema_exchange_tests.rs",
+    "codex-rs/rmcp-client/src/ema_identity.rs",
+    "codex-rs/rmcp-client/src/ema_identity_tests.rs",
+    "codex-rs/rmcp-client/src/event_notification_transport.rs",
+    "codex-rs/rmcp-client/src/executor_process_transport.rs",
+    "codex-rs/rmcp-client/src/executor_process_transport_tests.rs",
+    "codex-rs/rmcp-client/src/http_client_adapter.rs",
+    "codex-rs/rmcp-client/src/http_client_adapter/www_authenticate.rs",
+    "codex-rs/rmcp-client/src/http_client_adapter/www_authenticate_tests.rs",
+    "codex-rs/rmcp-client/src/http_client_adapter_tests.rs",
+    "codex-rs/rmcp-client/src/http_client_redirect.rs",
+    "codex-rs/rmcp-client/src/http_client_redirect_tests.rs",
+    "codex-rs/rmcp-client/src/http_headers.rs",
+    "codex-rs/rmcp-client/src/http_headers_tests.rs",
+    "codex-rs/rmcp-client/src/lib.rs",
+    "codex-rs/rmcp-client/src/local_child.rs",
+    "codex-rs/rmcp-client/src/local_stdio_transport.rs",
+    "codex-rs/rmcp-client/src/logging_client_handler.rs",
+    "codex-rs/rmcp-client/src/macos_stdio.rs",
+    "codex-rs/rmcp-client/src/macos_stdio_tests.rs",
+    "codex-rs/rmcp-client/src/oauth.rs",
+    "codex-rs/rmcp-client/src/oauth/credential_store.rs",
+    "codex-rs/rmcp-client/src/oauth/ema_identity.rs",
+    "codex-rs/rmcp-client/src/oauth/ema_identity_tests.rs",
+    "codex-rs/rmcp-client/src/oauth/issuer_binding.rs",
+    "codex-rs/rmcp-client/src/oauth/refresh_lock.rs",
+    "codex-rs/rmcp-client/src/oauth/refresh_transaction.rs",
+    "codex-rs/rmcp-client/src/oauth/resolved_store.rs",
+    "codex-rs/rmcp-client/src/oauth/runtime.rs",
+    "codex-rs/rmcp-client/src/oauth/store_lock.rs",
+    "codex-rs/rmcp-client/src/oauth/test_support.rs",
+    "codex-rs/rmcp-client/src/oauth/tests/credential_store_tests.rs",
+    "codex-rs/rmcp-client/src/oauth/tests/persistor_tests.rs",
+    "codex-rs/rmcp-client/src/oauth/tests/store_lock_tests.rs",
+    "codex-rs/rmcp-client/src/oauth_callback.rs",
+    "codex-rs/rmcp-client/src/oauth_callback_tests.rs",
+    "codex-rs/rmcp-client/src/oauth_client_registration.rs",
+    "codex-rs/rmcp-client/src/oauth_client_registration_tests.rs",
+    "codex-rs/rmcp-client/src/oauth_http_client.rs",
+    "codex-rs/rmcp-client/src/oauth_http_client_security_tests.rs",
+    "codex-rs/rmcp-client/src/oauth_refresh_mode.rs",
+    "codex-rs/rmcp-client/src/perform_oauth_device_login.rs",
+    "codex-rs/rmcp-client/src/perform_oauth_login.rs",
+    "codex-rs/rmcp-client/src/program_resolver.rs",
+    "codex-rs/rmcp-client/src/protocol_mode.rs",
+    "codex-rs/rmcp-client/src/rmcp_client.rs",
+    "codex-rs/rmcp-client/src/service_error.rs",
+    "codex-rs/rmcp-client/src/startup_error.rs",
+    "codex-rs/rmcp-client/src/startup_error_tests.rs",
+    "codex-rs/rmcp-client/src/stdio_server_launcher.rs",
+    "codex-rs/rmcp-client/src/streamable_http_retry.rs",
+    "codex-rs/rmcp-client/src/streamable_http_retry_tests.rs",
+    "codex-rs/rmcp-client/src/utils.rs",
+    "codex-rs/rmcp-client/tests/mcp_2026_discovery.rs",
+    "codex-rs/rmcp-client/tests/mcp_2026_message_limits.rs",
+    "codex-rs/rmcp-client/tests/mcp_2026_mrtr.rs",
+    "codex-rs/rmcp-client/tests/mcp_2026_oauth_discovery.rs",
+    "codex-rs/rmcp-client/tests/mcp_2026_sse_discovery.rs",
+    "codex-rs/rmcp-client/tests/mcp_2026_stdio.rs",
+    "codex-rs/rmcp-client/tests/mcp_2026_stdio_discovery.rs",
+    "codex-rs/rmcp-client/tests/mcp_events.rs",
+    "codex-rs/rmcp-client/tests/process_group_cleanup.rs",
+    "codex-rs/rmcp-client/tests/resources.rs",
+    "codex-rs/rmcp-client/tests/stdio_message_limits.rs",
+    "codex-rs/rmcp-client/tests/streamable_http_oauth_startup.rs",
+    "codex-rs/rmcp-client/tests/streamable_http_oauth_store_pinning.rs",
+    "codex-rs/rmcp-client/tests/streamable_http_recovery.rs",
+    "codex-rs/rmcp-client/tests/streamable_http_remote.rs",
+    "codex-rs/rmcp-client/tests/streamable_http_test_support.rs",
+]
+RMCP_PREIMAGE_PATHS_SHA256 = "706df09a76a0d40d204dbd13b950ce57f83e43b6999f73343e3d2b873ff98ba7"
 SDK_BUNDLE_ROUTE_WITNESS = ("100644", "blob", "29705e44eb66f235adee5a8932264ee778f98ced")
 ALLOWED_MUTABLE_PATHS = sorted(set(OVERLAY_CHANGED_PATHS) | set(GENERATED_PATHS))
 
@@ -2467,25 +2552,25 @@ def emit_sdk_bundle_path_receipt(repo: pathlib.Path, diagnostics: pathlib.Path) 
     return receipt
 
 
-def emit_sdk_runtime_surfaces_preimage_receipt(
+def emit_sdk_rmcp_preimage_receipt(
     repo: pathlib.Path,
     output: pathlib.Path,
     provider_receipt: pathlib.Path,
     workflow_sha: str,
     workflow_tree: str,
 ) -> dict[str, Any]:
-    require(SDK_BUNDLE_PROBE_PATHS == sorted(SDK_BUNDLE_PROBE_PATHS), "diagnostic paths are not sorted")
-    require(len(SDK_BUNDLE_PROBE_PATHS) == 163, "diagnostic path scope is not exactly 163 paths")
-    require(path_digest(SDK_BUNDLE_PROBE_PATHS) == SDK_BUNDLE_PROBE_PATHS_SHA256, "diagnostic path-set digest mismatch")
+    require(RMCP_PREIMAGE_PATHS == sorted(RMCP_PREIMAGE_PATHS), "diagnostic paths are not sorted")
+    require(len(RMCP_PREIMAGE_PATHS) == 82, "diagnostic path scope is not exactly 82 paths")
+    require(path_digest(RMCP_PREIMAGE_PATHS) == RMCP_PREIMAGE_PATHS_SHA256, "diagnostic path-set digest mismatch")
     entries = [
         {"path": path, "entry": tuple_json(tree_entry(repo, SDK_CANDIDATE_SHA, path))}
-        for path in SDK_BUNDLE_PROBE_PATHS
+        for path in RMCP_PREIMAGE_PATHS
     ]
     missing_paths = sorted(item["path"] for item in entries if item["entry"] is None)
-    require(set(missing_paths).issubset(set(SDK_BUNDLE_PROBE_PATHS)), "diagnostic missing path escaped probe set")
+    require(set(missing_paths).issubset(set(RMCP_PREIMAGE_PATHS)), "diagnostic missing path escaped probe set")
     provider = verify_probe_provider_receipt(provider_receipt)
     receipt = {
-        "schema": "sdk-runtime-surfaces-preimage-diagnostic",
+        "schema": "sdk-rmcp-preimage-diagnostic",
         "version": 1,
         "repository": REPOSITORY,
         "diagnostic_workflow_sha": workflow_sha,
@@ -2501,7 +2586,7 @@ def emit_sdk_runtime_surfaces_preimage_receipt(
         "artifact_provider": provider,
         "candidate_sha": SDK_CANDIDATE_SHA,
         "candidate_tree": SDK_CANDIDATE_TREE,
-        "path_set_sha256": path_digest(SDK_BUNDLE_PROBE_PATHS),
+        "path_set_sha256": path_digest(RMCP_PREIMAGE_PATHS),
         "missing_paths": missing_paths,
         "missing_path_count": len(missing_paths),
         "entries": entries,
@@ -3639,7 +3724,7 @@ def main() -> None:
     parser.add_argument("--validate-uv-identity")
     parser.add_argument("--prepare-inputs-only", action="store_true")
     parser.add_argument("--metadata-manifest-only", action="store_true")
-    parser.add_argument("--probe-sdk-runtime-surfaces-only", action="store_true")
+    parser.add_argument("--probe-sdk-rmcp-preimage-only", action="store_true")
     parser.add_argument("--provider-receipt", type=pathlib.Path)
     args = parser.parse_args()
 
@@ -3692,7 +3777,7 @@ def main() -> None:
     repo = absolute_argument(args.repo_root, "repo-root", must_exist=True)
     artifact = absolute_argument(args.artifact_dir, "artifact-dir", must_exist=True)
     require(repo.is_dir() and artifact.is_dir(), "repository and artifact inputs must be directories")
-    if args.probe_sdk_runtime_surfaces_only:
+    if args.probe_sdk_rmcp_preimage_only:
         require(args.output_dir is not None, "diagnostic output path is required")
         require(args.preflight_dir is None, "diagnostic mode does not accept a preflight path")
         require(args.provider_receipt is not None, "diagnostic provider receipt is required")
@@ -3709,7 +3794,7 @@ def main() -> None:
             isolated_repo = import_sdk_bundle_for_probe(files["bundle"], temp)
             verify_imported_sdk_objects(isolated_repo)
             output = absolute_argument(args.output_dir, "output-dir", must_exist=False)
-            emission = emit_sdk_runtime_surfaces_preimage_receipt(
+            emission = emit_sdk_rmcp_preimage_receipt(
                 isolated_repo,
                 output,
                 provider_receipt,
