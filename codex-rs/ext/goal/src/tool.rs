@@ -217,9 +217,6 @@ impl GoalToolExecutor {
                         .to_string(),
                 )
             })?;
-        if let Err(err) = self.runtime.finalize_pending_goal_notification().await {
-            tracing::warn!("failed to forward deferred goal completion: {err}");
-        }
         fill_empty_thread_preview_if_possible(self.state_db.as_ref(), self.thread_id, &goal).await;
         let turn_id = self
             .accounting_state

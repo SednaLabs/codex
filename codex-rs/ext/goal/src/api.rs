@@ -274,7 +274,9 @@ impl GoalService {
         if objective.is_some() {
             fill_empty_thread_preview_if_possible(state_db, thread_id, &goal).await;
         }
-        if let Some(runtime) = runtime.as_ref() {
+        if let Some(runtime) = runtime.as_ref()
+            && !matches!(goal.status, codex_state::ThreadGoalStatus::Active)
+        {
             if let Err(err) = runtime.finalize_pending_goal_notification().await {
                 tracing::warn!("failed to forward deferred goal completion: {err}");
             }
