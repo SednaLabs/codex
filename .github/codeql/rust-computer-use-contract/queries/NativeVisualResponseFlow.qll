@@ -63,6 +63,14 @@ predicate responseVariableExpr(Expr expr, Variable variable) {
   )
 }
 
+/** A local variable initialized from a reference to another response. */
+predicate referenceAlias(Variable alias, Variable target) {
+  exists(RefExpr reference |
+    alias.getInitializer() = reference and
+    responseVariableExpr(reference.getExpr(), target)
+  )
+}
+
 /**
  * Local value flow covers aliases and ordinary borrow/reborrow edges without
  * claiming a universal interprocedural or collection model.
@@ -110,6 +118,14 @@ predicate guardUsesReturnedResponse(Call guard, Expr responseExpr) {
   exists(Variable variable |
     responseVariableExpr(responseExpr, variable) and
     responseVariableExpr(guard.getPositionalArgument(0), variable)
+  ) or
+  exists(Variable responseVariable, Variable guardVariable |
+    responseVariableExpr(responseExpr, responseVariable) and
+    responseVariableExpr(guard.getPositionalArgument(0), guardVariable) and
+    (
+      referenceAlias(guardVariable, responseVariable) or
+      referenceAlias(responseVariable, guardVariable)
+    )
   ) or
   localValueFlow(responseExpr, guard.getPositionalArgument(0)) or
   localValueFlow(guard.getPositionalArgument(0), responseExpr)
