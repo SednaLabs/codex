@@ -5951,7 +5951,9 @@ class ValidationPlanScriptTests(unittest.TestCase):
                         "name": f"codex-codeql-rust-{rust_scope}",
                         "queries": [
                             {"uses": "security-and-quality"},
-                            {"uses": "./.github/codeql/rust-computer-use-contract"},
+                            {
+                                "uses": "./.github/codeql/rust-computer-use-contract/suites/rust-computer-use-production.qls"
+                            },
                         ],
                         "paths": expected_paths,
                         "paths-ignore": [".github/codeql/rust-computer-use-contract/test/**"],
@@ -6132,7 +6134,9 @@ class ValidationPlanScriptTests(unittest.TestCase):
                 "name": "codex-codeql-rust",
                 "queries": [
                     {"uses": "security-and-quality"},
-                    {"uses": "./.github/codeql/rust-computer-use-contract"},
+                    {
+                        "uses": "./.github/codeql/rust-computer-use-contract/suites/rust-computer-use-production.qls"
+                    },
                 ],
                 "paths": ["codex-rs", "tools"],
                 "paths-ignore": [".github/codeql/rust-computer-use-contract/test/**"],
