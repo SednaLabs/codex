@@ -5661,6 +5661,7 @@ fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
             }
         );
         assert!(!content.contains("encrypted_content"));
+        assert!(!content.contains("internal_chat_message_metadata_passthrough"));
         assert_eq!(success, None);
     });
 }
