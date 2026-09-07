@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "99ef3c4a5870e103e08e19cfb19854f1ad59f47c"
+PUSH_PREDECESSOR_SHA = "440bbf98465167c36aaaa0d1d9e2ee97e6585494"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -714,7 +714,7 @@ EXPECTED_LOCK_EDGES_BY_STAGE = {
 }
 # A non-empty resolver delta is diagnostic-only until the root explicitly
 # accepts its exact canonical digest in a reviewed successor.
-ACCEPTED_LOCK_DELTA_SHA256: str | None = "8d80a8c0eae8c1055d266730a5c1ac3e645f59349614ba0e4eb641ee622ea4d6"
+ACCEPTED_LOCK_DELTA_SHA256: str | None = "1beac94973a92530d21cfc9dbd4fb75b186740c40c7dcda2f51b55d6d1e79e1e"
 MAX_MANIFEST_COUNT = 512
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 MAX_LOCK_BYTES = 16 * 1024 * 1024
