@@ -125,6 +125,9 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
             | ServerNotification::PlanDelta(_)
             | ServerNotification::ReasoningSummaryTextDelta(_)
             | ServerNotification::ReasoningTextDelta(_)
+            | ServerNotification::FuzzyFileSearchSessionCompleted(_)
+            | ServerNotification::ThreadRealtimeTranscriptDelta(_)
+            | ServerNotification::ThreadRealtimeTranscriptDone(_)
     )
 }
 
@@ -187,7 +190,11 @@ async fn deliver_in_process_events(
                 }) {
                     Ok(()) => skipped_events = 0,
                     Err(mpsc::error::TrySendError::Full(_)) => {
-                        skipped_events = skipped_events.saturating_add(1);
+                        let Some(next_skipped_events) = skipped_events.checked_add(1) else {
+                            warn!("in-process skipped event count overflowed");
+                            break;
+                        };
+                        skipped_events = next_skipped_events;
                         warn!("dropping in-process event lag marker (queue full)");
                         if let Some(write_complete_tx) = queued_message.write_complete_tx {
                             let _ = write_complete_tx.send(());
@@ -206,7 +213,11 @@ async fn deliver_in_process_events(
         } else if let Err(send_error) = event_tx.try_send(event) {
             match send_error {
                 mpsc::error::TrySendError::Full(_) => {
-                    skipped_events = skipped_events.saturating_add(1);
+                    let Some(next_skipped_events) = skipped_events.checked_add(1) else {
+                        warn!("in-process skipped event count overflowed");
+                        break;
+                    };
+                    skipped_events = next_skipped_events;
                     warn!("dropping in-process server event (queue full)");
                 }
                 mpsc::error::TrySendError::Closed(_) => break,
@@ -876,8 +887,12 @@ mod tests {
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+    use codex_app_server_protocol::FuzzyFileSearchSessionCompletedNotification;
+    use codex_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
+    use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
+    use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
@@ -1403,6 +1418,40 @@ mod tests {
                 ExternalAgentConfigImportCompletedNotification {
                     import_id: "import".to_string(),
                     item_type_results: Vec::new(),
+                },
+            )
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::FuzzyFileSearchSessionCompleted(
+                FuzzyFileSearchSessionCompletedNotification {
+                    session_id: "session".to_string(),
+                },
+            )
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::ThreadRealtimeTranscriptDelta(
+                ThreadRealtimeTranscriptDeltaNotification {
+                    thread_id: "thread".to_string(),
+                    role: "user".to_string(),
+                    delta: "hello".to_string(),
+                },
+            )
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::ThreadRealtimeTranscriptDone(
+                ThreadRealtimeTranscriptDoneNotification {
+                    thread_id: "thread".to_string(),
+                    role: "user".to_string(),
+                    text: "hello".to_string(),
+                },
+            )
+        ));
+        assert!(!server_notification_requires_delivery(
+            &ServerNotification::FuzzyFileSearchSessionUpdated(
+                FuzzyFileSearchSessionUpdatedNotification {
+                    session_id: "session".to_string(),
+                    query: "query".to_string(),
+                    files: Vec::new(),
                 },
             )
         ));

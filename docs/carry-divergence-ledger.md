@@ -3588,3 +3588,15 @@ f6e966e64 -> 9b5078d3e | Stabilize pipe process stdin round-trip test (#14013)
 3f7cb0304 -> c8446d7cf | Stabilize websocket response.failed error delivery (#14017)
 28934762d -> 722e8f08e | unifying all image saves to /tmp to bug-proof (#14149)
 ```
+
+## GitHub App installation observer carry
+
+The PR watcher now has an explicit `--installation-observer` source-mode
+adaptation for a caller that already supplies a short-lived GitHub App
+installation token. It skips `gh api user`, passes an unbound login to the
+existing conservative review filter, and preserves the default login lookup
+outside that mode. The path is read-only and does not mint, print, persist, or
+broaden credentials. Hosted tests must cover parser selection, observer
+no-`/user` behavior, default-mode login behavior, and trusted-association/bot
+filtering with a blank identity; no live token or watcher activation belongs to
+this carry.

@@ -405,6 +405,8 @@ jobs:
         run: python3 -m py_compile .github/scripts/resolve_validation_plan.py .github/scripts/resolve_rust_ci_mode.py .github/scripts/resolve_sedna_release_version.py .github/scripts/test_ci_planners.py
       - name: Run planner fixtures
         run: python3 -m unittest discover -s .github/scripts -p 'test_ci_planners.py'
+      - name: Test targeted Clippy package selector
+        run: python3 .github/scripts/test_targeted_clippy_packages.py
 
       - name: Check for a clean worktree
         if: always() && !cancelled()
@@ -412,10 +414,13 @@ jobs:
 
   # --- Fast Cargo-native PR checks -------------------------------------------
   general:
-    name: Format / etc
+    name: Fast format / Clippy / etc
     runs-on: ubuntu-24.04
     needs: changed
     if: ${{ needs.changed.outputs.run_general == 'true' }}
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     defaults:
       run:
         working-directory: codex-rs
@@ -431,6 +436,81 @@ jobs:
           components: rustfmt
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
+
+      # Keep this preflight in the existing fast job and result fan-in. It is
+      # intentionally package-scoped and no-deps so it exposes failures early
+      # without duplicating the required workspace Clippy gate below.
+      - name: Select targeted Clippy packages
+        id: targeted_clippy_packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${BASE_SHA}" || -z "${HEAD_SHA}" ]]; then
+            echo "No comparable PR or merge-group SHAs; skipping targeted Clippy."
+            echo "packages=[]" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if ! git -C "${GITHUB_WORKSPACE}" fetch --no-tags --depth=1 origin "${BASE_SHA}"; then
+            echo "::warning title=Targeted Clippy selection::Unable to fetch the comparison base; the required full Clippy gate remains authoritative."
+            echo "packages=[]" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if ! packages="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/targeted_clippy_packages.py" \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}")"; then
+            echo "::warning title=Targeted Clippy selection::Package discovery failed; the required full Clippy gate remains authoritative."
+            echo "packages=[]" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "Targeted Clippy packages: ${packages}"
+          echo "packages=${packages}" >> "${GITHUB_OUTPUT}"
+
+      - uses: dtolnay/rust-toolchain@ebb3d1676050bfd0971c36c1e215b5751473994d # 1.96.0
+        if: ${{ steps.targeted_clippy_packages.outputs.packages != '[]' }}
+        with:
+          target: x86_64-unknown-linux-gnu
+          components: clippy
+
+      - name: Install Linux Clippy build dependencies
+        if: ${{ steps.targeted_clippy_packages.outputs.packages != '[]' }}
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+
+      - name: Configure rusty_v8 artifacts for targeted Clippy
+        if: ${{ steps.targeted_clippy_packages.outputs.packages != '[]' }}
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+
+      - name: cargo clippy (targeted packages)
+        if: ${{ steps.targeted_clippy_packages.outputs.packages != '[]' }}
+        env:
+          TARGETED_CLIPPY_PACKAGES: ${{ steps.targeted_clippy_packages.outputs.packages }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(python3 -c 'import json, os; print("\\n".join(json.loads(os.environ["TARGETED_CLIPPY_PACKAGES"])))')
+          package_args=()
+          for package in "${packages[@]}"; do
+            package_args+=(--package "${package}")
+          done
+          cargo clippy \
+            --target x86_64-unknown-linux-gnu \
+            --all-features \
+            --tests \
+            --profile dev \
+            --no-deps \
+            "${package_args[@]}" \
+            -- -D warnings
+
       - name: Rust benchmark smoke test
         run: just bench-smoke
 

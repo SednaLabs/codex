@@ -90,3 +90,29 @@ redirect bounds, redaction, success/failure revocation, and the no-fallback
 boundary. Hosted `codex.agent-workflow-sanity` runs the broker's compile and
 test commands. Live installation/token proof, broader repositories, write
 permissions, and production commissioning remain outside the Phase A cutline.
+
+## Read-only PR observer mapping
+
+The watcher supports an explicit `--installation-observer` mode for a caller
+that has already supplied a short-lived installation token. This mode never
+calls `GET /user` (installation tokens do not provide that endpoint), leaves
+the authenticated login unbound, and retains conservative review filtering:
+`OWNER`, `MEMBER`, and `COLLABORATOR` associations plus approved Codex bots are
+actionable; `NONE` and other untrusted authors remain ignored. Ordinary mode
+continues to resolve the authenticated login through `gh api user`. No mode
+writes to GitHub, reruns checks, merges, resolves threads, or prints a token.
+
+The read-only endpoint-to-permission contract is:
+
+| Watcher read | Installation permission |
+| --- | --- |
+| PR metadata via `gh pr view` | `pull_requests:read` |
+| Checks/statuses via `gh pr checks` | `checks:read` and `statuses:read` |
+| Actions runs and jobs | `actions:read` |
+| Issue comments (`GET /repos/{owner}/{repo}/issues/{pr}/comments`) | `pull_requests:read` (no `issues:read` grant) |
+| PR review comments, reviews, and review threads | `pull_requests:read` |
+| Broker-only branch-protection/ruleset proof | `administration:read` |
+| Broker-only merge-queue proof | `merge_queues:read` |
+| Broker validation metadata/contents reads | `metadata:read`, `contents:read` |
+
+The installation-token endpoint is GitHub's [`POST /app/installations/{installation_id}/access_tokens`](https://docs.github.com/en/rest/apps/installations#create-an-installation-access-token), and the issue-comment permission behavior is documented in the [list issue comments endpoint](https://docs.github.com/en/rest/issues/comments#list-issue-comments-for-a-repository). These links are references only; this watcher does not mint tokens or invoke either endpoint.

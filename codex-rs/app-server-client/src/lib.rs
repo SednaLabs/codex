@@ -129,11 +129,12 @@ fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
 
 /// Returns `true` for notifications that must survive backpressure.
 ///
-/// Transcript events (`AgentMessageDelta`, `PlanDelta`, reasoning deltas) and
-/// the authoritative `ItemCompleted` / `TurnCompleted` form the lossless tier
-/// of the event stream. Dropping any of these corrupts the visible assistant
-/// output or leaves surfaces waiting for a completion signal that already
-/// fired. Everything else (`CommandExecutionOutputDelta`, progress, etc.) is
+/// Transcript events (`AgentMessageDelta`, realtime transcript deltas and
+/// completions, `PlanDelta`, reasoning deltas) and the authoritative
+/// `ItemCompleted` / `TurnCompleted` form the lossless tier of the event
+/// stream. Dropping any of these corrupts the visible assistant output or
+/// leaves surfaces waiting for a completion signal that already fired.
+/// Everything else (`CommandExecutionOutputDelta`, progress, etc.) is
 /// best-effort and may be dropped with only cosmetic impact.
 ///
 /// Both the in-process and remote transports delegate to this function so the
@@ -156,6 +157,8 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
             | ServerNotification::PlanDelta(_)
             | ServerNotification::ReasoningSummaryTextDelta(_)
             | ServerNotification::ReasoningTextDelta(_)
+            | ServerNotification::ThreadRealtimeTranscriptDelta(_)
+            | ServerNotification::ThreadRealtimeTranscriptDone(_)
     )
 }
 
@@ -1358,6 +1361,26 @@ mod tests {
         )
     }
 
+    fn realtime_transcript_delta_notification(delta: &str) -> ServerNotification {
+        ServerNotification::ThreadRealtimeTranscriptDelta(
+            codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification {
+                thread_id: "thread".to_string(),
+                role: "assistant".to_string(),
+                delta: delta.to_string(),
+            },
+        )
+    }
+
+    fn realtime_transcript_done_notification(text: &str) -> ServerNotification {
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
+                thread_id: "thread".to_string(),
+                role: "assistant".to_string(),
+                text: text.to_string(),
+            },
+        )
+    }
+
     fn item_completed_notification(text: &str) -> ServerNotification {
         ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
             thread_id: "thread".to_string(),
@@ -1666,7 +1689,7 @@ mod tests {
 
         let receive_task = tokio::spawn(async move {
             let mut events = Vec::new();
-            for _ in 0..5 {
+            for _ in 0..7 {
                 events.push(
                     timeout(Duration::from_secs(2), event_rx.recv())
                         .await
@@ -1679,6 +1702,8 @@ mod tests {
 
         for notification in [
             agent_message_delta_notification("hello"),
+            realtime_transcript_delta_notification("realtime hello"),
+            realtime_transcript_done_notification("realtime hello"),
             item_completed_notification("hello"),
             turn_completed_notification(),
         ] {
@@ -1713,6 +1738,20 @@ mod tests {
         ));
         assert!(matches!(
             &events[3],
+            InProcessServerEvent::ServerNotification(
+                ServerNotification::ThreadRealtimeTranscriptDelta(notification)
+            ) if notification.delta == "realtime hello"
+                && notification.role == "assistant"
+        ));
+        assert!(matches!(
+            &events[4],
+            InProcessServerEvent::ServerNotification(
+                ServerNotification::ThreadRealtimeTranscriptDone(notification)
+            ) if notification.text == "realtime hello"
+                && notification.role == "assistant"
+        ));
+        assert!(matches!(
+            &events[5],
             InProcessServerEvent::ServerNotification(ServerNotification::ItemCompleted(
                 notification
             )) if matches!(
@@ -1721,7 +1760,7 @@ mod tests {
             )
         ));
         assert!(matches!(
-            &events[4],
+            &events[6],
             InProcessServerEvent::ServerNotification(ServerNotification::TurnCompleted(
                 notification
             )) if notification.turn.status == codex_app_server_protocol::TurnStatus::Completed
@@ -2986,6 +3025,28 @@ mod tests {
                     codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {
                         import_id: "import".to_string(),
                         item_type_results: Vec::new(),
+                    },
+                )
+            )
+        ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::ThreadRealtimeTranscriptDelta(
+                    codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification {
+                        thread_id: "thread".to_string(),
+                        role: "assistant".to_string(),
+                        delta: "hello".to_string(),
+                    },
+                )
+            )
+        ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::ThreadRealtimeTranscriptDone(
+                    codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
+                        thread_id: "thread".to_string(),
+                        role: "assistant".to_string(),
+                        text: "hello".to_string(),
                     },
                 )
             )
