@@ -1,0 +1,1 @@
+| codex-rs/android-computer-use/src/lib.rs:24:5:24:16 | Ok(...) | This successful visual computer-use response is not the same response version that passed a body-backed native-image guard. Preserve aliases and borrows, then guard the returned response without later replacing, resetting, or removing its visual evidence. |
