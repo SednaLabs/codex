@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "a54784848e504ab9b69dacce0a656f0a71d2c988"
+PUSH_PREDECESSOR_SHA = "2fb74ea615cccbc67e3721c740608bb2dd4578d9"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -2258,7 +2258,7 @@ def emit_codex_api_preimage_receipt(
     workflow_tree: str,
 ) -> dict[str, Any]:
     require(SDK_BUNDLE_PROBE_PATHS == sorted(SDK_BUNDLE_PROBE_PATHS), "diagnostic paths are not sorted")
-    require(len(SDK_BUNDLE_PROBE_PATHS) == 2, "diagnostic path scope is not exactly two paths")
+    require(len(SDK_BUNDLE_PROBE_PATHS) == 1, "diagnostic path scope is not exactly one path")
     require(path_digest(SDK_BUNDLE_PROBE_PATHS) == SDK_BUNDLE_PROBE_PATHS_SHA256, "diagnostic path-set digest mismatch")
     entries = [
         {"path": path, "entry": tuple_json(tree_entry(repo, SDK_CANDIDATE_SHA, path))}
