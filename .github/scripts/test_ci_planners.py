@@ -5298,6 +5298,7 @@ class ValidationPlanScriptTests(unittest.TestCase):
                 "codex.tui-agent-usage-totals-targeted",
                 "codex.tui-brokered-tool-replay-targeted",
                 "codex.tui-collab-spawn-identity-targeted",
+                "codex.model-catalog-compat-targeted",
                 "codex.tui-config-refresh-session-targeted",
                 "codex.tui-esc-interrupt-targeted",
                 "codex.tui-front-queue-submit-targeted",
@@ -7056,7 +7057,7 @@ class ValidationPlanScriptTests(unittest.TestCase):
         self.assertIn("codex.argument-comment-lint", selected_lane_ids)
         self.assertIn("downstream-ledger-seam", selected_lane_ids)
         self.assertIn("codex.core-multi-agent-orchestration-targeted", selected_lane_ids)
-        self.assertEqual(payload["planned_job_count"], 46)
+        self.assertEqual(payload["planned_job_count"], 47)
         self.assertEqual(payload["selected_workflow_lane_count"], 8)
         self.assertEqual(payload["selected_node_lane_count"], 2)
         self.assertEqual(payload["selected_rust_minimal_lane_count"], 1)
