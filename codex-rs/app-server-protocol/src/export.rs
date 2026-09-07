@@ -2488,10 +2488,9 @@ mod tests {
                 .is_some_and(|variants| variants.iter().any(|variant| variant["type"] == "null"))
         );
 
-        let thread_item_ts = std::str::from_utf8(
-            &read_schema_fixture_subtree(&schema_root, "typescript")?
-                [Path::new("v2/ThreadItem.ts")],
-        )?;
+        let typescript_fixtures = read_schema_fixture_subtree(&schema_root, "typescript")?;
+        let thread_item_ts =
+            std::str::from_utf8(&typescript_fixtures[Path::new("v2/ThreadItem.ts")])?;
         assert!(!thread_item_ts.contains("wakeNotifications?:"));
         assert!(!thread_item_ts.contains("completionReason?:"));
         assert!(
