@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "7f44b7362f7bd17cc2792b9c68c0baa7b935e004"
+PUSH_PREDECESSOR_SHA = "e5625318a03b4aaa554edbf7e2a2524f59dfc5d4"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -79,9 +79,9 @@ COMMON_PROVENANCE_SHA256 = "afbf269c8593c978ed706c9f2fddc0031383350fe216d88512ec
 COMMON_STAGED_PATCH_SHA256 = "dd4b59d9be8c2727d08de673085b36a1c61f6cee617855f210706412a5bfc66c"
 COMMON_STAGED_PATHS_SHA256 = "90b44134bb538a07fa03dfd674e96f08de4ba04a40252f6dc9f5c740dd5bb1ae"
 
-BUILD_SOURCE_SHA = "b58f58149a0f86a2919847a519c0c594e3b68f57"
-BUILD_SOURCE_TREE = "c5a046c80730ea3107bea553cd2fad1701c819f6"
-BUILD_SOURCE_PARENT = "7dc8818d8cf5b27ddbba9776bc035feb30846408"
+BUILD_SOURCE_SHA = "6283c258b1297dea10197847ee589fb89682a11b"
+BUILD_SOURCE_TREE = "d58b5cc3d371fd9f1defa62509b0980cfc617bfd"
+BUILD_SOURCE_PARENT = "b58f58149a0f86a2919847a519c0c594e3b68f57"
 DIAGNOSTIC_PREDECESSOR_SOURCE_SHA = "b593ff0ba02ff08d0c44f6db95840c6cc59f0598"
 DIAGNOSTIC_PREDECESSOR_SOURCE_TREE = "8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47"
 DIAGNOSTIC_PREDECESSOR_SOURCE_PARENT = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
@@ -94,6 +94,11 @@ RUNTIME_SURFACES_PREIMAGE_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd27
 RUNTIME_SURFACES_PREIMAGE_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
 RUNTIME_SURFACES_PREIMAGE_PATH_COUNT = 163
 RUNTIME_SURFACES_PREIMAGE_PATH_SET_SHA256 = "bafd2e6ed26638c260c5979c65db9a60ea5b085c69189439bdd7a9759c9e114d"
+RUNTIME_SOURCE_STATIC_FALLBACK_PATH = "codex-rs/Cargo.toml"
+RUNTIME_SOURCE_STATIC_FALLBACK_PREIMAGE = ("100644", "blob", "b7d06b98391ef2f3307096d963eea4e19853d8f0")
+RUNTIME_SOURCE_STATIC_FALLBACK_POSTIMAGE = ("100644", "blob", "301897af5e68f3bd1295d66a12416f2adc9e30f6")
+RUNTIME_SOURCE_UNION_PATH_COUNT = 164
+RUNTIME_SOURCE_UNION_PATH_SET_SHA256 = "dccb8b9265746813aeecb1501f0a89fbc0c0f0ea00fff09a839939c562a086f3"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID = "10021647248"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_NAME = "sdk-runtime-surfaces-preimage-diagnostic-34129864201-1"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_SIZE = 6658
@@ -103,6 +108,10 @@ RUNTIME_SURFACES_DIAGNOSTIC_HEAD_BRANCH = "worker/w13825-sdk-network-proxy-diagn
 RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA = "7a80f886b7ebf979b8324f7e3527afdbe83a65b3"
 RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE = "aebca2b3e58d90124b0962b1bb51fa581dfcb0d1"
 RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID = "1152496647"
+RUNTIME_SOURCE_PREIMAGE_MAP_COUNT = 0
+RUNTIME_SOURCE_PREIMAGE_MAP_SHA256 = ""
+RUNTIME_SOURCE_POSTIMAGE_MAP_COUNT = 0
+RUNTIME_SOURCE_POSTIMAGE_MAP_SHA256 = ""
 VOICE_HOST_DEFERRAL_BASELINE_SHA = "22a0c45ee711dc5ce47847dc04cbc5e7e76507c0"
 VOICE_HOST_DEFERRAL_BASELINE_ROOT_ENTRY = ("100644", "blob", "7bd8c144e52b169b907928bcf743363949d12cb2")
 BUILD_PATHS_SHA256 = "7dfbdc9e2a37f26c98451f904b7863743fdea91b34e5bacdc164708532ab8e90"
@@ -989,6 +998,12 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
         "runtime_surfaces_preimage_candidate_tree": RUNTIME_SURFACES_PREIMAGE_CANDIDATE_TREE,
         "runtime_surfaces_preimage_path_count": RUNTIME_SURFACES_PREIMAGE_PATH_COUNT,
         "runtime_surfaces_preimage_path_set_sha256": RUNTIME_SURFACES_PREIMAGE_PATH_SET_SHA256,
+        "runtime_source_union_path_count": RUNTIME_SOURCE_UNION_PATH_COUNT,
+        "runtime_source_union_path_set_sha256": RUNTIME_SOURCE_UNION_PATH_SET_SHA256,
+        "runtime_source_preimage_map_count": RUNTIME_SOURCE_PREIMAGE_MAP_COUNT,
+        "runtime_source_preimage_map_sha256": RUNTIME_SOURCE_PREIMAGE_MAP_SHA256,
+        "runtime_source_postimage_map_count": RUNTIME_SOURCE_POSTIMAGE_MAP_COUNT,
+        "runtime_source_postimage_map_sha256": RUNTIME_SOURCE_POSTIMAGE_MAP_SHA256,
         "runtime_surfaces_diagnostic_artifact_id": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID,
         "runtime_surfaces_diagnostic_artifact_name": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_NAME,
         "runtime_surfaces_diagnostic_artifact_size": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_SIZE,
@@ -1078,10 +1093,15 @@ def configure_runtime_source_contract(repo: pathlib.Path, receipt_path: pathlib.
     paths = [entry.get("path") for entry in receipt.get("entries", [])]
     require(paths == sorted(paths) and len(paths) == RUNTIME_SURFACES_PREIMAGE_PATH_COUNT, "runtime-surface receipt path set mismatch")
     require(path_digest(paths) == RUNTIME_SURFACES_PREIMAGE_PATH_SET_SHA256, "runtime-surface receipt path digest mismatch")
+    require(RUNTIME_SOURCE_STATIC_FALLBACK_PATH not in paths, "runtime-surface receipt unexpectedly contains static fallback path")
+    union_paths = sorted(set(paths) | {RUNTIME_SOURCE_STATIC_FALLBACK_PATH})
+    require(len(union_paths) == RUNTIME_SOURCE_UNION_PATH_COUNT, "runtime source union path count mismatch")
+    require(path_digest(union_paths) == RUNTIME_SOURCE_UNION_PATH_SET_SHA256, "runtime source union path digest mismatch")
     require(receipt.get("missing_path_count") == 0 and receipt.get("missing_paths") == [], "runtime-surface receipt has missing entries")
     entries = receipt.get("entries")
     require(isinstance(entries, list), "runtime-surface receipt entries are unavailable")
     runtime_preimages: dict[str, tuple[str, str, str]] = {}
+    runtime_postimages: dict[str, tuple[str, str, str]] = {}
     for item in entries:
         path = item.get("path")
         entry = item.get("entry")
@@ -1089,15 +1109,29 @@ def configure_runtime_source_contract(repo: pathlib.Path, receipt_path: pathlib.
         runtime_preimages[path] = (entry["mode"], entry["type"], entry["oid"])
         postimage = tree_entry(repo, BUILD_SOURCE_SHA, path)
         require(postimage is not None, f"runtime-surface source postimage is missing: {path}")
+        runtime_postimages[path] = postimage
         BUILD_SOURCE_ENTRIES[path] = postimage
         BUILD_SOURCE_PREIMAGE_ENTRIES[path] = runtime_preimages[path]
+    require(BUILD_SOURCE_PREIMAGE_ENTRIES[RUNTIME_SOURCE_STATIC_FALLBACK_PATH] == RUNTIME_SOURCE_STATIC_FALLBACK_PREIMAGE, "runtime static fallback preimage mismatch")
+    require(tree_entry(repo, BUILD_SOURCE_SHA, RUNTIME_SOURCE_STATIC_FALLBACK_PATH) == RUNTIME_SOURCE_STATIC_FALLBACK_POSTIMAGE, "runtime static fallback postimage mismatch")
+    BUILD_SOURCE_PREIMAGE_ENTRIES[RUNTIME_SOURCE_STATIC_FALLBACK_PATH] = RUNTIME_SOURCE_STATIC_FALLBACK_PREIMAGE
+    BUILD_SOURCE_ENTRIES[RUNTIME_SOURCE_STATIC_FALLBACK_PATH] = RUNTIME_SOURCE_STATIC_FALLBACK_POSTIMAGE
+    runtime_preimages[RUNTIME_SOURCE_STATIC_FALLBACK_PATH] = RUNTIME_SOURCE_STATIC_FALLBACK_PREIMAGE
+    runtime_postimages[RUNTIME_SOURCE_STATIC_FALLBACK_PATH] = RUNTIME_SOURCE_STATIC_FALLBACK_POSTIMAGE
     global BUILD_PATHS, BUILD_PATHS_SHA256, BUILD_SOURCE_DIFF_PATHS, BUILD_SOURCE_DIFF_PATHS_SHA256
+    global RUNTIME_SOURCE_PREIMAGE_MAP_COUNT, RUNTIME_SOURCE_PREIMAGE_MAP_SHA256
+    global RUNTIME_SOURCE_POSTIMAGE_MAP_COUNT, RUNTIME_SOURCE_POSTIMAGE_MAP_SHA256
     global OVERLAY_SOURCE_ENTRIES, OVERLAY_SOURCE_PREIMAGE_ENTRIES, OVERLAY_PATHS, OVERLAY_PATHS_SHA256
     global OVERLAY_CHANGED_PATHS, OVERLAY_CHANGED_PATHS_SHA256, ALLOWED_MUTABLE_PATHS
     BUILD_PATHS = list(BUILD_SOURCE_ENTRIES)
     BUILD_PATHS_SHA256 = path_digest(BUILD_PATHS)
     runtime_delta = run("git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", DIAGNOSTIC_PREDECESSOR_SOURCE_SHA, BUILD_SOURCE_SHA, cwd=repo).splitlines()
-    require(runtime_delta == paths, "runtime-surface source delta does not match receipt")
+    require(runtime_delta == union_paths, "runtime-surface source delta does not match receipt plus static fallback")
+    require(sorted(runtime_preimages) == union_paths and sorted(runtime_postimages) == union_paths, "runtime source map path set mismatch")
+    RUNTIME_SOURCE_PREIMAGE_MAP_COUNT = len(runtime_preimages)
+    RUNTIME_SOURCE_PREIMAGE_MAP_SHA256 = mode_type_oid_path_digest(runtime_preimages)
+    RUNTIME_SOURCE_POSTIMAGE_MAP_COUNT = len(runtime_postimages)
+    RUNTIME_SOURCE_POSTIMAGE_MAP_SHA256 = mode_type_oid_path_digest(runtime_postimages)
     BUILD_SOURCE_DIFF_PATHS = sorted(set(BUILD_SOURCE_DIFF_PATHS) | set(runtime_delta))
     BUILD_SOURCE_DIFF_PATHS_SHA256 = path_digest(BUILD_SOURCE_DIFF_PATHS)
     OVERLAY_SOURCE_ENTRIES = dict(sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items()))
