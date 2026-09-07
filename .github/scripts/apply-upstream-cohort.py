@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "80e0e192172f9fc998a635915f17a6011af6cbd6"
+PUSH_PREDECESSOR_SHA = "8a870731d9421d17fe9f6d141854e45ab651bef9"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -271,6 +271,53 @@ CORE_SKILLS_ADDITIONS_SHA256 = "04f0c6022797fad1b9eca3b28187331050753c76545167b8
 CORE_SKILLS_EXACT_SHA256 = "6b58a39c530f7d9c02138d51e85860aec1b36892d806028d55f8a2005fbf04a2"
 
 BUILD_PATHS = list(BUILD_SOURCE_ENTRIES)
+BUILD_SOURCE_DIFF_PATHS = [
+    ".github/workflows/bazel.yml",
+    ".github/workflows/blob-size-policy.yml",
+    ".github/workflows/rust-ci-full.yml",
+    ".github/workflows/rust-ci.yml",
+    ".github/workflows/v8-canary.yml",
+    "MODULE.bazel",
+    "codex-rs/Cargo.lock",
+    "codex-rs/Cargo.toml",
+    "codex-rs/codex-api/src/endpoint/responses.rs",
+    "codex-rs/codex-api/src/sse/responses.rs",
+    "codex-rs/http-client/src/lib.rs",
+    "codex-rs/http-client/src/tls_backend_fallback.rs",
+    "codex-rs/http-client/src/tls_backend_fallback_tests.rs",
+    "codex-rs/network-proxy/src/proxy.rs",
+    "codex-rs/otel/src/events/session_telemetry.rs",
+    "codex-rs/otel/src/tool_result.rs",
+    "codex-rs/protocol/src/legacy_events.rs",
+    "codex-rs/realtime-webrtc/BUILD.bazel",
+    "codex-rs/sandboxing/BUILD.bazel",
+    "codex-rs/sandboxing/Cargo.toml",
+    "codex-rs/sandboxing/src/denial.rs",
+    "codex-rs/sandboxing/src/landlock.rs",
+    "codex-rs/sandboxing/src/landlock_tests.rs",
+    "codex-rs/sandboxing/src/lib.rs",
+    "codex-rs/sandboxing/src/manager.rs",
+    "codex-rs/sandboxing/src/manager_tests.rs",
+    "codex-rs/sandboxing/src/policy_transforms.rs",
+    "codex-rs/sandboxing/src/policy_transforms_tests.rs",
+    "codex-rs/sandboxing/src/restricted_read_only_platform_defaults.sbpl",
+    "codex-rs/sandboxing/src/seatbelt.rs",
+    "codex-rs/sandboxing/src/seatbelt_base_policy.sbpl",
+    "codex-rs/sandboxing/src/seatbelt_preferences_policy.sbpl",
+    "codex-rs/sandboxing/src/seatbelt_read_only_platform_defaults.sbpl",
+    "codex-rs/sandboxing/src/seatbelt_tests.rs",
+    "codex-rs/sandboxing/src/spawn.rs",
+    "codex-rs/sandboxing/src/terminal_queries.rs",
+    "codex-rs/sandboxing/src/terminal_queries_tests.rs",
+    "codex-rs/sandboxing/src/violation.rs",
+    "codex-rs/sandboxing/src/violation_tests.rs",
+    "codex-rs/sandboxing/src/windows.rs",
+    "codex-rs/sandboxing/src/windows_mxc.rs",
+    "codex-rs/websocket-client/src/lib.rs",
+    "patches/BUILD.bazel",
+    "third_party/v8/rusty_v8_150_4_0.sha256",
+]
+BUILD_SOURCE_DIFF_PATHS_SHA256 = "297950d9003ea76efeee9a6c4dfea603c671a3d8a7fd4a22485e996d5c854b10"
 
 RESTORE_SOURCE_ENTRIES: dict[str, tuple[str, str, str]] = {
     "codex-rs/config/src/profile_toml.rs": (
@@ -946,6 +993,8 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
         "sandboxing_diagnostic_repository_id": SANDBOXING_DIAGNOSTIC_REPOSITORY_ID,
         "declared_path_count": len(OVERLAY_PATHS),
         "declared_path_set_sha256": OVERLAY_PATHS_SHA256,
+        "build_source_diff_path_count": len(BUILD_SOURCE_DIFF_PATHS),
+        "build_source_diff_path_set_sha256": BUILD_SOURCE_DIFF_PATHS_SHA256,
         "changed_path_count": len(OVERLAY_CHANGED_PATHS),
         "changed_path_set_sha256": OVERLAY_CHANGED_PATHS_SHA256,
         "restore_path_count": len(RESTORE_PATHS),
@@ -2175,8 +2224,8 @@ def verify_build_source_checkout(repo: pathlib.Path) -> None:
         BUILD_SOURCE_SHA,
         cwd=repo,
     ).splitlines()
-    require(changed == BUILD_PATHS, "build source diff is not the exact eleven-path authored cohort")
-    require(path_digest(changed) == BUILD_PATHS_SHA256, "build source path-set digest mismatch")
+    require(changed == BUILD_SOURCE_DIFF_PATHS, "build source diff is not the exact declared source cohort")
+    require(path_digest(changed) == BUILD_SOURCE_DIFF_PATHS_SHA256, "build source diff path-set digest mismatch")
     for path, expected in OVERLAY_SOURCE_ENTRIES.items():
         require(tree_entry(repo, BUILD_SOURCE_SHA, path) == expected, f"build source tuple mismatch: {path}")
 
@@ -2662,6 +2711,8 @@ def emit_tree_metadata_manifest(
             "build_overlay_path_set_sha256": OVERLAY_CHANGED_PATHS_SHA256,
             "build_source_authored_path_count": len(BUILD_PATHS),
             "build_source_authored_path_set_sha256": BUILD_PATHS_SHA256,
+            "build_source_diff_path_count": len(BUILD_SOURCE_DIFF_PATHS),
+            "build_source_diff_path_set_sha256": BUILD_SOURCE_DIFF_PATHS_SHA256,
             "declared_overlay_path_count": len(OVERLAY_PATHS),
             "declared_overlay_path_set_sha256": OVERLAY_PATHS_SHA256,
             "changed_overlay_path_count": len(OVERLAY_CHANGED_PATHS),
@@ -2991,6 +3042,8 @@ def collect_execution_inputs(
         "input_sdk_tree": SDK_CANDIDATE_TREE,
         "build_source_sha": BUILD_SOURCE_SHA,
         "build_source_tree": BUILD_SOURCE_TREE,
+        "build_source_diff_path_count": len(BUILD_SOURCE_DIFF_PATHS),
+        "build_source_diff_path_set_sha256": BUILD_SOURCE_DIFF_PATHS_SHA256,
         "path_observations": path_observations,
         "root_package": {
             "package_manager": root_manager,
@@ -3733,6 +3786,8 @@ def main() -> None:
             "actual_changed_paths": candidate_paths,
             "build_source_path_count": len(BUILD_PATHS),
             "build_source_path_set_sha256": BUILD_PATHS_SHA256,
+            "build_source_diff_path_count": len(BUILD_SOURCE_DIFF_PATHS),
+            "build_source_diff_path_set_sha256": BUILD_SOURCE_DIFF_PATHS_SHA256,
             "declared_overlay_path_count": len(OVERLAY_PATHS),
             "declared_overlay_path_set_sha256": OVERLAY_PATHS_SHA256,
             "changed_overlay_path_count": len(OVERLAY_CHANGED_PATHS),
