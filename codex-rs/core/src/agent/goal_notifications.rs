@@ -115,21 +115,21 @@ impl GoalNotificationStore {
         *self
             .projection
             .lock()
-            .expect("goal notification store poisoned") = Some(projection);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(projection);
     }
 
     pub fn set_source_turn(&self, source_turn_id: impl Into<String>) {
         *self
             .source_turn_id
             .lock()
-            .expect("goal notification store poisoned") = Some(source_turn_id.into());
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(source_turn_id.into());
     }
 
     pub fn publish(&self, binding: &GoalNotificationBinding, status: ThreadGoalStatus) -> bool {
         let mut projection = self
             .projection
             .lock()
-            .expect("goal notification store poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(projection) = projection.as_mut() else {
             return false;
         };
@@ -140,7 +140,7 @@ impl GoalNotificationStore {
         let mut projection = self
             .projection
             .lock()
-            .expect("goal notification store poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(projection) = projection.as_mut() else {
             return false;
         };
@@ -151,13 +151,13 @@ impl GoalNotificationStore {
         *self
             .projection
             .lock()
-            .expect("goal notification store poisoned") = None;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     pub fn snapshot(&self) -> Option<GoalNotificationSnapshot> {
         self.projection
             .lock()
-            .expect("goal notification store poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .map(|projection| projection.snapshot().clone())
     }
@@ -165,7 +165,7 @@ impl GoalNotificationStore {
     pub fn terminal_turn_is_wake_eligible(&self) -> Option<bool> {
         self.projection
             .lock()
-            .expect("goal notification store poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .and_then(|projection| match projection.snapshot().phase {
                 GoalNotificationPhase::ContinuationPending => Some(false),
@@ -184,7 +184,7 @@ impl GoalNotificationStore {
         let projection = self
             .projection
             .lock()
-            .expect("goal notification store poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let projection = projection.as_ref()?;
         if projection.snapshot().binding != *binding {
             return None;
@@ -212,7 +212,7 @@ impl GoalNotificationStore {
         if self
             .source_turn_id
             .lock()
-            .expect("goal notification store poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_deref()
             != Some(token.source_turn_id.as_str())
         {

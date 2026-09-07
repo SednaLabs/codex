@@ -151,10 +151,6 @@ impl GoalRuntimeHandle {
         Arc::clone(&self.inner.accounting_state)
     }
 
-    pub(crate) fn notification_store(&self) -> Arc<GoalNotificationStore> {
-        Arc::clone(&self.inner.notification_store)
-    }
-
     pub(crate) fn bind_goal_notification_turn(
         &self,
         turn_store: &ExtensionData,
