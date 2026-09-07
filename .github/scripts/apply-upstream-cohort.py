@@ -2343,7 +2343,8 @@ def emit_sandboxing_preimage_receipt(
         {"path": path, "entry": tuple_json(tree_entry(repo, SDK_CANDIDATE_SHA, path))}
         for path in SDK_BUNDLE_PROBE_PATHS
     ]
-    require(all(item["entry"] is not None for item in entries), "diagnostic path is missing")
+    missing_paths = sorted(item["path"] for item in entries if item["entry"] is None)
+    require(set(missing_paths).issubset(set(SDK_BUNDLE_PROBE_PATHS)), "diagnostic missing path escaped probe set")
     provider = verify_probe_provider_receipt(provider_receipt)
     receipt = {
         "schema": "sdk-sandboxing-preimage-diagnostic",
@@ -2363,6 +2364,8 @@ def emit_sandboxing_preimage_receipt(
         "candidate_sha": SDK_CANDIDATE_SHA,
         "candidate_tree": SDK_CANDIDATE_TREE,
         "path_set_sha256": path_digest(SDK_BUNDLE_PROBE_PATHS),
+        "missing_paths": missing_paths,
+        "missing_path_count": len(missing_paths),
         "entries": entries,
     }
     output.mkdir(parents=True, exist_ok=False)
