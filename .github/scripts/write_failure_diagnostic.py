@@ -432,8 +432,10 @@ def main() -> int:
     elif args.log_file:
         text, input_reason = read_bounded(args.log_file)
         if text is not None:
-            diagnostic = parse_text(text.splitlines(), args.diagnostic_kind.strip().lower())
-            if not diagnostic:
+            parsed_diagnostic = parse_text(text.splitlines(), args.diagnostic_kind.strip().lower())
+            if parsed_diagnostic:
+                diagnostic = parsed_diagnostic
+            else:
                 input_reason = "unsupported"
 
     if args.input_json:
