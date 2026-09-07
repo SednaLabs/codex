@@ -72,6 +72,10 @@ DIAGNOSTIC_SOURCE_SHA = "b593ff0ba02ff08d0c44f6db95840c6cc59f0598"
 DIAGNOSTIC_SOURCE_TREE = "8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47"
 DIAGNOSTIC_SOURCE_PARENT = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
 DIAGNOSTIC_HELPER_SHA = "80e0e192172f9fc998a635915f17a6011af6cbd6"
+TARGET_HELPER_BRANCH = "worker/w13825-sdk-build-consumer"
+TARGET_HELPER_SHA = "80e0e192172f9fc998a635915f17a6011af6cbd6"
+TARGET_HELPER_TREE = "64cae3373df656ba533248cfd740bd672c6f19d6"
+TARGET_HELPER_PARENT = "809f0c9c5ddf1da876a99c028e7f36bb7277283b"
 
 COMMON_SOURCE_RUN_ID = "34035744523"
 COMMON_SOURCE_RUN_ATTEMPT = "1"
@@ -2252,6 +2256,59 @@ def verify_imported_sdk_objects(repo: pathlib.Path) -> None:
     require(run("git", "show", "-s", "--format=%P", SDK_SOURCE_SHA, cwd=repo).split() == [BASE_SHA], "SDK source parent mismatch")
 
 
+def import_sdk_bundle_for_probe(bundle: pathlib.Path, temp: pathlib.Path) -> pathlib.Path:
+    repo = temp / "probe-sdk.git"
+    run("git", "init", "--bare", str(repo))
+    bundle_verifier = temp / "verify-sdk-input.git"
+    run("git", "init", "--bare", str(bundle_verifier))
+    run("git", "-C", str(bundle_verifier), "bundle", "verify", str(bundle))
+    heads: dict[str, str] = {}
+    for line in run("git", "-C", str(bundle_verifier), "bundle", "list-heads", str(bundle)).splitlines():
+        oid, ref = line.split(maxsplit=1)
+        require(ref not in heads, f"duplicate SDK bundle ref: {ref}")
+        heads[ref] = oid
+    require(heads == EXPECTED_SDK_BUNDLE_HEADS, "SDK input bundle head map mismatch")
+    for source_ref, oid in heads.items():
+        suffix = source_ref.rsplit("/", 1)[-1]
+        target_ref = f"refs/w13825-sdk-input/{suffix}"
+        run("git", "fetch", str(bundle), f"+{source_ref}:{target_ref}", cwd=repo)
+        require(run("git", "rev-parse", target_ref, cwd=repo).strip() == oid, f"SDK bundle import mismatch: {suffix}")
+    verify_imported_sdk_objects(repo)
+    return repo
+
+
+def source_checkout_inventory(repo: pathlib.Path) -> dict[str, Any]:
+    refs = run(
+        "git",
+        "for-each-ref",
+        "--format=%(refname)=%(objectname)",
+        cwd=repo,
+    ).splitlines()
+    return {
+        "refs": refs,
+        "status": run("git", "status", "--porcelain", cwd=repo),
+        "head": run("git", "rev-parse", "HEAD", cwd=repo).strip(),
+        "tree": run("git", "rev-parse", "HEAD^{tree}", cwd=repo).strip(),
+        "parent": run("git", "show", "-s", "--format=%P", "HEAD", cwd=repo).split(),
+    }
+
+
+def verify_probe_provider_receipt(provider_receipt: pathlib.Path) -> dict[str, Any]:
+    receipt = load(provider_receipt)
+    require(isinstance(receipt, dict), "diagnostic provider receipt must be an object")
+    require_fields(
+        receipt,
+        {
+            "target_helper_branch": TARGET_HELPER_BRANCH,
+            "target_helper_sha": TARGET_HELPER_SHA,
+            "target_helper_tree": TARGET_HELPER_TREE,
+            "target_helper_parent": TARGET_HELPER_PARENT,
+        },
+        "target helper provider receipt",
+    )
+    return receipt
+
+
 def emit_sdk_bundle_path_receipt(repo: pathlib.Path, diagnostics: pathlib.Path) -> dict[str, Any]:
     paths = list(SDK_BUNDLE_PROBE_PATHS)
     require(paths == sorted(paths) and len(paths) == len(set(paths)), "SDK bundle probe path set is not exact")
@@ -2287,17 +2344,22 @@ def emit_sandboxing_preimage_receipt(
         for path in SDK_BUNDLE_PROBE_PATHS
     ]
     require(all(item["entry"] is not None for item in entries), "diagnostic path is missing")
+    provider = verify_probe_provider_receipt(provider_receipt)
     receipt = {
         "schema": "sdk-sandboxing-preimage-diagnostic",
         "version": 1,
         "repository": REPOSITORY,
-        "workflow_sha": workflow_sha,
-        "workflow_tree": workflow_tree,
+        "diagnostic_workflow_sha": workflow_sha,
+        "diagnostic_workflow_tree": workflow_tree,
         "helper_sha": DIAGNOSTIC_HELPER_SHA,
+        "target_helper_branch": provider["target_helper_branch"],
+        "target_helper_sha": provider["target_helper_sha"],
+        "target_helper_tree": provider["target_helper_tree"],
+        "target_helper_parent": provider["target_helper_parent"],
         "source_sha": DIAGNOSTIC_SOURCE_SHA,
         "source_tree": DIAGNOSTIC_SOURCE_TREE,
         "source_parent": DIAGNOSTIC_SOURCE_PARENT,
-        "artifact_provider": load(provider_receipt),
+        "artifact_provider": provider,
         "candidate_sha": SDK_CANDIDATE_SHA,
         "candidate_tree": SDK_CANDIDATE_TREE,
         "path_set_sha256": path_digest(SDK_BUNDLE_PROBE_PATHS),
@@ -3495,23 +3557,26 @@ def main() -> None:
         require(args.provider_receipt is not None, "diagnostic provider receipt is required")
         provider_receipt = absolute_argument(args.provider_receipt, "provider-receipt", must_exist=True)
         require(provider_receipt.is_file() and not provider_receipt.is_symlink(), "provider receipt is unavailable")
-        require(run("git", "rev-parse", "HEAD", cwd=repo).strip() == DIAGNOSTIC_SOURCE_SHA, "diagnostic source SHA mismatch")
-        require(run("git", "rev-parse", "HEAD^{tree}", cwd=repo).strip() == DIAGNOSTIC_SOURCE_TREE, "diagnostic source tree mismatch")
-        require(run("git", "show", "-s", "--format=%P", "HEAD", cwd=repo).split() == [DIAGNOSTIC_SOURCE_PARENT], "diagnostic source parent mismatch")
-        require(not run("git", "status", "--porcelain", cwd=repo), "diagnostic source checkout is dirty")
+        source_before = source_checkout_inventory(repo)
+        require(source_before["head"] == DIAGNOSTIC_SOURCE_SHA, "diagnostic source SHA mismatch")
+        require(source_before["tree"] == DIAGNOSTIC_SOURCE_TREE, "diagnostic source tree mismatch")
+        require(source_before["parent"] == [DIAGNOSTIC_SOURCE_PARENT], "diagnostic source parent mismatch")
+        require(not source_before["status"], "diagnostic source checkout is dirty")
         files = verify_sdk_artifact_files(artifact)
         with tempfile.TemporaryDirectory(prefix="w13825-sdk-probe-", dir=str(repo.parent)) as temp_name:
             temp = pathlib.Path(temp_name).resolve(strict=True)
-            import_sdk_bundle(repo, files["bundle"], temp)
-            verify_imported_sdk_objects(repo)
-        output = absolute_argument(args.output_dir, "output-dir", must_exist=False)
-        emission = emit_sandboxing_preimage_receipt(
-            repo,
-            output,
-            provider_receipt,
-            args.expected_workflow_sha,
-            args.expected_workflow_tree,
-        )
+            isolated_repo = import_sdk_bundle_for_probe(files["bundle"], temp)
+            verify_imported_sdk_objects(isolated_repo)
+            output = absolute_argument(args.output_dir, "output-dir", must_exist=False)
+            emission = emit_sandboxing_preimage_receipt(
+                isolated_repo,
+                output,
+                provider_receipt,
+                args.expected_workflow_sha,
+                args.expected_workflow_tree,
+            )
+        source_after = source_checkout_inventory(repo)
+        require(source_after == source_before, "diagnostic source checkout changed during isolated probe")
         print(json.dumps(emission, sort_keys=True, separators=(",", ":")))
         return
     verify_build_source_checkout(repo)
