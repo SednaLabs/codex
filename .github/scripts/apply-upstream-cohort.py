@@ -79,24 +79,24 @@ COMMON_PROVENANCE_SHA256 = "afbf269c8593c978ed706c9f2fddc0031383350fe216d88512ec
 COMMON_STAGED_PATCH_SHA256 = "dd4b59d9be8c2727d08de673085b36a1c61f6cee617855f210706412a5bfc66c"
 COMMON_STAGED_PATHS_SHA256 = "90b44134bb538a07fa03dfd674e96f08de4ba04a40252f6dc9f5c740dd5bb1ae"
 
-BUILD_SOURCE_SHA = "b593ff0ba02ff08d0c44f6db95840c6cc59f0598"
-BUILD_SOURCE_TREE = "8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47"
-BUILD_SOURCE_PARENT = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
+BUILD_SOURCE_SHA = "b58f58149a0f86a2919847a519c0c594e3b68f57"
+BUILD_SOURCE_TREE = "c5a046c80730ea3107bea553cd2fad1701c819f6"
+BUILD_SOURCE_PARENT = "7dc8818d8cf5b27ddbba9776bc035feb30846408"
 BUILD_SOURCE_BRANCH = "worker/w13825-build-source-authoring-20260907"
-SANDBOXING_PREIMAGE_RECEIPT_SHA256 = "a51e419d19bfe58360b718dedc0b60dc16814a1ed1fc4da77fd8846a60c27427"
-SANDBOXING_PREIMAGE_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
-SANDBOXING_PREIMAGE_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
-SANDBOXING_PREIMAGE_PATH_COUNT = 23
-SANDBOXING_PREIMAGE_PATH_SET_SHA256 = "017139984c58749594a88c98b0e409fc0781741499cb3749b5037874b1f3b3ac"
-SANDBOXING_DIAGNOSTIC_ARTIFACT_ID = "10018560756"
-SANDBOXING_DIAGNOSTIC_ARTIFACT_NAME = "sdk-sandboxing-preimage-diagnostic-34121960735-1"
-SANDBOXING_DIAGNOSTIC_ARTIFACT_SIZE = 1752
-SANDBOXING_DIAGNOSTIC_ARTIFACT_DIGEST = "sha256:ee93c0938837b1a2a8b247b328f8374dc16a1eb2cc6149f7e36a2bb52a1df82a"
-SANDBOXING_DIAGNOSTIC_RUN_ID = "34121960735"
-SANDBOXING_DIAGNOSTIC_HEAD_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
-SANDBOXING_DIAGNOSTIC_HEAD_SHA = "ebd130a761ef5d98bac31bf1c0ab5883db3ac26f"
-SANDBOXING_DIAGNOSTIC_HEAD_TREE = "79c2e2ef0daab81375f240d92af9fc1dbcc3041f"
-SANDBOXING_DIAGNOSTIC_REPOSITORY_ID = "1152496647"
+RUNTIME_SURFACES_PREIMAGE_RECEIPT_SHA256 = "ecd4e62e6868a9ecbaa2e455645ca1f2a9093d373f25148c7a263f0169bf288d"
+RUNTIME_SURFACES_PREIMAGE_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
+RUNTIME_SURFACES_PREIMAGE_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
+RUNTIME_SURFACES_PREIMAGE_PATH_COUNT = 163
+RUNTIME_SURFACES_PREIMAGE_PATH_SET_SHA256 = "bafd2e6ed26638c260c5979c65db9a60ea5b085c69189439bdd7a9759c9e114d"
+RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID = "10021647248"
+RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_NAME = "sdk-runtime-surfaces-preimage-diagnostic-34129864201-1"
+RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_SIZE = 6658
+RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_DIGEST = "sha256:b888cc1a9b8c8626abb53eef5cc1873d5f4d09808a8b1862b4b3e98aeabf8eea"
+RUNTIME_SURFACES_DIAGNOSTIC_RUN_ID = "34129864201"
+RUNTIME_SURFACES_DIAGNOSTIC_HEAD_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
+RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA = "7a80f886b7ebf979b8324f7e3527afdbe83a65b3"
+RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE = "aebca2b3e58d90124b0962b1bb51fa581dfcb0d1"
+RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID = "1152496647"
 VOICE_HOST_DEFERRAL_BASELINE_SHA = "22a0c45ee711dc5ce47847dc04cbc5e7e76507c0"
 VOICE_HOST_DEFERRAL_BASELINE_ROOT_ENTRY = ("100644", "blob", "7bd8c144e52b169b907928bcf743363949d12cb2")
 BUILD_PATHS_SHA256 = "7dfbdc9e2a37f26c98451f904b7863743fdea91b34e5bacdc164708532ab8e90"
@@ -972,25 +972,26 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
         require(tree_entry(repo, BUILD_SOURCE_SHA, path) == postimage, f"overlay postimage mismatch: {path}")
     changed = sorted([*operations["A"], *operations["M"], *operations["D"]])
     require(changed == OVERLAY_CHANGED_PATHS, "overlay changed path set mismatch")
-    require(len(operations["A"]) == 36, "overlay addition count mismatch")
-    require(len(operations["M"]) == 28, "overlay modification count mismatch")
     require(not operations["D"], "unexpected current overlay deletion")
-    require(len(operations["E"]) == 26, "overlay exact-retention count mismatch")
+    require(
+        len(operations["A"]) + len(operations["M"]) == len(OVERLAY_CHANGED_PATHS),
+        "overlay changed operation count mismatch",
+    )
     return {
-        "sandboxing_preimage_receipt_sha256": SANDBOXING_PREIMAGE_RECEIPT_SHA256,
-        "sandboxing_preimage_candidate_sha": SANDBOXING_PREIMAGE_CANDIDATE_SHA,
-        "sandboxing_preimage_candidate_tree": SANDBOXING_PREIMAGE_CANDIDATE_TREE,
-        "sandboxing_preimage_path_count": SANDBOXING_PREIMAGE_PATH_COUNT,
-        "sandboxing_preimage_path_set_sha256": SANDBOXING_PREIMAGE_PATH_SET_SHA256,
-        "sandboxing_diagnostic_artifact_id": SANDBOXING_DIAGNOSTIC_ARTIFACT_ID,
-        "sandboxing_diagnostic_artifact_name": SANDBOXING_DIAGNOSTIC_ARTIFACT_NAME,
-        "sandboxing_diagnostic_artifact_size": SANDBOXING_DIAGNOSTIC_ARTIFACT_SIZE,
-        "sandboxing_diagnostic_artifact_digest": SANDBOXING_DIAGNOSTIC_ARTIFACT_DIGEST,
-        "sandboxing_diagnostic_run_id": SANDBOXING_DIAGNOSTIC_RUN_ID,
-        "sandboxing_diagnostic_head_branch": SANDBOXING_DIAGNOSTIC_HEAD_BRANCH,
-        "sandboxing_diagnostic_head_sha": SANDBOXING_DIAGNOSTIC_HEAD_SHA,
-        "sandboxing_diagnostic_head_tree": SANDBOXING_DIAGNOSTIC_HEAD_TREE,
-        "sandboxing_diagnostic_repository_id": SANDBOXING_DIAGNOSTIC_REPOSITORY_ID,
+        "runtime_surfaces_preimage_receipt_sha256": RUNTIME_SURFACES_PREIMAGE_RECEIPT_SHA256,
+        "runtime_surfaces_preimage_candidate_sha": RUNTIME_SURFACES_PREIMAGE_CANDIDATE_SHA,
+        "runtime_surfaces_preimage_candidate_tree": RUNTIME_SURFACES_PREIMAGE_CANDIDATE_TREE,
+        "runtime_surfaces_preimage_path_count": RUNTIME_SURFACES_PREIMAGE_PATH_COUNT,
+        "runtime_surfaces_preimage_path_set_sha256": RUNTIME_SURFACES_PREIMAGE_PATH_SET_SHA256,
+        "runtime_surfaces_diagnostic_artifact_id": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID,
+        "runtime_surfaces_diagnostic_artifact_name": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_NAME,
+        "runtime_surfaces_diagnostic_artifact_size": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_SIZE,
+        "runtime_surfaces_diagnostic_artifact_digest": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_DIGEST,
+        "runtime_surfaces_diagnostic_run_id": RUNTIME_SURFACES_DIAGNOSTIC_RUN_ID,
+        "runtime_surfaces_diagnostic_head_branch": RUNTIME_SURFACES_DIAGNOSTIC_HEAD_BRANCH,
+        "runtime_surfaces_diagnostic_head_sha": RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA,
+        "runtime_surfaces_diagnostic_head_tree": RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE,
+        "runtime_surfaces_diagnostic_repository_id": RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID,
         "declared_path_count": len(OVERLAY_PATHS),
         "declared_path_set_sha256": OVERLAY_PATHS_SHA256,
         "build_source_diff_path_count": len(BUILD_SOURCE_DIFF_PATHS),
@@ -1044,6 +1045,55 @@ def tree_entry(
     require(object_type == ("commit" if mode == "160000" else "blob"), f"mode/type mismatch for {path}")
     require(SHA_PATTERN.fullmatch(oid) is not None, f"invalid object ID for {path}")
     return mode, object_type, oid
+
+
+def configure_runtime_source_contract(repo: pathlib.Path, receipt_path: pathlib.Path) -> None:
+    receipt = load(receipt_path)
+    require(receipt.get("schema") == "sdk-runtime-surfaces-preimage-diagnostic", "runtime-surface receipt schema mismatch")
+    require(receipt.get("source_sha") == BUILD_SOURCE_SHA, "runtime-surface receipt source SHA mismatch")
+    require(receipt.get("source_tree") == BUILD_SOURCE_TREE, "runtime-surface receipt source tree mismatch")
+    require(receipt.get("source_parent") == BUILD_SOURCE_PARENT, "runtime-surface receipt source parent mismatch")
+    require(receipt.get("candidate_sha") == RUNTIME_SURFACES_PREIMAGE_CANDIDATE_SHA, "runtime-surface candidate SHA mismatch")
+    require(receipt.get("candidate_tree") == RUNTIME_SURFACES_PREIMAGE_CANDIDATE_TREE, "runtime-surface candidate tree mismatch")
+    require(receipt.get("diagnostic_workflow_sha") == RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA, "runtime-surface diagnostic SHA mismatch")
+    require(receipt.get("diagnostic_workflow_tree") == RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE, "runtime-surface diagnostic tree mismatch")
+    provider = receipt.get("artifact_provider")
+    require(isinstance(provider, dict), "runtime-surface provider receipt is unavailable")
+    require(provider.get("artifact_id") == SDK_INPUT_ARTIFACT_ID, "runtime-surface provider artifact mismatch")
+    require(provider.get("artifact_digest") == f"sha256:{SDK_INPUT_ARCHIVE_SHA256}" and provider.get("run_id") == SDK_INPUT_RUN_ID, "runtime-surface provider identity mismatch")
+    require(provider.get("target_helper_sha") == TARGET_HELPER_SHA and provider.get("target_helper_tree") == TARGET_HELPER_TREE, "runtime-surface helper proof mismatch")
+    paths = [entry.get("path") for entry in receipt.get("entries", [])]
+    require(paths == sorted(paths) and len(paths) == RUNTIME_SURFACES_PREIMAGE_PATH_COUNT, "runtime-surface receipt path set mismatch")
+    require(path_digest(paths) == RUNTIME_SURFACES_PREIMAGE_PATH_SET_SHA256, "runtime-surface receipt path digest mismatch")
+    require(receipt.get("missing_path_count") == 0 and receipt.get("missing_paths") == [], "runtime-surface receipt has missing entries")
+    entries = receipt.get("entries")
+    require(isinstance(entries, list), "runtime-surface receipt entries are unavailable")
+    runtime_preimages: dict[str, tuple[str, str, str]] = {}
+    for item in entries:
+        path = item.get("path")
+        entry = item.get("entry")
+        require(isinstance(path, str) and isinstance(entry, dict), "runtime-surface receipt entry is malformed")
+        runtime_preimages[path] = (entry["mode"], entry["type"], entry["oid"])
+        postimage = tree_entry(repo, BUILD_SOURCE_SHA, path)
+        require(postimage is not None, f"runtime-surface source postimage is missing: {path}")
+        BUILD_SOURCE_ENTRIES[path] = postimage
+        BUILD_SOURCE_PREIMAGE_ENTRIES[path] = runtime_preimages[path]
+    global BUILD_PATHS, BUILD_PATHS_SHA256, BUILD_SOURCE_DIFF_PATHS, BUILD_SOURCE_DIFF_PATHS_SHA256
+    global OVERLAY_SOURCE_ENTRIES, OVERLAY_SOURCE_PREIMAGE_ENTRIES, OVERLAY_PATHS, OVERLAY_PATHS_SHA256
+    global OVERLAY_CHANGED_PATHS, OVERLAY_CHANGED_PATHS_SHA256, ALLOWED_MUTABLE_PATHS
+    BUILD_PATHS = list(BUILD_SOURCE_ENTRIES)
+    BUILD_PATHS_SHA256 = path_digest(BUILD_PATHS)
+    runtime_delta = run("git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", DIAGNOSTIC_SOURCE_SHA, BUILD_SOURCE_SHA, cwd=repo).splitlines()
+    require(runtime_delta == paths, "runtime-surface source delta does not match receipt")
+    BUILD_SOURCE_DIFF_PATHS = sorted(set(BUILD_SOURCE_DIFF_PATHS) | set(runtime_delta))
+    BUILD_SOURCE_DIFF_PATHS_SHA256 = path_digest(BUILD_SOURCE_DIFF_PATHS)
+    OVERLAY_SOURCE_ENTRIES = dict(sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items()))
+    OVERLAY_SOURCE_PREIMAGE_ENTRIES = dict(sorted({**BUILD_SOURCE_PREIMAGE_ENTRIES, **RESTORE_SOURCE_PREIMAGE_ENTRIES, **CORE_SKILLS_SOURCE_PREIMAGE_ENTRIES}.items()))
+    OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
+    OVERLAY_PATHS_SHA256 = path_digest(OVERLAY_PATHS)
+    OVERLAY_CHANGED_PATHS = [path for path in OVERLAY_PATHS if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]]
+    OVERLAY_CHANGED_PATHS_SHA256 = path_digest(OVERLAY_CHANGED_PATHS)
+    ALLOWED_MUTABLE_PATHS = sorted(set(OVERLAY_CHANGED_PATHS) | set(GENERATED_PATHS))
 
 
 def normalized_tree_path(raw: bytes) -> str:
@@ -2219,6 +2269,7 @@ def verify_build_source_checkout(repo: pathlib.Path) -> None:
         "diff-tree",
         "--no-commit-id",
         "--name-only",
+        "--no-renames",
         "-r",
         BASE_SHA,
         BUILD_SOURCE_SHA,
@@ -3530,6 +3581,7 @@ def main() -> None:
     parser.add_argument("--validate-uv-identity")
     parser.add_argument("--prepare-inputs-only", action="store_true")
     parser.add_argument("--metadata-manifest-only", action="store_true")
+    parser.add_argument("--runtime-surfaces-receipt", type=pathlib.Path)
     args = parser.parse_args()
 
     runtime = verify_runtime(args.expected_workflow_sha, args.expected_workflow_tree)
@@ -3581,6 +3633,11 @@ def main() -> None:
     repo = absolute_argument(args.repo_root, "repo-root", must_exist=True)
     artifact = absolute_argument(args.artifact_dir, "artifact-dir", must_exist=True)
     require(repo.is_dir() and artifact.is_dir(), "repository and artifact inputs must be directories")
+    require(args.runtime_surfaces_receipt is not None, "runtime-surfaces receipt is required")
+    runtime_surfaces_receipt = absolute_argument(args.runtime_surfaces_receipt, "runtime-surfaces-receipt", must_exist=True)
+    require(runtime_surfaces_receipt.is_file() and not runtime_surfaces_receipt.is_symlink(), "runtime-surfaces receipt is unavailable")
+    require(digest(runtime_surfaces_receipt) == RUNTIME_SURFACES_PREIMAGE_RECEIPT_SHA256, "runtime-surfaces receipt digest mismatch")
+    configure_runtime_source_contract(repo, runtime_surfaces_receipt)
     verify_build_source_checkout(repo)
 
     if args.metadata_manifest_only:
@@ -3761,16 +3818,16 @@ def main() -> None:
             "version": 2,
             "repository": REPOSITORY,
             "input_sdk_artifact_id": SDK_INPUT_ARTIFACT_ID,
-            "sandboxing_diagnostic_artifact_id": SANDBOXING_DIAGNOSTIC_ARTIFACT_ID,
-            "sandboxing_diagnostic_artifact_name": SANDBOXING_DIAGNOSTIC_ARTIFACT_NAME,
-            "sandboxing_diagnostic_artifact_size": SANDBOXING_DIAGNOSTIC_ARTIFACT_SIZE,
-            "sandboxing_diagnostic_artifact_digest": SANDBOXING_DIAGNOSTIC_ARTIFACT_DIGEST,
-            "sandboxing_diagnostic_run_id": SANDBOXING_DIAGNOSTIC_RUN_ID,
-            "sandboxing_diagnostic_head_branch": SANDBOXING_DIAGNOSTIC_HEAD_BRANCH,
-            "sandboxing_diagnostic_head_sha": SANDBOXING_DIAGNOSTIC_HEAD_SHA,
-            "sandboxing_diagnostic_head_tree": SANDBOXING_DIAGNOSTIC_HEAD_TREE,
-            "sandboxing_diagnostic_repository_id": SANDBOXING_DIAGNOSTIC_REPOSITORY_ID,
-            "sandboxing_preimage_receipt_sha256": SANDBOXING_PREIMAGE_RECEIPT_SHA256,
+            "runtime_surfaces_diagnostic_artifact_id": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID,
+            "runtime_surfaces_diagnostic_artifact_name": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_NAME,
+            "runtime_surfaces_diagnostic_artifact_size": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_SIZE,
+            "runtime_surfaces_diagnostic_artifact_digest": RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_DIGEST,
+            "runtime_surfaces_diagnostic_run_id": RUNTIME_SURFACES_DIAGNOSTIC_RUN_ID,
+            "runtime_surfaces_diagnostic_head_branch": RUNTIME_SURFACES_DIAGNOSTIC_HEAD_BRANCH,
+            "runtime_surfaces_diagnostic_head_sha": RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA,
+            "runtime_surfaces_diagnostic_head_tree": RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE,
+            "runtime_surfaces_diagnostic_repository_id": RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID,
+            "runtime_surfaces_preimage_receipt_sha256": RUNTIME_SURFACES_PREIMAGE_RECEIPT_SHA256,
             "input_sdk_candidate": SDK_CANDIDATE_SHA,
             "input_sdk_tree": SDK_CANDIDATE_TREE,
             "input_sdk_parent": SDK_CANDIDATE_PARENT,

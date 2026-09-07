@@ -33,17 +33,17 @@ jobs:
       SDK_ARTIFACT_RUN_ID: "34042133059"
       SDK_ARTIFACT_HEAD_SHA: 0384d8ae9205e142fa4b352256d8c85a9e05f8c4
       SDK_ARTIFACT_HEAD_BRANCH: worker/w13825-sdk-producer-validation-20260907
-      SANDBOXING_DIAGNOSTIC_ARTIFACT_ID: "10018560756"
-      SANDBOXING_DIAGNOSTIC_ARTIFACT_NAME: sdk-sandboxing-preimage-diagnostic-34121960735-1
-      SANDBOXING_DIAGNOSTIC_ARTIFACT_SIZE: "1752"
-      SANDBOXING_DIAGNOSTIC_ARTIFACT_DIGEST: sha256:ee93c0938837b1a2a8b247b328f8374dc16a1eb2cc6149f7e36a2bb52a1df82a
-      SANDBOXING_DIAGNOSTIC_RUN_ID: "34121960735"
-      SANDBOXING_DIAGNOSTIC_HEAD_BRANCH: worker/w13825-sdk-network-proxy-diagnostic
-      SANDBOXING_DIAGNOSTIC_HEAD_SHA: ebd130a761ef5d98bac31bf1c0ab5883db3ac26f
-      SANDBOXING_DIAGNOSTIC_HEAD_TREE: 79c2e2ef0daab81375f240d92af9fc1dbcc3041f
-      SANDBOXING_DIAGNOSTIC_REPOSITORY_ID: "1152496647"
-      BUILD_SOURCE_SHA: b593ff0ba02ff08d0c44f6db95840c6cc59f0598
-      BUILD_SOURCE_TREE: 8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47
+      RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID: "10021647248"
+      RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_NAME: sdk-runtime-surfaces-preimage-diagnostic-34129864201-1
+      RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_SIZE: "6658"
+      RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_DIGEST: sha256:b888cc1a9b8c8626abb53eef5cc1873d5f4d09808a8b1862b4b3e98aeabf8eea
+      RUNTIME_SURFACES_DIAGNOSTIC_RUN_ID: "34129864201"
+      RUNTIME_SURFACES_DIAGNOSTIC_HEAD_BRANCH: worker/w13825-sdk-network-proxy-diagnostic
+      RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA: 7a80f886b7ebf979b8324f7e3527afdbe83a65b3
+      RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE: aebca2b3e58d90124b0962b1bb51fa581dfcb0d1
+      RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID: "1152496647"
+      BUILD_SOURCE_SHA: b58f58149a0f86a2919847a519c0c594e3b68f57
+      BUILD_SOURCE_TREE: c5a046c80730ea3107bea553cd2fad1701c819f6
       BUILD_SOURCE_BRANCH: worker/w13825-build-source-authoring-20260907
     steps:
       - name: Check out exact reviewed consumer helper
@@ -258,36 +258,36 @@ jobs:
           test "${repository_id}" = "${GITHUB_REPOSITORY_ID}"
           test "${head_repository_id}" = "${GITHUB_REPOSITORY_ID}"
 
-      - name: Verify exact sandboxing diagnostic provenance
+      - name: Verify exact runtime-surfaces diagnostic provenance
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           packet="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${SANDBOXING_DIAGNOSTIC_ARTIFACT_ID}" \
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID}" \
               --jq '[.id, .name, .size_in_bytes, .expired, .digest, .workflow_run.id, .workflow_run.head_branch, .workflow_run.head_sha, .workflow_run.repository_id, .workflow_run.head_repository_id] | @tsv'
           )"
           IFS=$'\t' read -r diagnostic_artifact_id diagnostic_artifact_name diagnostic_artifact_size diagnostic_expired diagnostic_artifact_digest diagnostic_run_id diagnostic_head_branch diagnostic_head_sha diagnostic_repository_id diagnostic_head_repository_id <<<"${packet}"
-          test "${diagnostic_artifact_id}" = "${SANDBOXING_DIAGNOSTIC_ARTIFACT_ID}"
-          test "${diagnostic_artifact_name}" = "${SANDBOXING_DIAGNOSTIC_ARTIFACT_NAME}"
-          test "${diagnostic_artifact_size}" = "${SANDBOXING_DIAGNOSTIC_ARTIFACT_SIZE}"
+          test "${diagnostic_artifact_id}" = "${RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID}"
+          test "${diagnostic_artifact_name}" = "${RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_NAME}"
+          test "${diagnostic_artifact_size}" = "${RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_SIZE}"
           test "${diagnostic_expired}" = false
-          test "${diagnostic_artifact_digest}" = "${SANDBOXING_DIAGNOSTIC_ARTIFACT_DIGEST}"
-          test "${diagnostic_run_id}" = "${SANDBOXING_DIAGNOSTIC_RUN_ID}"
-          test "${diagnostic_head_branch}" = "${SANDBOXING_DIAGNOSTIC_HEAD_BRANCH}"
-          test "${diagnostic_head_sha}" = "${SANDBOXING_DIAGNOSTIC_HEAD_SHA}"
-          test "${diagnostic_repository_id}" = "${SANDBOXING_DIAGNOSTIC_REPOSITORY_ID}"
-          test "${diagnostic_head_repository_id}" = "${SANDBOXING_DIAGNOSTIC_REPOSITORY_ID}"
-          diagnostic_commit="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${SANDBOXING_DIAGNOSTIC_HEAD_SHA}" --jq '[.sha, .tree.sha] | @tsv')"
+          test "${diagnostic_artifact_digest}" = "${RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_DIGEST}"
+          test "${diagnostic_run_id}" = "${RUNTIME_SURFACES_DIAGNOSTIC_RUN_ID}"
+          test "${diagnostic_head_branch}" = "${RUNTIME_SURFACES_DIAGNOSTIC_HEAD_BRANCH}"
+          test "${diagnostic_head_sha}" = "${RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA}"
+          test "${diagnostic_repository_id}" = "${RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID}"
+          test "${diagnostic_head_repository_id}" = "${RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID}"
+          diagnostic_commit="$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA}" --jq '[.sha, .tree.sha] | @tsv')"
           IFS=$'\t' read -r diagnostic_commit_sha diagnostic_commit_tree <<<"${diagnostic_commit}"
-          test "${diagnostic_commit_sha}" = "${SANDBOXING_DIAGNOSTIC_HEAD_SHA}"
-          test "${diagnostic_commit_tree}" = "${SANDBOXING_DIAGNOSTIC_HEAD_TREE}"
+          test "${diagnostic_commit_sha}" = "${RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA}"
+          test "${diagnostic_commit_tree}" = "${RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE}"
 
       - name: Check out exact reviewed build source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: b593ff0ba02ff08d0c44f6db95840c6cc59f0598
+          ref: b58f58149a0f86a2919847a519c0c594e3b68f57
           fetch-depth: 0
           persist-credentials: false
           path: source-candidate
@@ -299,7 +299,7 @@ jobs:
           source_root="${GITHUB_WORKSPACE}/source-candidate"
           test "${BUILD_SOURCE_SHA}" = "$(git -C "${source_root}" rev-parse HEAD)"
           test "${BUILD_SOURCE_TREE}" = "$(git -C "${source_root}" rev-parse HEAD^{tree})"
-          test "85b4fbedb76d439d64b6421fcbc213d54a7a89a9" = "$(git -C "${source_root}" show -s --format=%P HEAD)"
+          test "7dc8818d8cf5b27ddbba9776bc035feb30846408" = "$(git -C "${source_root}" show -s --format=%P HEAD)"
           test -z "$(git -C "${source_root}" status --porcelain)"
           remote_source="$({ git -C "${source_root}" ls-remote --heads origin "refs/heads/${BUILD_SOURCE_BRANCH}"; } | awk '{print $1}')"
           test "${remote_source}" = "${BUILD_SOURCE_SHA}"
@@ -314,6 +314,16 @@ jobs:
           path: ${{ runner.temp }}/w13825-sdk-input
           merge-multiple: true
 
+      - name: Download exact runtime-surfaces diagnostic receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: 10021647248
+          github-token: ${{ github.token }}
+          repository: sednalabs/codex
+          run-id: 34129864201
+          path: ${{ runner.temp }}/w13825-runtime-surfaces-diagnostic
+          merge-multiple: true
+
       - name: Preflight accepted execution inputs
         id: execution-inputs
         shell: bash
@@ -324,6 +334,7 @@ jobs:
             --prepare-inputs-only \
             --repo-root "${GITHUB_WORKSPACE}/source-candidate" \
             --artifact-dir "${RUNNER_TEMP}/w13825-sdk-input" \
+            --runtime-surfaces-receipt "${RUNNER_TEMP}/w13825-runtime-surfaces-diagnostic/receipt.json" \
             --preflight-dir "${preflight_dir}" \
             --expected-workflow-sha "${EXPECTED_WORKFLOW_SHA}" \
             --expected-workflow-tree "${EXPECTED_WORKFLOW_TREE}"
@@ -366,6 +377,7 @@ jobs:
           python3 "${GITHUB_WORKSPACE}/helper-checkout/.github/scripts/apply-upstream-cohort.py" \
             --repo-root "${GITHUB_WORKSPACE}/source-candidate" \
             --artifact-dir "${RUNNER_TEMP}/w13825-sdk-input" \
+            --runtime-surfaces-receipt "${RUNNER_TEMP}/w13825-runtime-surfaces-diagnostic/receipt.json" \
             --preflight-dir "${RUNNER_TEMP}/w13825-sdk-build-inputs" \
             --output-dir "${RUNNER_TEMP}/w13825-sdk-build-candidate" \
             --expected-workflow-sha "${EXPECTED_WORKFLOW_SHA}" \
