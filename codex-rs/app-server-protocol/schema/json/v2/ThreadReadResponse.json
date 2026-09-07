@@ -4,6 +4,126 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not\nguaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set\nusing [AbsolutePathBufGuard::new]. If no base path is set, the\ndeserialization will fail unless the path being deserialized is already\nabsolute.",
       "type": "string"
     },
+    "AgentNotificationContent": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "plaintextPreview",
+              "title": "PlaintextPreviewAgentNotificationContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text",
+            "truncated"
+          ],
+          "title": "PlaintextPreviewAgentNotificationContent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "senderSummary",
+              "title": "SenderSummaryAgentNotificationContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text",
+            "truncated"
+          ],
+          "title": "SenderSummaryAgentNotificationContent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "encryptedUnavailable",
+              "title": "EncryptedUnavailableAgentNotificationContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "EncryptedUnavailableAgentNotificationContent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unavailable",
+              "title": "UnavailableAgentNotificationContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "UnavailableAgentNotificationContent",
+          "type": "object"
+        }
+      ]
+    },
+    "AgentNotificationOrigin": {
+      "enum": [
+        "explicit_message",
+        "turn_result"
+      ],
+      "type": "string"
+    },
+    "AgentNotificationSummary": {
+      "properties": {
+        "communicationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content": {
+          "$ref": "#/$defs/AgentNotificationContent"
+        },
+        "origin": {
+          "$ref": "#/$defs/AgentNotificationOrigin"
+        },
+        "senderAgentPath": {
+          "type": "string"
+        },
+        "senderThreadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sequence",
+        "origin",
+        "senderAgentPath",
+        "content"
+      ],
+      "type": "object"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -209,6 +329,15 @@
         "inProgress",
         "completed",
         "failed"
+      ],
+      "type": "string"
+    },
+    "CollabWaitingCompletionReason": {
+      "enum": [
+        "terminal",
+        "mailbox",
+        "timeout",
+        "subscription_loss"
       ],
       "type": "string"
     },
@@ -1672,6 +1801,16 @@
               "description": "Last known status of the target agents, when available.",
               "type": "object"
             },
+            "completionReason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CollabWaitingCompletionReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "effectiveModel": {
               "description": "Effective model observed for a spawned agent at terminal lifecycle time.\n\nThis required nullable field is null when unknown and must not be filled from thread metadata or a request.",
               "type": [
@@ -1760,6 +1899,16 @@
               "const": "collabAgentToolCall",
               "title": "CollabAgentToolCallThreadItemType",
               "type": "string"
+            },
+            "wakeNotifications": {
+              "description": "Safe mailbox notifications observed by a native wait.",
+              "items": {
+                "$ref": "#/$defs/AgentNotificationSummary"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
             }
           },
           "required": [
