@@ -448,10 +448,15 @@ pub enum ThreadItem {
         /// Last known status of the target agents, when available.
         agents_states: HashMap<String, CollabAgentState>,
         /// Safe mailbox notifications observed by a native wait.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        #[schemars(with = "Option<Vec<AgentNotificationSummary>>", !default)]
         #[ts(optional = false)]
         wake_notifications: Option<Vec<AgentNotificationSummary>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        #[schemars(
+            with = "Option<codex_protocol::protocol::CollabWaitingCompletionReason>",
+            !default
+        )]
         #[ts(optional = false)]
         completion_reason: Option<codex_protocol::protocol::CollabWaitingCompletionReason>,
     },
