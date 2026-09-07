@@ -145,6 +145,8 @@ pub fn item_event_to_server_notification(
                 effective_model,
                 effective_reasoning_effort,
                 agents_states,
+                wake_notifications: None,
+                completion_reason: None,
             };
             ServerNotification::ItemCompleted(ItemCompletedNotification {
                 thread_id,
