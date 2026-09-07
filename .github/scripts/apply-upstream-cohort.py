@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "3acef4ff61209eea7a137fe2fac5b40691b2f222"
+PUSH_PREDECESSOR_SHA = "b493f8f276cd6c601de540d06ee7ebd2f78a59c2"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -477,6 +477,7 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES["codex-rs/config/src/profile_toml.rs"] = (
     "cfd82d1aaac577c57c472d06731ba030426feb02",
 )
 RESTORE_SOURCE_ENTRIES.update({
+    "codex-rs/code-mode-protocol/src/lib.rs": ("100644", "blob", "bb47b1a4c48cf5296a739768a071166a43928307"),
     "codex-rs/models-manager/src/cache.rs": ("100644", "blob", "903f70b9b234569a24b37480d2ec74ac93eccd29"),
     "codex-rs/models-manager/src/model_info.rs": ("100644", "blob", "f8c2ee3ecc0dc3ba5ea01572be70c13830faab92"),
     "codex-rs/models-manager/src/manager.rs": ("100644", "blob", "a0a0348e4e509f1e2c5f7d1d0d83deda09ba572a"),
@@ -504,6 +505,7 @@ RESTORE_SOURCE_ENTRIES.update({
     "codex-rs/sandboxing/src/windows_mxc.rs": ("100644", "blob", "97b32a2f0dd73ed1ca1968d5b5281a5d95095f8d"),
 })
 RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
+    "codex-rs/code-mode-protocol/src/lib.rs": ("100644", "blob", "c253f5bcc789e05bbbadd7fcbcff9cb86d2e9670"),
     "codex-rs/models-manager/src/cache.rs": ("100644", "blob", "15e8cf4dd8b2b5833406667d04c1969c30bfe875"),
     "codex-rs/models-manager/src/model_info.rs": ("100644", "blob", "fd9e2615c194411381634fd5806f4d91ead33c45"),
     "codex-rs/models-manager/src/manager.rs": ("100644", "blob", "45835c37cd41d28c3a6c038a3e77a1369621562a"),
@@ -531,8 +533,8 @@ RESTORE_SOURCE_PREIMAGE_ENTRIES.update({
     "codex-rs/sandboxing/src/windows_mxc.rs": ("100644", "blob", "97b32a2f0dd73ed1ca1968d5b5281a5d95095f8d"),
 })
 RESTORE_PATHS = list(RESTORE_SOURCE_ENTRIES)
-RESTORE_PATHS_SHA256 = "d95b6b5e0d47d88038225fabf25d9c9701e618c425eb171cba181a9ff76968e3"
-RESTORE_ENTRIES_SHA256 = "606c9cbca69a0f1d494fe10b4e94a6e1478935a788ce0516f43087a2e8896a0c"
+RESTORE_PATHS_SHA256 = "9405186f4638054f2b82036dd548bc54d0f2b5a9e122d283cdc38cb6c598e040"
+RESTORE_ENTRIES_SHA256 = "407113e557e923787d99f37fb9b2ae25845244364b024a1054c2eb649f3a0450"
 
 OVERLAY_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items())
@@ -545,13 +547,13 @@ OVERLAY_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     }.items())
 )
 OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
-OVERLAY_PATHS_SHA256 = "b2d093fb8cdd8d1fff4066773e1df5c5a9d0826c83af90e6e7a749515d68dc24"
+OVERLAY_PATHS_SHA256 = "c3211d81d51e693ea39ae3449a66747ea1258c67f4a32ca173c4305e3bc764b7"
 OVERLAY_CHANGED_PATHS = [
     path
     for path in OVERLAY_PATHS
     if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]
 ]
-OVERLAY_CHANGED_PATHS_SHA256 = "e338ed47fb97a948e6a8855844f67ff88ed2768fedc401a488216456fffd86e7"
+OVERLAY_CHANGED_PATHS_SHA256 = "b691c98e474ec1b47f8560b7380ed598a7adc3d944182830003e05ae7a735f1e"
 
 PATCH_DEPENDENCIES: dict[str, tuple[str, str, str]] = {
     "patches/rules_rs_windows_msvc_linker.patch": (
