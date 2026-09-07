@@ -352,6 +352,7 @@ jobs:
           name: codex-codeql-rust-${RUST_SCOPE}
           queries:
             - uses: security-and-quality
+            - uses: ./.github/codeql/rust-computer-use-contract/suites/rust-computer-use-production.qls
           paths:
           EOF
             printf '  - %s\n' "${scope_paths[@]}"

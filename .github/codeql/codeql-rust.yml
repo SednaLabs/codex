@@ -2,6 +2,7 @@ name: codex-codeql-rust
 
 queries:
   - uses: security-and-quality
+  - uses: ./.github/codeql/rust-computer-use-contract/suites/rust-computer-use-production.qls
 
 # Query-test fixtures live under .github/codeql and are exercised by
 # codeql-query-tests; production Rust CodeQL should scan real Rust roots.
