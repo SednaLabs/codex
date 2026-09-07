@@ -99,7 +99,7 @@ jobs:
           workflow_tree = sys.argv[3]
           push = {
               "ref": "refs/heads/worker/w13825-sdk-build-consumer",
-              "before": "e22c5ec06291f2e0f6b641c5bc6b5a7e40f16711",
+              "before": "a54784848e504ab9b69dacce0a656f0a71d2c988",
               "after": workflow_sha,
               "created": False,
               "deleted": False,
@@ -370,7 +370,7 @@ jobs:
       SDK_CANDIDATE_TREE: 6867e9e14ea8f416ee3075f959b880d038fe2cc0
       BUILD_SOURCE_SHA: 85b4fbedb76d439d64b6421fcbc213d54a7a89a9
       BUILD_SOURCE_TREE: 1179ce52f138e92e2aedfdeffc31d28f29992000
-      TARGET_HELPER_SHA: de8749b65a85014c535740f761ab3d23377d6fee
+      TARGET_HELPER_SHA: 809f0c9c5ddf1da876a99c028e7f36bb7277283b
     steps:
       - name: Check out exact diagnostic workflow
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -451,7 +451,7 @@ jobs:
             --probe-sdk-paths-only \
             --repo-root "${GITHUB_WORKSPACE}/source-candidate" \
             --artifact-dir "${RUNNER_TEMP}/w13825-sdk-input" \
-            --output-dir "${RUNNER_TEMP}/w13825-sdk-otel-diagnostic" \
+            --output-dir "${RUNNER_TEMP}/w13825-sdk-config-diagnostic" \
             --provider-receipt "${RUNNER_TEMP}/w13825-sdk-provider.json" \
             --expected-workflow-sha "${EXPECTED_WORKFLOW_SHA}" \
             --expected-workflow-tree "${EXPECTED_WORKFLOW_TREE}"
@@ -459,6 +459,6 @@ jobs:
       - name: Upload SDK OTEL preimage diagnostic
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: sdk-otel-preimage-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/w13825-sdk-otel-diagnostic
+          name: sdk-config-preimage-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/w13825-sdk-config-diagnostic
           if-no-files-found: error

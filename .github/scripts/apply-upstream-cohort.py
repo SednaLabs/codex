@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "e22c5ec06291f2e0f6b641c5bc6b5a7e40f16711"
+PUSH_PREDECESSOR_SHA = "a54784848e504ab9b69dacce0a656f0a71d2c988"
 
 BASE_SHA = "5eb6ca6519b1a79e8997bf21321885de1fd9ed01"
 BASE_TREE = "7a4e9d32c7a13a22215335a850cf879e284fdc63"
@@ -71,7 +71,7 @@ SDK_CANDIDATE_PARENT = MATERIALIZED_SHA
 DIAGNOSTIC_SOURCE_SHA = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
 DIAGNOSTIC_SOURCE_TREE = "1179ce52f138e92e2aedfdeffc31d28f29992000"
 DIAGNOSTIC_SOURCE_PARENT = "5628fffa86a9e9a7dcc0cfd8d18f4cc09906ad39"
-DIAGNOSTIC_HELPER_SHA = "de8749b65a85014c535740f761ab3d23377d6fee"
+DIAGNOSTIC_HELPER_SHA = "809f0c9c5ddf1da876a99c028e7f36bb7277283b"
 
 COMMON_SOURCE_RUN_ID = "34035744523"
 COMMON_SOURCE_RUN_ATTEMPT = "1"
@@ -461,11 +461,10 @@ GENERATED_PATHS = [
 SDK_GENERATED_PATHS = GENERATED_PATHS[3:]
 SDK_BUNDLE_PROBE_PATHS = sorted(
     [
-        "codex-rs/otel/src/events/session_telemetry.rs",
-        "codex-rs/otel/src/tool_result.rs",
+        "codex-rs/config/src/profile_toml.rs",
     ]
 )
-SDK_BUNDLE_PROBE_PATHS_SHA256 = "2410d56b16733f33e21e89dde78555f85aaf09f4781cd7f7c81ec41d05d74d5a"
+SDK_BUNDLE_PROBE_PATHS_SHA256 = "d895dc944ef4b5032bb157f441aea02cdb3833cdd1aba088c890096dcaa75449"
 SDK_BUNDLE_ROUTE_WITNESS = ("100644", "blob", "29705e44eb66f235adee5a8932264ee778f98ced")
 ALLOWED_MUTABLE_PATHS = sorted(set(OVERLAY_CHANGED_PATHS) | set(GENERATED_PATHS))
 
@@ -2267,7 +2266,7 @@ def emit_codex_api_preimage_receipt(
     ]
     require(all(item["entry"] is not None for item in entries), "diagnostic path is missing")
     receipt = {
-        "schema": "sdk-otel-preimage-diagnostic",
+        "schema": "sdk-config-preimage-diagnostic",
         "version": 1,
         "repository": REPOSITORY,
         "workflow_sha": workflow_sha,
