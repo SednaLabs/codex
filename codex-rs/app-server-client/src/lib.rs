@@ -2744,18 +2744,18 @@ mod tests {
                 ))
                 .await
         });
+        let request = timeout(Duration::from_secs(1), request_task)
+            .await
+            .expect("request control should remain responsive while events are unread")
+            .expect("request task should join")
+            .unwrap();
+        assert!(!request.requires_openai_auth);
         assert!(
             matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued")
         );
         assert!(
             matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "pending")
         );
-        let request = timeout(Duration::from_secs(1), request_task)
-            .await
-            .expect("request control should remain responsive")
-            .expect("request task should join")
-            .unwrap();
-        assert!(!request.requires_openai_auth);
         done_tx.send(()).unwrap();
         client.shutdown().await.unwrap();
     }

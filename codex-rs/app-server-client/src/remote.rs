@@ -519,7 +519,6 @@ impl RemoteAppServerClient {
                         }
                     }
                     message = stream.next(), if event_delivery_enabled
-                        && pending_required_event.is_none()
                         && terminal_state.is_none() => {
                         match message {
                             Some(Ok(Message::Text(text))) => {
@@ -559,6 +558,17 @@ impl RemoteAppServerClient {
                                                     );
                                                     event_delivery_enabled = false;
                                                 }
+                                                RemoteEventForwardResult::RequiredOverflow => {
+                                                    enter_remote_terminal_state(
+                                                        &mut terminal_state,
+                                                        &mut pending_requests,
+                                                        ErrorKind::WouldBlock,
+                                                        format!(
+                                                            "remote app server at `{endpoint}` exceeded bounded required event custody"
+                                                        ),
+                                                        RemoteDisconnectedDelivery::Pending,
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -596,6 +606,17 @@ impl RemoteAppServerClient {
                                                             &mut pending_requests,
                                                         );
                                                         event_delivery_enabled = false;
+                                                    }
+                                                    RemoteEventForwardResult::RequiredOverflow => {
+                                                        enter_remote_terminal_state(
+                                                            &mut terminal_state,
+                                                            &mut pending_requests,
+                                                            ErrorKind::WouldBlock,
+                                                            format!(
+                                                                "remote app server at `{endpoint}` exceeded bounded required event custody"
+                                                            ),
+                                                            RemoteDisconnectedDelivery::Pending,
+                                                        );
                                                     }
                                                 }
                                             }
@@ -1213,6 +1234,7 @@ enum RemoteEventForwardResult {
     Pending,
     DroppedBestEffort,
     Closed,
+    RequiredOverflow,
 }
 
 struct RemoteTerminalState {
@@ -1303,14 +1325,19 @@ fn finish_remote_control_write(
 /// Attempts to deliver one remote event without waiting for consumer capacity.
 ///
 /// The worker retains at most one required event in `pending_event`. Best-effort
-/// notification loss is represented by `skipped_events`; the worker's permit
-/// branch emits that lag count before polling the WebSocket again.
+/// notification loss is represented by `skipped_events`; response messages remain
+/// readable while required-event custody is pending. A second pending required
+/// event terminalizes the connection instead of evicting or overwriting custody.
 fn try_deliver_event(
     event_tx: &mpsc::Sender<AppServerEvent>,
     skipped_events: &mut usize,
     pending_event: &mut Option<AppServerEvent>,
     event: AppServerEvent,
 ) -> RemoteEventForwardResult {
+    if remote_event_requires_delivery(&event) && pending_event.is_some() {
+        return RemoteEventForwardResult::RequiredOverflow;
+    }
+
     // A lag marker is a FIFO barrier: events decoded after a dropped
     // best-effort notification must not overtake it, even if the consumer
     // drains a queue slot before the worker's permit branch runs.
