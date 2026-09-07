@@ -57,6 +57,7 @@ pub(crate) struct InputQueue {
 
 impl InputQueue {
     const MAX_PENDING_TERMINAL_COMPLETIONS: usize = 64;
+    pub(crate) const MAX_MAILBOX_NOTIFICATION_SNAPSHOT: usize = 64;
 
     pub(crate) fn new() -> Self {
         let (activity_tx, _) = watch::channel(InputQueueActivity::Mailbox);
@@ -226,12 +227,17 @@ impl InputQueue {
     /// Nondestructive mailbox read used by native wait reporting. The delivery
     /// queue remains untouched so model delivery ordering and ownership are
     /// preserved.
-    pub(crate) async fn snapshot_mailbox_communications(&self) -> Vec<InterAgentCommunication> {
+    pub(crate) async fn snapshot_mailbox_communications(
+        &self,
+    ) -> Vec<(InterAgentCommunication, u64)> {
         self.mailbox_pending_mails
             .lock()
             .await
             .iter()
+            .take(Self::MAX_MAILBOX_NOTIFICATION_SNAPSHOT)
             .cloned()
+            .enumerate()
+            .map(|(sequence, communication)| (communication, sequence as u64))
             .collect()
     }
 

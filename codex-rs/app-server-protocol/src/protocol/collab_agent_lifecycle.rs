@@ -66,13 +66,15 @@ pub(crate) fn merge_collab_agent_lifecycle(
                 ThreadItem::CollabAgentToolCall {
                     prompt: terminal_prompt,
                     agents_states: terminal_agents_states,
-                    wake_notifications: None,
+                    wake_notifications: terminal_wake_notifications,
+                    completion_reason: terminal_completion_reason,
                     ..
                 },
                 ThreadItem::CollabAgentToolCall {
                     prompt: started_prompt,
                     agents_states: started_agents_states,
-                    wake_notifications: None,
+                    wake_notifications: started_wake_notifications,
+                    completion_reason: started_completion_reason,
                     ..
                 },
             ) = (&mut terminal, &incoming)
@@ -84,6 +86,12 @@ pub(crate) fn merge_collab_agent_lifecycle(
                     terminal_agents_states
                         .entry(thread_id.clone())
                         .or_insert_with(|| state.clone());
+                }
+                if terminal_wake_notifications.is_none() {
+                    *terminal_wake_notifications = started_wake_notifications.clone();
+                }
+                if terminal_completion_reason.is_none() {
+                    *terminal_completion_reason = *started_completion_reason;
                 }
             }
             if let (

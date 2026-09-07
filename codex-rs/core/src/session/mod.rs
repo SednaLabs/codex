@@ -2086,13 +2086,14 @@ impl Session {
             .rollout_thread_trace
             .is_enabled()
             .then(|| message.clone());
-        let communication = InterAgentCommunication::new(
+        let mut communication = InterAgentCommunication::new(
             child_agent_path.clone(),
             parent_agent_path,
             Vec::new(),
             message,
             /*trigger_turn*/ false,
         );
+        communication.origin = Some(codex_protocol::protocol::AgentCommunicationOrigin::Result);
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, self.thread_id);
         if let Err(err) = self

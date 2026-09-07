@@ -450,6 +450,8 @@ pub enum ThreadItem {
         /// Safe mailbox notifications observed by a native wait.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wake_notifications: Option<Vec<AgentNotificationSummary>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        completion_reason: Option<codex_protocol::protocol::CollabWaitingCompletionReason>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1116,6 +1118,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     wake_notifications: call
                         .wake_notifications
                         .map(|notifications| notifications.into_iter().map(Into::into).collect()),
+                    completion_reason: call.completion_reason,
                 }
             }
             CoreTurnItem::SubAgentActivity(activity) => ThreadItem::SubAgentActivity {
@@ -1391,6 +1394,7 @@ pub enum AgentNotificationContent {
 #[ts(export_to = "v2/")]
 pub struct AgentNotificationSummary {
     pub communication_id: Option<String>,
+    pub sequence: u64,
     pub origin: AgentNotificationOrigin,
     pub sender_agent_path: String,
     pub sender_thread_id: Option<String>,
@@ -1401,6 +1405,7 @@ impl From<CoreAgentNotificationSummary> for AgentNotificationSummary {
     fn from(value: CoreAgentNotificationSummary) -> Self {
         Self {
             communication_id: value.communication_id.map(|id| id.to_string()),
+            sequence: value.sequence,
             origin: match value.origin {
                 CoreAgentNotificationOrigin::ExplicitMessage => {
                     AgentNotificationOrigin::ExplicitMessage

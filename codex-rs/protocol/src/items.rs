@@ -13,6 +13,7 @@ use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::protocol::AgentStatus;
 use crate::protocol::CollabAgentRef;
+use crate::protocol::CollabWaitingCompletionReason;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecCommandStatus;
 use crate::protocol::FileChange;
@@ -335,6 +336,9 @@ pub struct CollabAgentToolCallItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub wake_notifications: Option<Vec<AgentNotificationSummary>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub completion_reason: Option<CollabWaitingCompletionReason>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
@@ -358,6 +362,8 @@ pub struct AgentNotificationSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub communication_id: Option<ResponseItemId>,
+    /// Queue-local stable sequence for communications without a durable ID.
+    pub sequence: u64,
     pub origin: AgentNotificationOrigin,
     pub sender_agent_path: AgentPath,
     #[serde(default, skip_serializing_if = "Option::is_none")]

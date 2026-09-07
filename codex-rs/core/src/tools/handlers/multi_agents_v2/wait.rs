@@ -14,6 +14,7 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::AgentNotificationContent;
 use codex_protocol::items::AgentNotificationOrigin;
 use codex_protocol::items::AgentNotificationSummary;
+use codex_protocol::protocol::AgentCommunicationOrigin;
 use codex_protocol::protocol::CollabAgentRef;
 use codex_protocol::protocol::CollabWaitingCompletionReason;
 use codex_tools::ToolSpec;
@@ -200,6 +201,7 @@ impl Handler {
                     requested_reasoning_effort: None,
                     agents_states: Default::default(),
                     wake_notifications: None,
+                    completion_reason: None,
                 }),
             )
             .await;
@@ -356,7 +358,7 @@ pub(crate) struct WaitAgentResult {
     pub(crate) pending_ids: Vec<ThreadId>,
     pub(crate) completion_reason: CollabWaitingCompletionReason,
     pub(crate) timed_out: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) wake_notifications: Option<Vec<AgentNotificationSummary>>,
 }
 
@@ -368,7 +370,7 @@ async fn mailbox_notifications(session: &Session) -> Vec<AgentNotificationSummar
         .snapshot_mailbox_communications()
         .await
         .into_iter()
-        .map(|communication| {
+        .map(|(communication, sequence)| {
             let sender_thread_id = session
                 .services
                 .agent_control
@@ -392,7 +394,12 @@ async fn mailbox_notifications(session: &Session) -> Vec<AgentNotificationSummar
             };
             AgentNotificationSummary {
                 communication_id: communication.id,
-                origin: AgentNotificationOrigin::ExplicitMessage,
+                sequence,
+                origin: if communication.origin == Some(AgentCommunicationOrigin::Result) {
+                    AgentNotificationOrigin::TurnResult
+                } else {
+                    AgentNotificationOrigin::ExplicitMessage
+                },
                 sender_agent_path: communication.author,
                 sender_thread_id,
                 content,
@@ -571,6 +578,7 @@ async fn emit_wait_completion(
                 requested_reasoning_effort: None,
                 agents_states,
                 wake_notifications: (!notifications.is_empty()).then_some(notifications),
+                completion_reason: Some(completion_reason),
             }),
         )
         .await;
@@ -872,6 +880,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             CollabWaitingCompletionReason::SubscriptionLoss,
+            Vec::new(),
         );
         assert!(!result.timed_out);
         assert!(result.message.contains("subscription"));
@@ -966,6 +975,7 @@ mod tests {
             vec![requested_id],
             vec![pending_id],
             CollabWaitingCompletionReason::Timeout,
+            Vec::new(),
         );
 
         let output = result.output_value(ToolRuntimeCapabilities::upstream_default());

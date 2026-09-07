@@ -1226,13 +1226,15 @@ impl AgentControl {
                 ) else {
                     return;
                 };
-                let communication = InterAgentCommunication::new(
+                let mut communication = InterAgentCommunication::new(
                     child_agent_path,
                     parent_agent_path,
                     Vec::new(),
                     message,
                     /*trigger_turn*/ false,
                 );
+                communication.origin =
+                    Some(codex_protocol::protocol::AgentCommunicationOrigin::Result);
                 let context =
                     AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
                 let _ = control

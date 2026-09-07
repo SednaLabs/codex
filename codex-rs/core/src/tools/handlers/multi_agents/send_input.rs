@@ -83,6 +83,7 @@ impl Handler {
                     requested_reasoning_effort: None,
                     agents_states: Default::default(),
                     wake_notifications: None,
+                    completion_reason: None,
                 }),
             )
             .await;
@@ -117,6 +118,7 @@ impl Handler {
                     requested_reasoning_effort: None,
                     agents_states: [(receiver_thread_id, status)].into_iter().collect(),
                     wake_notifications: None,
+                    completion_reason: None,
                 }),
             )
             .await;

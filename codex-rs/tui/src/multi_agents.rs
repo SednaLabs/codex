@@ -428,6 +428,7 @@ pub(crate) fn tool_call_history_cell(
         effective_reasoning_effort,
         agents_states,
         wake_notifications,
+        completion_reason,
         ..
     } = item
     else {
@@ -509,6 +510,7 @@ pub(crate) fn tool_call_history_cell(
                     receiver_thread_ids,
                     agents_states,
                     wake_notifications.as_deref().unwrap_or_default(),
+                    *completion_reason,
                     &mut agent_metadata,
                 ))
             }
@@ -724,10 +726,16 @@ fn waiting_end(
     receiver_thread_ids: &[String],
     agents_states: &std::collections::HashMap<String, CollabAgentState>,
     notifications: &[AgentNotificationSummary],
+    completion_reason: Option<codex_protocol::protocol::CollabWaitingCompletionReason>,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
     let pending = pending_wait_thread_ids(receiver_thread_ids, agents_states);
-    let title = if pending.is_empty() {
+    let title = if matches!(
+        completion_reason,
+        Some(codex_protocol::protocol::CollabWaitingCompletionReason::Mailbox)
+    ) {
+        "Mailbox update received"
+    } else if pending.is_empty() {
         "Finished waiting"
     } else {
         "Mailbox update received"
@@ -745,7 +753,11 @@ fn notification_lines(notifications: &[AgentNotificationSummary]) -> Vec<Line<'s
             let content = match &notification.content {
                 AgentNotificationContent::PlaintextPreview { text, truncated }
                 | AgentNotificationContent::SenderSummary { text, truncated } => {
-                    format!(": {text}{}", if *truncated { "..." } else { "" })
+                    format!(
+                        ": {}{}",
+                        sanitize_notification_preview(text),
+                        if *truncated { "..." } else { "" }
+                    )
                 }
                 AgentNotificationContent::EncryptedUnavailable => {
                     ": [encrypted content unavailable]".to_string()
@@ -756,6 +768,16 @@ fn notification_lines(notifications: &[AgentNotificationSummary]) -> Vec<Line<'s
                 "Notification from {}{}",
                 notification.sender_agent_path, content
             ))
+        })
+        .collect()
+}
+
+fn sanitize_notification_preview(text: &str) -> String {
+    text.chars()
+        .map(|ch| match ch {
+            '\n' | '\r' | '\t' => ' ',
+            ch if ch.is_control() => '\u{FFFD}',
+            ch => ch,
         })
         .collect()
 }
@@ -1834,7 +1856,13 @@ mod tests {
             agent_state(CollabAgentStatus::Completed, Some("39916800")),
         );
         let waiting = waiting_begin(&receiver_thread_ids, &mut agent_metadata);
-        let finished = waiting_end(&receiver_thread_ids, &statuses, &[], &mut agent_metadata);
+        let finished = waiting_end(
+            &receiver_thread_ids,
+            &statuses,
+            &[],
+            None,
+            &mut agent_metadata,
+        );
 
         let snapshot = [waiting, finished]
             .iter()

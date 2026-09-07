@@ -2880,6 +2880,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             .into_iter()
             .collect(),
         wake_notifications: None,
+        completion_reason: None,
     });
 
     assert_eq!(
@@ -2907,6 +2908,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             .into_iter()
             .collect(),
             wake_notifications: None,
+            completion_reason: None,
         }
     );
 
@@ -2924,6 +2926,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         requested_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
         agents_states: HashMap::new(),
         wake_notifications: None,
+        completion_reason: None,
     });
 
     assert_eq!(
@@ -2945,6 +2948,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             ),
             agents_states: HashMap::new(),
             wake_notifications: None,
+            completion_reason: None,
         }
     );
 
@@ -3153,6 +3157,7 @@ fn v1_omitted_spawn_identity_sentinels_do_not_become_requested_identity() {
         requested_reasoning_effort: None,
         agents_states: HashMap::new(),
         wake_notifications: None,
+        completion_reason: None,
     });
 
     assert_eq!(
@@ -3172,6 +3177,7 @@ fn v1_omitted_spawn_identity_sentinels_do_not_become_requested_identity() {
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
             wake_notifications: None,
+            completion_reason: None,
         }
     );
 }
@@ -3193,6 +3199,7 @@ fn v1_model_only_spawn_does_not_invent_requested_effort() {
         requested_reasoning_effort: None,
         agents_states: HashMap::new(),
         wake_notifications: None,
+        completion_reason: None,
     });
 
     assert_eq!(
@@ -3212,6 +3219,7 @@ fn v1_model_only_spawn_does_not_invent_requested_effort() {
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
             wake_notifications: None,
+            completion_reason: None,
         }
     );
 }

@@ -899,6 +899,7 @@ impl ThreadHistoryBuilder {
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
             wake_notifications: None,
+            completion_reason: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -964,6 +965,7 @@ impl ThreadHistoryBuilder {
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
             wake_notifications: None,
+            completion_reason: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -993,6 +995,7 @@ impl ThreadHistoryBuilder {
             effective_reasoning_effort: None,
             agents_states: [(receiver_id, received_status)].into_iter().collect(),
             wake_notifications: None,
+            completion_reason: None,
         });
     }
 
@@ -1033,6 +1036,7 @@ impl ThreadHistoryBuilder {
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
             wake_notifications: None,
+            completion_reason: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -1094,6 +1098,7 @@ impl ThreadHistoryBuilder {
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
             wake_notifications: None,
+            completion_reason: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -1146,6 +1151,7 @@ impl ThreadHistoryBuilder {
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
             wake_notifications: None,
+            completion_reason: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -4048,6 +4054,7 @@ mod tests {
                     ),
                     agents_states: HashMap::new(),
                     wake_notifications: None,
+                    completion_reason: None,
                 },
                 /*started*/ true,
             ),
@@ -4068,6 +4075,7 @@ mod tests {
                     requested_reasoning_effort: None,
                     agents_states: [(child, AgentStatus::Running)].into_iter().collect(),
                     wake_notifications: None,
+                    completion_reason: None,
                 },
                 /*started*/ false,
             ),
@@ -4088,6 +4096,7 @@ mod tests {
                     requested_reasoning_effort: None,
                     agents_states: HashMap::new(),
                     wake_notifications: None,
+                    completion_reason: None,
                 },
                 /*started*/ true,
             ),
@@ -4110,6 +4119,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                     wake_notifications: None,
+                    completion_reason: None,
                 },
                 /*started*/ false,
             ),
@@ -4130,6 +4140,7 @@ mod tests {
                     requested_reasoning_effort: None,
                     agents_states: HashMap::new(),
                     wake_notifications: None,
+                    completion_reason: None,
                 },
                 /*started*/ true,
             ),
@@ -4152,6 +4163,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                     wake_notifications: None,
+                    completion_reason: None,
                 },
                 /*started*/ false,
             ),
@@ -4235,6 +4247,7 @@ mod tests {
                 ),
                 agents_states: HashMap::new(),
                 wake_notifications: None,
+                completion_reason: None,
             }),
         };
         let legacy_started = current_started
@@ -4347,6 +4360,7 @@ mod tests {
                     requested_reasoning_effort: None,
                     agents_states: HashMap::new(),
                     wake_notifications: None,
+                    completion_reason: None,
                 }),
             };
             let legacy_started = pre_additive_started
@@ -4384,6 +4398,7 @@ mod tests {
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
                 wake_notifications: None,
+                completion_reason: None,
             };
             let Some(ServerNotification::ItemStarted(mapped_started)) =
                 crate::protocol::event_mapping::item_event_to_server_notification(
@@ -4443,6 +4458,7 @@ mod tests {
                     requested_reasoning_effort: None,
                     agents_states: [(child, AgentStatus::Running)].into_iter().collect(),
                     wake_notifications: None,
+                    completion_reason: None,
                 },
                 /*started*/ false,
             ),
@@ -4465,6 +4481,7 @@ mod tests {
                     ),
                     agents_states: HashMap::new(),
                     wake_notifications: None,
+                    completion_reason: None,
                 },
                 /*started*/ true,
             ),
@@ -4765,6 +4782,7 @@ mod tests {
                 .into_iter()
                 .collect(),
                 wake_notifications: None,
+                completion_reason: None,
             }),
         };
 
@@ -5621,6 +5639,7 @@ mod tests {
                     ),
                     agents_states: HashMap::new(),
                     wake_notifications: None,
+                    completion_reason: None,
                 },
                 /*started*/ true,
             ),
@@ -5654,6 +5673,7 @@ mod tests {
                     ),
                     agents_states: [(child, AgentStatus::Running)].into_iter().collect(),
                     wake_notifications: None,
+                    completion_reason: None,
                 },
                 /*started*/ false,
             ),

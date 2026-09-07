@@ -754,6 +754,15 @@ pub struct InterAgentCommunication {
     #[ts(optional)]
     pub internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
     pub trigger_turn: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub origin: Option<AgentCommunicationOrigin>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCommunicationOrigin {
+    Result,
 }
 
 impl InterAgentCommunication {
@@ -773,6 +782,7 @@ impl InterAgentCommunication {
             encrypted_content: None,
             internal_chat_message_metadata_passthrough: None,
             trigger_turn,
+            origin: None,
         }
     }
 
@@ -792,6 +802,7 @@ impl InterAgentCommunication {
             encrypted_content: Some(encrypted_content),
             internal_chat_message_metadata_passthrough: None,
             trigger_turn,
+            origin: None,
         }
     }
 
@@ -4831,6 +4842,7 @@ mod tests {
             encrypted_content: None,
             internal_chat_message_metadata_passthrough: None,
             trigger_turn: true,
+            origin: None,
         };
         communication.set_turn_id_if_missing("turn-1");
         let mut serialized_communication = communication.clone();
@@ -5859,6 +5871,7 @@ mod tests {
                 requested_reasoning_effort: Some(ReasoningEffortConfig::High),
                 agents_states: Default::default(),
                 wake_notifications: None,
+                completion_reason: None,
             }),
         };
         let completed = ItemCompletedEvent {
@@ -5879,6 +5892,7 @@ mod tests {
                 requested_reasoning_effort: None,
                 agents_states: Default::default(),
                 wake_notifications: None,
+                completion_reason: None,
             }),
         };
 
@@ -5944,6 +5958,7 @@ mod tests {
                 requested_reasoning_effort: None,
                 agents_states: Default::default(),
                 wake_notifications: None,
+                completion_reason: None,
             }),
         };
         let historic_legacy_started = historic_started
@@ -6002,6 +6017,7 @@ mod tests {
                 requested_reasoning_effort: Some(ReasoningEffortConfig::Medium),
                 agents_states: Default::default(),
                 wake_notifications: None,
+                completion_reason: None,
             }),
         };
         let current_omitted = ItemStartedEvent {
@@ -6022,6 +6038,7 @@ mod tests {
                 requested_reasoning_effort: None,
                 agents_states: Default::default(),
                 wake_notifications: None,
+                completion_reason: None,
             }),
         };
 
