@@ -121,8 +121,6 @@ async fn handle_spawn_agent(
                 agents_states: Default::default(),
                 wake_notifications: None,
                 completion_reason: None,
-                wake_notifications: None,
-                completion_reason: None,
             }),
         )
         .await;
