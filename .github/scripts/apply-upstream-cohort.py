@@ -88,6 +88,15 @@ SANDBOXING_PREIMAGE_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
 SANDBOXING_PREIMAGE_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
 SANDBOXING_PREIMAGE_PATH_COUNT = 23
 SANDBOXING_PREIMAGE_PATH_SET_SHA256 = "017139984c58749594a88c98b0e409fc0781741499cb3749b5037874b1f3b3ac"
+SANDBOXING_DIAGNOSTIC_ARTIFACT_ID = "10018560756"
+SANDBOXING_DIAGNOSTIC_ARTIFACT_NAME = "sdk-sandboxing-preimage-diagnostic-34121960735-1"
+SANDBOXING_DIAGNOSTIC_ARTIFACT_SIZE = 1752
+SANDBOXING_DIAGNOSTIC_ARTIFACT_DIGEST = "sha256:ee93c0938837b1a2a8b247b328f8374dc16a1eb2cc6149f7e36a2bb52a1df82a"
+SANDBOXING_DIAGNOSTIC_RUN_ID = "34121960735"
+SANDBOXING_DIAGNOSTIC_HEAD_BRANCH = "worker/w13825-sdk-network-proxy-diagnostic"
+SANDBOXING_DIAGNOSTIC_HEAD_SHA = "ebd130a761ef5d98bac31bf1c0ab5883db3ac26f"
+SANDBOXING_DIAGNOSTIC_HEAD_TREE = "79c2e2ef0daab81375f240d92af9fc1dbcc3041f"
+SANDBOXING_DIAGNOSTIC_REPOSITORY_ID = "1152496647"
 VOICE_HOST_DEFERRAL_BASELINE_SHA = "22a0c45ee711dc5ce47847dc04cbc5e7e76507c0"
 VOICE_HOST_DEFERRAL_BASELINE_ROOT_ENTRY = ("100644", "blob", "7bd8c144e52b169b907928bcf743363949d12cb2")
 BUILD_PATHS_SHA256 = "7dfbdc9e2a37f26c98451f904b7863743fdea91b34e5bacdc164708532ab8e90"
@@ -926,6 +935,15 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
         "sandboxing_preimage_candidate_tree": SANDBOXING_PREIMAGE_CANDIDATE_TREE,
         "sandboxing_preimage_path_count": SANDBOXING_PREIMAGE_PATH_COUNT,
         "sandboxing_preimage_path_set_sha256": SANDBOXING_PREIMAGE_PATH_SET_SHA256,
+        "sandboxing_diagnostic_artifact_id": SANDBOXING_DIAGNOSTIC_ARTIFACT_ID,
+        "sandboxing_diagnostic_artifact_name": SANDBOXING_DIAGNOSTIC_ARTIFACT_NAME,
+        "sandboxing_diagnostic_artifact_size": SANDBOXING_DIAGNOSTIC_ARTIFACT_SIZE,
+        "sandboxing_diagnostic_artifact_digest": SANDBOXING_DIAGNOSTIC_ARTIFACT_DIGEST,
+        "sandboxing_diagnostic_run_id": SANDBOXING_DIAGNOSTIC_RUN_ID,
+        "sandboxing_diagnostic_head_branch": SANDBOXING_DIAGNOSTIC_HEAD_BRANCH,
+        "sandboxing_diagnostic_head_sha": SANDBOXING_DIAGNOSTIC_HEAD_SHA,
+        "sandboxing_diagnostic_head_tree": SANDBOXING_DIAGNOSTIC_HEAD_TREE,
+        "sandboxing_diagnostic_repository_id": SANDBOXING_DIAGNOSTIC_REPOSITORY_ID,
         "declared_path_count": len(OVERLAY_PATHS),
         "declared_path_set_sha256": OVERLAY_PATHS_SHA256,
         "changed_path_count": len(OVERLAY_CHANGED_PATHS),
@@ -3690,6 +3708,16 @@ def main() -> None:
             "version": 2,
             "repository": REPOSITORY,
             "input_sdk_artifact_id": SDK_INPUT_ARTIFACT_ID,
+            "sandboxing_diagnostic_artifact_id": SANDBOXING_DIAGNOSTIC_ARTIFACT_ID,
+            "sandboxing_diagnostic_artifact_name": SANDBOXING_DIAGNOSTIC_ARTIFACT_NAME,
+            "sandboxing_diagnostic_artifact_size": SANDBOXING_DIAGNOSTIC_ARTIFACT_SIZE,
+            "sandboxing_diagnostic_artifact_digest": SANDBOXING_DIAGNOSTIC_ARTIFACT_DIGEST,
+            "sandboxing_diagnostic_run_id": SANDBOXING_DIAGNOSTIC_RUN_ID,
+            "sandboxing_diagnostic_head_branch": SANDBOXING_DIAGNOSTIC_HEAD_BRANCH,
+            "sandboxing_diagnostic_head_sha": SANDBOXING_DIAGNOSTIC_HEAD_SHA,
+            "sandboxing_diagnostic_head_tree": SANDBOXING_DIAGNOSTIC_HEAD_TREE,
+            "sandboxing_diagnostic_repository_id": SANDBOXING_DIAGNOSTIC_REPOSITORY_ID,
+            "sandboxing_preimage_receipt_sha256": SANDBOXING_PREIMAGE_RECEIPT_SHA256,
             "input_sdk_candidate": SDK_CANDIDATE_SHA,
             "input_sdk_tree": SDK_CANDIDATE_TREE,
             "input_sdk_parent": SDK_CANDIDATE_PARENT,
