@@ -5217,6 +5217,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
             pending_ids: Vec::new(),
             completion_reason: CollabWaitingCompletionReason::Mailbox,
             timed_out: false,
+            wake_notifications: None,
         }
     );
     assert_eq!(success, None);
@@ -5304,6 +5305,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
             pending_ids: vec![agent_id],
             completion_reason: CollabWaitingCompletionReason::Mailbox,
             timed_out: false,
+            wake_notifications: None,
         }
     );
     assert_eq!(success, None);
