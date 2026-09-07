@@ -1,0 +1,25 @@
+<!DOCTYPE qhelp SYSTEM "qhelp.dtd">
+<qhelp>
+  <overview>
+    <p>
+      Visual computer-use responses must preserve one response object from the
+      provider through the native-image guard to the successful return.  A
+      branch-only guard, wrong object, response replacement, success reset, or
+      image removal can otherwise make text-only output look successful.
+    </p>
+    <p>
+      The query follows local aliases and ordinary borrows with the Rust data
+      flow library.  It trusts a guard only when its implementation still
+      downgrades a response after missing-image output; unknown wrappers and
+      collection semantics remain outside the claimed proof.
+    </p>
+  </overview>
+  <recommendation>
+    <p>
+      Guard the exact response returned by every successful visual path, keep
+      the guard on all paths to the return, and do not replace or mutate its
+      success, error, or content-items fields after the guard.  Definite failed
+      responses remain safe and are not reported as successful visual exits.
+    </p>
+  </recommendation>
+</qhelp>
