@@ -159,7 +159,7 @@ agentsStates: { [key in string]: CollabAgentState },
 /**
  * Safe mailbox notifications observed by a native wait.
  */
-wakeNotifications?: Array<AgentNotificationSummary> | null, completionReason?: CollabWaitingCompletionReason | null, } | { "type": "subAgentActivity", id: string, kind: SubAgentActivityKind, agentThreadId: string, agentPath: string,
+wakeNotifications: Array<AgentNotificationSummary> | null, completionReason: CollabWaitingCompletionReason | null, } | { "type": "subAgentActivity", id: string, kind: SubAgentActivityKind, agentThreadId: string, agentPath: string,
 /**
  * Effective model selected for the affected child, when known.
  */
