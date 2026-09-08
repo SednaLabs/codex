@@ -46,6 +46,24 @@ pub fn augment_tool_spec_for_code_mode(spec: ToolSpec) -> ToolSpec {
                         tool.description =
                             codex_code_mode::augment_tool_definition(definition).description;
                     }
+                    ResponsesApiNamespaceTool::Custom(tool) => {
+                        let tool_name =
+                            ToolName::namespaced(namespace.name.clone(), tool.name.clone());
+                        let (all_tools_name, all_tools_module) =
+                            all_tools_metadata_for_tool_name(&tool_name);
+                        let definition = CodeModeToolDefinition {
+                            name: code_mode_name_for_tool_name(&tool_name),
+                            tool_name,
+                            all_tools_name,
+                            all_tools_module,
+                            description: tool.description.clone(),
+                            kind: CodeModeToolKind::Freeform,
+                            input_schema: None,
+                            output_schema: None,
+                        };
+                        tool.description =
+                            codex_code_mode::augment_tool_definition(definition).description;
+                    }
                 }
             }
             ToolSpec::Namespace(namespace)
@@ -160,6 +178,21 @@ fn code_mode_tool_definitions_for_spec(spec: &ToolSpec) -> Vec<CodeModeToolDefin
                         output_schema: tool.output_schema.clone(),
                     }
                 }
+                ResponsesApiNamespaceTool::Custom(tool) => {
+                    let tool_name = ToolName::namespaced(namespace.name.clone(), tool.name.clone());
+                    let (all_tools_name, all_tools_module) =
+                        all_tools_metadata_for_tool_name(&tool_name);
+                    CodeModeToolDefinition {
+                        name: code_mode_name_for_tool_name(&tool_name),
+                        tool_name,
+                        all_tools_name,
+                        all_tools_module,
+                        description: tool.description.clone(),
+                        kind: CodeModeToolKind::Freeform,
+                        input_schema: None,
+                        output_schema: None,
+                    }
+                }
             })
             .collect(),
         ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => Vec::new(),
@@ -188,6 +221,10 @@ fn all_tools_metadata_for_name(tool_name: &str) -> (Option<String>, Option<Strin
 }
 
 pub fn code_mode_name_for_tool_name(tool_name: &ToolName) -> String {
+    if tool_name.is_default_namespace() {
+        return tool_name.name.clone();
+    }
+
     match tool_name.namespace.as_deref() {
         Some(namespace) if namespace.ends_with('_') || tool_name.name.starts_with('_') => {
             format!("{namespace}{}", tool_name.name)
