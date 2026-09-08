@@ -265,7 +265,7 @@ jobs:
             sedna-preview-cargo-home-macos-15-intel-x86_64-apple-darwin-
 
       - name: Install sccache
-        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
+        uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
         with:
           tool: sccache
 
