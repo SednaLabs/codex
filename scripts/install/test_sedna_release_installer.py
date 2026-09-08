@@ -61,7 +61,7 @@ class SednaReleaseInstallerTest(unittest.TestCase):
         self.assertTrue(current_target.endswith("/releases/v1.2.4-sedna.1"))
         self.assertIn("installed sednalabs/codex@v1.2.4-sedna.1", result.stdout)
 
-    def test_manual_prerelease_requires_explicit_opt_in(self) -> None:
+    def test_manual_prerelease_explicit_opt_in_activates_verified_release(self) -> None:
         result, requests, current_target = run_installer(
             "v1.2.4-alpha.1-sedna.1",
             "1.2.3-sedna.4",
@@ -69,16 +69,24 @@ class SednaReleaseInstallerTest(unittest.TestCase):
             use_latest=False,
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("refusing prerelease", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             requests,
             [
                 "https://api.github.com/repos/sednalabs/codex/releases/tags/"
-                "v1.2.4-alpha.1-sedna.1"
+                "v1.2.4-alpha.1-sedna.1",
+                "https://api.github.com/repos/sednalabs/codex/releases/assets/101",
+                "https://api.github.com/repos/sednalabs/codex/releases/assets/102",
+                "https://api.github.com/repos/sednalabs/codex/releases/assets/103",
             ],
         )
-        self.assertEqual(current_target, "previous-managed-release")
+        self.assertTrue(
+            current_target.endswith("/releases/v1.2.4-alpha.1-sedna.1"),
+            current_target,
+        )
+        self.assertIn(
+            "installed sednalabs/codex@v1.2.4-alpha.1-sedna.1", result.stdout
+        )
 
 
 def create_release(root: Path, release_tag: str) -> dict[str, Path]:
