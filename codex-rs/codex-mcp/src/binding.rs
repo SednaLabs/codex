@@ -203,6 +203,18 @@ impl PreparedMcpCall {
         &self.server_name
     }
 
+    /// Returns whether this call is bound to the host-owned Codex Apps server.
+    pub fn is_host_owned_apps(&self) -> bool {
+        self.config
+            .mcp_server_catalog
+            .server(&self.server_name)
+            .is_some_and(|registration| {
+                registration
+                    .source()
+                    .is_host_owned_apps(&self.server_name, registration.config())
+            })
+    }
+
     pub fn server_origin(&self) -> Option<&str> {
         self.server_metadata
             .origin
