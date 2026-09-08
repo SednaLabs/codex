@@ -56,6 +56,7 @@ jobs:
         shell: bash
         env:
           CARGO_INCREMENTAL: "0"
+          RUST_MIN_STACK: "8388608"
         working-directory: codex-rs
         run: |
           set +e
