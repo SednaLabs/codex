@@ -721,11 +721,12 @@ impl BottomPane {
             // configured action to interrupt even while the composer has focus.
             // When a popup is active, prefer dismissing it over interrupting the task.
             let is_bare_esc = key_event.code == KeyCode::Esc && key_event.modifiers.is_empty();
-            if self.keymap.chat.interrupt_turn.is_pressed(key_event)
-                && self.is_task_running
-                && !(is_agent_command && key_event.code == KeyCode::Esc)
-                && !self.composer.popup_active()
-                && !self.composer_should_handle_vim_insert_escape(key_event)
+            if !(self.composer.is_replay_only_thread()
+                || !self.keymap.chat.interrupt_turn.is_pressed(key_event)
+                || !self.is_task_running
+                || (is_agent_command && key_event.code == KeyCode::Esc)
+                || self.composer.popup_active()
+                || self.composer_should_handle_vim_insert_escape(key_event))
                 && self.status.is_some()
             {
                 let should_interrupt = if self.esc_interrupt_requires_double_press && is_bare_esc {
@@ -917,6 +918,10 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_replay_only_thread(&mut self, replay_only: bool) {
+        self.composer.set_replay_only_thread(replay_only);
+    }
+
     pub(crate) fn show_shutdown_in_progress(&mut self) {
         self.view_stack.clear();
         self.composer.show_shutdown_in_progress();
@@ -1010,11 +1015,16 @@ impl BottomPane {
     }
 
     pub(crate) fn active_view_will_interrupt_turn_on_key_event(&self, key_event: KeyEvent) -> bool {
-        self.active_view()
-            .is_some_and(|view| view.will_interrupt_turn_on_key_event(key_event))
+        !self.composer.is_replay_only_thread()
+            && self
+                .active_view()
+                .is_some_and(|view| view.will_interrupt_turn_on_key_event(key_event))
     }
 
     pub(crate) fn should_interrupt_running_task(&self, key_event: KeyEvent) -> bool {
+        if self.composer.is_replay_only_thread() {
+            return false;
+        }
         if self.active_view_will_interrupt_turn_on_key_event(key_event) {
             return true;
         }

@@ -9993,6 +9993,7 @@ fi
         self.assertEqual(build.get("runs-on"), "macos-15-intel")
         self.assertEqual(build.get("needs"), ["resolve", "release-macos-signing-preflight"])
         self.assertEqual((build.get("env") or {}).get("TARGET"), "x86_64-apple-darwin")
+        self.assertEqual((build.get("env") or {}).get("MACOSX_DEPLOYMENT_TARGET"), "12.0")
         self.assertEqual(sign.get("runs-on"), "ubuntu-24.04")
         self.assertIn(
             "macos_release_mode == 'notarized'",
@@ -10072,6 +10073,8 @@ fi
         for evidence in (
             "--identity -",
             "Signature=adhoc",
+            "LC_BUILD_VERSION",
+            "Monterey 12.0",
             "UNNOTARIZED-PREVIEW",
             '"signing": "ad-hoc"',
             '"notarized": False',

@@ -176,6 +176,11 @@ Intel macOS publication has four explicit modes:
   an Intel x64 tarball whose filename and metadata identify it as unnotarized. The binaries are
   architecture and signature checked, checksummed, and executed on an Intel macOS runner, but carry
   no Apple signing identity, are not Developer ID signed or notarized, and may be blocked by Gatekeeper.
+- Intel macOS release executables are built with `MACOSX_DEPLOYMENT_TARGET=12.0` and hosted artifact
+  checks inspect each shipped executable's Mach-O `LC_BUILD_VERSION` minimum version and x86_64 slice.
+  The hosted macOS runner is newer than Monterey; this metadata check does not claim a Monterey runtime
+  smoke test. No Monterey-hosted runner is currently part of this workflow, so Monterey runtime proof
+  remains an explicit validation gap.
 - `notarized` is fail-closed. It publishes Intel x64 binaries and a DMG only after Developer ID
   signing, Apple notarization, stapling, and a final Intel-runner verification pass.
 
