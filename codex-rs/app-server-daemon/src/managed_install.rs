@@ -257,7 +257,7 @@ pub(crate) async fn executable_identity(executable: &Path) -> Result<ExecutableI
     })
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 pub(crate) fn executable_identity_from_bytes(bytes: &[u8]) -> ExecutableIdentity {
     ExecutableIdentity {
         digest: Sha256::digest(bytes).into(),
