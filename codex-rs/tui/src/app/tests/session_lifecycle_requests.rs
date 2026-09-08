@@ -425,6 +425,107 @@ fn configure_backfill_primary(app: &mut App, primary_thread_id: ThreadId) {
     );
 }
 
+#[tokio::test]
+async fn replay_only_model_persistence_does_not_write_config() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let mut channel = ThreadEventChannel::new(/*capacity*/ 1);
+    channel.mark_replay_only();
+    app.thread_event_channels.insert(thread_id, channel);
+    app.active_thread_id = Some(thread_id);
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/tmp/project"),
+    ));
+
+    let (mut app_server, requests, proxy) = start_recording_app_server(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+
+    let live_target = ThreadId::new();
+    app.thread_event_channels
+        .insert(live_target, ThreadEventChannel::new(/*capacity*/ 1));
+    assert!(
+        !app.reject_replay_only_mutation(&AppEvent::SetThreadGoalStatus {
+            thread_id: live_target,
+            status: codex_app_server_protocol::ThreadGoalStatus::Complete,
+        })
+    );
+    assert!(
+        app.reject_replay_only_mutation(&AppEvent::SetThreadGoalStatus {
+            thread_id,
+            status: codex_app_server_protocol::ThreadGoalStatus::Complete,
+        })
+    );
+
+    app.pending_plugin_enabled_writes
+        .insert("plugin.test".to_string(), Some(true));
+    app.pending_hook_enabled_writes
+        .insert("hook.test".to_string(), Some(true));
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::PluginEnabledSet {
+            cwd: test_path_buf("/tmp/project"),
+            plugin_id: "plugin.test".to_string(),
+            enabled: false,
+            result: Err("replay-only test".to_string()),
+        },
+    )
+    .await?;
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::HookEnabledSet {
+            key: "hook.test".to_string(),
+            enabled: false,
+            result: Err("replay-only test".to_string()),
+        },
+    )
+    .await?;
+    assert!(requests.lock().expect("request recorder lock").is_empty());
+
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::PersistModelSelection {
+            model: "gpt-5.4".to_string(),
+            effort: None,
+        },
+    )
+    .await?;
+
+    assert!(
+        !requests
+            .lock()
+            .expect("request recorder lock")
+            .iter()
+            .any(|request| request.method == "config/batchWrite")
+    );
+
+    app.thread_event_channels
+        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::PersistModelSelection {
+            model: "gpt-5.4".to_string(),
+            effort: None,
+        },
+    )
+    .await?;
+    assert!(
+        requests
+            .lock()
+            .expect("request recorder lock")
+            .iter()
+            .any(|request| request.method == "config/batchWrite")
+    );
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
 #[test]
 fn lineage_backfill_resumes_failed_cursor_without_refetching_prefix() -> Result<()> {
     run_large_stack_app_test(|| async {
