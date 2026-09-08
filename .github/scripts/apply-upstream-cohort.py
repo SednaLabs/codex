@@ -32,8 +32,8 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "01ac1be860592952dd2cbd2a0f93b36a032b9cf3"
-DIAGNOSTIC_TAIL_LINES = 2000
+PUSH_PREDECESSOR_SHA = "127c31c549dee078f0ac27169f8fd0c9908ea621"
+DIAGNOSTIC_TAIL_LINES = 80
 DIAGNOSTIC_LINE_LIMIT = 4096
 DIAGNOSTIC_BYTE_LIMIT = 131072
 SECRET_NAME_TERM = r"(?:token|secret|password|passwd|credential|auth|cookie|private[\s_-]*key|api[\s_-]*key|access[\s_-]*key)"
@@ -3675,7 +3675,7 @@ def generate_and_test(
         "--lib",
         "service::tests::",
         cwd=worktree,
-        tail_lines=400,
+        tail_lines=2000,
     )
     require_candidate_paths(
         worktree,
