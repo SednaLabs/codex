@@ -2,10 +2,10 @@ use super::collect_output_until_exit;
 use super::combine_spawned_output;
 use super::find_python;
 use super::wait_for_output_contains;
-use crate::TerminalSize;
 use crate::pty::spawn_process_with_diagnostic_label;
 use crate::spawn_pipe_process_no_stdin;
 use crate::spawn_pty_process;
+use crate::TerminalSize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -416,32 +416,83 @@ async fn conpty_ctrl_c_interrupts_powershell_foreground_child() -> anyhow::Resul
     };
     let args = vec!["-NoLogo".to_string(), "-NoProfile".to_string()];
     let env: HashMap<String, String> = std::env::vars().collect();
-    let spawned = spawn_pty_process(
+    let diagnostic_label = format!(
+        "conpty-PowerShell-ctrl-c-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    );
+    let spawned = spawn_process_with_diagnostic_label(
         &program,
         &args,
         Path::new("."),
         &env,
         /*arg0*/ &None,
         TerminalSize::default(),
-        &[],
+        &diagnostic_label,
     )
     .await?;
     let (session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
     let writer = session.writer_sender();
+    eprintln!(
+        "[conpty-diagnostic] label={diagnostic_label} shell=PowerShell phase=ping bytes={} cr={} lf={}",
+        b"ping.exe -4 -t localhost\n".len(),
+        0,
+        1
+    );
     writer.send(b"ping.exe -4 -t localhost\n".to_vec()).await?;
-    wait_for_output_contains(&mut output_rx, "127.0.0.1", /*timeout_ms*/ 10_000).await?;
-
-    writer.send(vec![0x03]).await?;
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-    writer.send(b"cmd.exe /D /C ver\n".to_vec()).await?;
-    let mut output = wait_for_output_contains(
+    eprintln!(
+        "[conpty-diagnostic] label={diagnostic_label} shell=PowerShell phase=ping enqueue=accepted"
+    );
+    wait_for_output_contains_with_diagnostics(
         &mut output_rx,
+        &diagnostic_label,
+        "PowerShell",
+        "ping",
+        "127.0.0.1",
+        /*timeout_ms*/ 10_000,
+    )
+    .await?;
+
+    eprintln!(
+        "[conpty-diagnostic] label={diagnostic_label} shell=PowerShell phase=ctrl-c bytes=1 cr=0 lf=0 ctrl_c=1"
+    );
+    writer.send(vec![0x03]).await?;
+    eprintln!(
+        "[conpty-diagnostic] label={diagnostic_label} shell=PowerShell phase=ctrl-c enqueue=accepted"
+    );
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    eprintln!(
+        "[conpty-diagnostic] label={diagnostic_label} shell=PowerShell phase=resume-command bytes={} cr={} lf={}",
+        b"cmd.exe /D /C ver\n".len(),
+        0,
+        1
+    );
+    writer.send(b"cmd.exe /D /C ver\n".to_vec()).await?;
+    eprintln!(
+        "[conpty-diagnostic] label={diagnostic_label} shell=PowerShell phase=resume-command enqueue=accepted"
+    );
+    let mut output = wait_for_output_contains_with_diagnostics(
+        &mut output_rx,
+        &diagnostic_label,
+        "PowerShell",
+        "resume-command",
         "Microsoft Windows",
         /*timeout_ms*/ 10_000,
     )
     .await?;
 
+    eprintln!(
+        "[conpty-diagnostic] label={diagnostic_label} shell=PowerShell phase=exit-command bytes={} cr={} lf={}",
+        b"exit 0\n".len(),
+        0,
+        1
+    );
     writer.send(b"exit 0\n".to_vec()).await?;
+    eprintln!(
+        "[conpty-diagnostic] label={diagnostic_label} shell=PowerShell phase=exit-command enqueue=accepted"
+    );
     let (remaining, exit_code) =
         collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 10_000).await;
     output.extend_from_slice(&remaining);
