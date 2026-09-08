@@ -4917,7 +4917,18 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
         assert_eq!(result, InputResult::None);
+        assert!(
+            composer.is_in_paste_burst(),
+            "a printable key is held briefly before the next UI tick"
+        );
+        assert!(
+            composer.handle_paste_burst_flush(
+                Instant::now() + ChatComposer::recommended_paste_flush_delay()
+            ),
+            "the next UI tick should flush the held printable key"
+        );
         assert_eq!(composer.current_text(), "/skills!");
+        assert!(!composer.is_in_paste_burst());
     }
 
     #[test]

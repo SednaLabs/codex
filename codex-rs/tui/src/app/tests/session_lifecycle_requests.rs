@@ -735,21 +735,17 @@ async fn active_replay_only_selection_reports_unavailable_retry_and_keeps_draft(
     }
     assert!(
         errors.contains("Failed to attach to agent thread")
-            && errors.contains("fallback read unavailable"),
+            && errors.contains("thread/read failed during TUI session lookup"),
         "expected an in-app retry error, got {errors:?}"
     );
     let recorded = take_recorded_requests(&requests);
     assert_eq!(
         recorded
             .iter()
-            .filter(|request| request.method == "thread/read")
-            .count(),
-        2
-    );
-    assert!(
-        recorded
-            .iter()
-            .any(|request| request.method == "thread/resume")
+            .map(|request| request.method.as_str())
+            .collect::<Vec<_>>(),
+        vec!["thread/read", "thread/resume", "thread/read"],
+        "selection should retain the transient liveness read, retry live resume, then report the fallback read failure"
     );
 
     app_server.shutdown().await?;
