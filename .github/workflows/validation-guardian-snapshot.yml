@@ -7,14 +7,15 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: dfea6c2da50fa045c0f39e43295b1d2297111ecd
-  GUARDIAN_TEST: guardian::tests::guardian_reuses_prompt_cache_key_and_appends_prior_reviews
-  SNAPSHOT_PATH: codex-rs/core/src/guardian/snapshots/codex_core__guardian__tests__guardian_followup_review_request_layout.snap.new
-  INSTA_UPDATE: "new"
+  SOURCE_SHA: 3ed59fdba6280fee14e91572b03983a661efcec7
+  GUARDIAN_TEST_INITIAL: guardian::tests::guardian_review_request_layout_matches_model_visible_request_snapshot
+  GUARDIAN_TEST_FOLLOWUP: guardian::tests::guardian_reuses_prompt_cache_key_and_appends_prior_reviews
+  INITIAL_SNAPSHOT_PATH: codex-rs/core/src/guardian/snapshots/codex_core__guardian__tests__guardian_review_request_layout.snap.new
+  FOLLOWUP_SNAPSHOT_PATH: codex-rs/core/src/guardian/snapshots/codex_core__guardian__tests__guardian_followup_review_request_layout.snap
 
 jobs:
   capture:
-    name: Capture Guardian follow-up snapshot
+    name: Capture Guardian request-layout snapshots
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -72,52 +73,98 @@ jobs:
         working-directory: codex-rs
         run: |
           set +e
-          cargo nextest run -p codex-core --no-fail-fast --lib "${GUARDIAN_TEST}" -- --exact
-          exit_code=$?
-          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
+          initial_log="$(mktemp)"
+          followup_log="$(mktemp)"
+          CARGO_TERM_COLOR=never INSTA_UPDATE=new cargo nextest run -p codex-core --no-fail-fast --lib \
+            -- "${GUARDIAN_TEST_INITIAL}" --exact >"$initial_log" 2>&1
+          initial_exit_code=$?
+          cat "$initial_log"
+          CARGO_TERM_COLOR=never INSTA_UPDATE=no cargo nextest run -p codex-core --no-fail-fast --lib \
+            -- "${GUARDIAN_TEST_FOLLOWUP}" --exact >"$followup_log" 2>&1
+          followup_exit_code=$?
+          cat "$followup_log"
+          initial_status_found=0
+          followup_pass_found=0
+          grep -Eq "(PASS|FAIL).*${GUARDIAN_TEST_INITIAL}([[:space:]]|$)" "$initial_log" || initial_status_found=1
+          grep -Eq "PASS.*${GUARDIAN_TEST_FOLLOWUP}([[:space:]]|$)" "$followup_log" || followup_pass_found=1
+          rm -f -- "$initial_log" "$followup_log"
+          echo "initial_exit_code=${initial_exit_code}" >> "$GITHUB_OUTPUT"
+          echo "followup_exit_code=${followup_exit_code}" >> "$GITHUB_OUTPUT"
+          echo "initial_status_found=${initial_status_found}" >> "$GITHUB_OUTPUT"
+          echo "followup_pass_found=${followup_pass_found}" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Prepare bounded diagnostic output
         if: ${{ always() && !cancelled() }}
         shell: bash
         env:
-          TEST_EXIT: ${{ steps.test.outputs.exit_code }}
+          INITIAL_EXIT_CODE: ${{ steps.test.outputs.initial_exit_code }}
+          FOLLOWUP_EXIT_CODE: ${{ steps.test.outputs.followup_exit_code }}
+          INITIAL_STATUS_FOUND: ${{ steps.test.outputs.initial_status_found }}
+          FOLLOWUP_PASS_FOUND: ${{ steps.test.outputs.followup_pass_found }}
           ACTUAL_SHA: ${{ steps.source.outputs.actual_sha }}
         run: |
           set -euo pipefail
           output_dir="diagnostic-output/codex-rs/core/src/guardian/snapshots"
           mkdir -p "$output_dir"
-          if [[ -f "$SNAPSHOT_PATH" ]]; then
-            size_bytes="$(wc -c < "$SNAPSHOT_PATH")"
-            if [[ "$size_bytes" -gt 1048576 ]]; then
-              echo "Guardian snapshot exceeds 1 MiB diagnostic bound" >&2
-              exit 1
-            fi
-            cp -- "$SNAPSHOT_PATH" "$output_dir/$(basename "$SNAPSHOT_PATH")"
-          else
-            size_bytes=0
+          if [[ ! -f "$INITIAL_SNAPSHOT_PATH" ]]; then
+            echo "Expected changed initial Guardian snapshot candidate was not emitted" >&2
+            exit 1
           fi
+          if [[ ! -f "$FOLLOWUP_SNAPSHOT_PATH" ]]; then
+            echo "Expected unchanged follow-up Guardian canonical snapshot is missing" >&2
+            exit 1
+          fi
+          initial_size_bytes="$(wc -c < "$INITIAL_SNAPSHOT_PATH")"
+          followup_size_bytes="$(wc -c < "$FOLLOWUP_SNAPSHOT_PATH")"
+          if [[ "$initial_size_bytes" -gt 1048576 || "$followup_size_bytes" -gt 1048576 ]]; then
+            echo "Guardian snapshot exceeds 1 MiB diagnostic bound" >&2
+            exit 1
+          fi
+          cp -- "$INITIAL_SNAPSHOT_PATH" "$output_dir/$(basename "$INITIAL_SNAPSHOT_PATH")"
+          cp -- "$FOLLOWUP_SNAPSHOT_PATH" "$output_dir/$(basename "$FOLLOWUP_SNAPSHOT_PATH")"
+          initial_sha256="$(sha256sum "$INITIAL_SNAPSHOT_PATH" | awk '{print $1}')"
+          followup_sha256="$(sha256sum "$FOLLOWUP_SNAPSHOT_PATH" | awk '{print $1}')"
           printf '%s\n' \
             "source_sha=$SOURCE_SHA" \
             "actual_source_sha=$ACTUAL_SHA" \
             "workflow_sha=$GITHUB_SHA" \
-            "guardian_test=$GUARDIAN_TEST" \
-            "command=cargo nextest run -p codex-core --no-fail-fast --lib $GUARDIAN_TEST -- --exact" \
-            "insta_update=$INSTA_UPDATE" \
-            "test_exit=$TEST_EXIT" \
-            "snapshot_path=$SNAPSHOT_PATH" \
-            "snapshot_size_bytes=$size_bytes" \
+            "guardian_test_initial=$GUARDIAN_TEST_INITIAL" \
+            "guardian_test_followup=$GUARDIAN_TEST_FOLLOWUP" \
+            "initial_command=cargo nextest run -p codex-core --no-fail-fast --lib -- $GUARDIAN_TEST_INITIAL --exact" \
+            "followup_command=cargo nextest run -p codex-core --no-fail-fast --lib -- $GUARDIAN_TEST_FOLLOWUP --exact" \
+            "initial_insta_update=new" \
+            "followup_insta_update=no" \
+            "initial_test_exit=$INITIAL_EXIT_CODE" \
+            "followup_test_exit=$FOLLOWUP_EXIT_CODE" \
+            "initial_status_found=$INITIAL_STATUS_FOUND" \
+            "followup_pass_found=$FOLLOWUP_PASS_FOUND" \
+            "test_result_evidence=initial_status_line_and_snap_new;followup_PASS_status_line_and_exit_zero" \
+            "initial_snapshot_path=$INITIAL_SNAPSHOT_PATH" \
+            "initial_snapshot_provenance=generated_snap_new_after_initial_test" \
+            "initial_snapshot_size_bytes=$initial_size_bytes" \
+            "initial_snapshot_sha256=$initial_sha256" \
+            "followup_snapshot_path=$FOLLOWUP_SNAPSHOT_PATH" \
+            "followup_snapshot_provenance=preexisting_canonical_after_followup_test" \
+            "followup_snapshot_size_bytes=$followup_size_bytes" \
+            "followup_snapshot_sha256=$followup_sha256" \
             > diagnostic-output/receipt.txt
-          test "$size_bytes" -gt 0
+          test "$initial_size_bytes" -gt 0
+          test "$followup_size_bytes" -gt 0
           test "$ACTUAL_SHA" = "$SOURCE_SHA"
+          test "$INITIAL_EXIT_CODE" = 100
+          test "$FOLLOWUP_EXIT_CODE" = 0
+          test "$INITIAL_STATUS_FOUND" = 0
+          test "$FOLLOWUP_PASS_FOUND" = 0
 
       - name: Upload exact diagnostic output
         if: ${{ always() && !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: guardian-followup-snapshot-diagnostic
+          name: guardian-request-layout-snapshot-diagnostic
           path: |
-            diagnostic-output/codex-rs/core/src/guardian/snapshots/codex_core__guardian__tests__guardian_followup_review_request_layout.snap.new
+            diagnostic-output/codex-rs/core/src/guardian/snapshots/codex_core__guardian__tests__guardian_review_request_layout.snap.new
+            diagnostic-output/codex-rs/core/src/guardian/snapshots/codex_core__guardian__tests__guardian_followup_review_request_layout.snap
             diagnostic-output/receipt.txt
           if-no-files-found: error
           retention-days: 3
@@ -126,5 +173,12 @@ jobs:
         if: ${{ always() && !cancelled() }}
         shell: bash
         env:
-          TEST_EXIT: ${{ steps.test.outputs.exit_code }}
-        run: test "${TEST_EXIT}" = 0
+          INITIAL_EXIT_CODE: ${{ steps.test.outputs.initial_exit_code }}
+          FOLLOWUP_EXIT_CODE: ${{ steps.test.outputs.followup_exit_code }}
+          INITIAL_STATUS_FOUND: ${{ steps.test.outputs.initial_status_found }}
+          FOLLOWUP_PASS_FOUND: ${{ steps.test.outputs.followup_pass_found }}
+        run: |
+          test "${INITIAL_EXIT_CODE}" = 100
+          test "${FOLLOWUP_EXIT_CODE}" = 0
+          test "${INITIAL_STATUS_FOUND}" = 0
+          test "${FOLLOWUP_PASS_FOUND}" = 0
