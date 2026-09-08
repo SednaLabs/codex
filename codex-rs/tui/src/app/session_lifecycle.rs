@@ -773,7 +773,11 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<bool> {
-        if self.thread_event_channels.contains_key(&thread_id) {
+        if self
+            .thread_event_channels
+            .get(&thread_id)
+            .is_some_and(|channel| channel.attachment() == ThreadEventAttachment::Live)
+        {
             return Ok(true);
         }
 
@@ -899,12 +903,49 @@ impl App {
         thread_id: ThreadId,
     ) -> Result<()> {
         if self.active_thread_id == Some(thread_id) {
-            if self.should_attach_live_thread_for_selection(thread_id) {
-                let live_attached = self
-                    .attach_live_thread_for_selection(app_server, thread_id)
-                    .await?;
-                self.chat_widget.set_replay_only_thread(!live_attached);
+            if !self.should_attach_live_thread_for_selection(thread_id) {
+                return Ok(());
             }
+
+            let live_attached = self
+                .attach_live_thread_for_selection(app_server, thread_id)
+                .await?;
+            self.store_active_thread_receiver().await;
+            self.active_thread_id = None;
+            let Some((receiver, snapshot)) = self.activate_thread_for_replay(thread_id).await
+            else {
+                return Err(color_eyre::eyre::eyre!(
+                    "Agent thread {thread_id} could not be reactivated after attach."
+                ));
+            };
+            let blocks_direct_input = self.agent_navigation.is_parent_owned(thread_id);
+
+            self.active_thread_id = Some(thread_id);
+            self.active_thread_rx = Some(receiver);
+
+            let init = self.chatwidget_init_for_forked_or_resumed_thread(
+                tui,
+                self.config.clone(),
+                /*initial_user_message*/ None,
+            );
+            self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+            self.chat_widget.set_replay_only_thread(!live_attached);
+            if blocks_direct_input {
+                self.chat_widget.set_parent_owned_thread();
+            }
+
+            self.reset_for_thread_switch(tui)?;
+            self.replay_thread_snapshot(snapshot, live_attached);
+            if !live_attached {
+                self.chat_widget.add_info_message(
+                    format!(
+                        "Agent thread {thread_id} could not be resumed live. Replaying saved transcript."
+                    ),
+                    /*hint*/ None,
+                );
+            }
+            self.drain_active_thread_events(tui).await?;
+            self.refresh_pending_thread_approvals().await;
             return Ok(());
         }
 

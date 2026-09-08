@@ -2563,7 +2563,7 @@ async fn should_attach_live_thread_for_selection_includes_closed_metadata_only_t
 #[test]
 fn select_persisted_paginated_closed_thread_resumes_before_replay_fallback() -> Result<()> {
     run_large_stack_app_test(|| async {
-        let mut app = make_test_app().await;
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
         app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
@@ -2587,8 +2587,12 @@ fn select_persisted_paginated_closed_thread_resumes_before_replay_fallback() -> 
             /*created_at*/ None,
             /*updated_at*/ None,
         );
+        let mut replay_channel = ThreadEventChannel::new(/*capacity*/ 1);
+        replay_channel.mark_replay_only();
+        app.thread_event_channels.insert(thread_id, replay_channel);
 
         let mut tui = crate::tui::test_support::make_test_tui()?;
+        while app_event_rx.try_recv().is_ok() {}
         app.select_agent_thread(&mut tui, &mut app_server, thread_id)
             .await?;
 
@@ -2606,6 +2610,18 @@ fn select_persisted_paginated_closed_thread_resumes_before_replay_fallback() -> 
                 "the successful resume should seed the selected thread session"
             );
         }
+        let mut replayed_history = String::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                replayed_history.push_str(&lines_to_single_string(
+                    &cell.transcript_lines(/*width*/ 80),
+                ));
+            }
+        }
+        assert!(
+            replayed_history.contains("Saved paginated message"),
+            "the active view should replay the authoritative resumed turn, got {replayed_history:?}"
+        );
         app_server.shutdown().await?;
         Ok(())
     })

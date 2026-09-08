@@ -126,6 +126,7 @@ async fn start_recording_app_server_with_lineage(
         lineage_responses,
         thread_read_responses,
         /*loaded_list_responses*/ None,
+        /*resume_error_thread_id*/ None,
         /*with_state_db*/ true,
     )
     .await
@@ -137,6 +138,7 @@ async fn start_recording_app_server_with_lineage_and_state(
     lineage_responses: Option<Arc<Mutex<VecDeque<ScriptedLineageResponse>>>>,
     thread_read_responses: Option<Arc<Mutex<VecDeque<ScriptedThreadReadResponse>>>>,
     loaded_list_responses: Option<Arc<Mutex<VecDeque<serde_json::Value>>>>,
+    resume_error_thread_id: Option<ThreadId>,
     with_state_db: bool,
 ) -> Result<(AppServerSession, RecordedRequests, JoinHandle<Result<()>>)> {
     let state_db = if with_state_db {
@@ -164,6 +166,7 @@ async fn start_recording_app_server_with_lineage_and_state(
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let websocket_url = format!("ws://{}", listener.local_addr()?);
     let blocked_thread_read_id = blocked_thread_read_id.map(|thread_id| thread_id.to_string());
+    let resume_error_thread_id = resume_error_thread_id.map(|thread_id| thread_id.to_string());
     let proxy = tokio::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut websocket = accept_async(stream).await?;
@@ -252,6 +255,31 @@ async fn start_recording_app_server_with_lineage_and_state(
                                 })
                             }
                         };
+                        websocket
+                            .send(Message::Text(serde_json::to_string(&message)?.into()))
+                            .await?;
+                        continue;
+                    }
+                    if request.method == "thread/resume"
+                        && resume_error_thread_id
+                            .as_deref()
+                            .is_some_and(|resume_error_thread_id| {
+                                request
+                                    .params
+                                    .as_ref()
+                                    .and_then(|params| params.get("threadId"))
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some(resume_error_thread_id)
+                            })
+                    {
+                        let message = JSONRPCMessage::Error(JSONRPCError {
+                            id: request.id.clone(),
+                            error: JSONRPCErrorError {
+                                code: -32603,
+                                message: "scripted resume failure".to_string(),
+                                data: None,
+                            },
+                        });
                         websocket
                             .send(Message::Text(serde_json::to_string(&message)?.into()))
                             .await?;
@@ -550,6 +578,89 @@ async fn replay_only_model_persistence_does_not_write_config() -> Result<()> {
             .iter()
             .any(|request| request.method == "config/batchWrite")
     );
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_replay_only_selection_retries_failed_resume_and_preserves_draft() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let mut replay_channel = ThreadEventChannel::new(/*capacity*/ 1);
+    replay_channel.mark_replay_only();
+    {
+        let mut store = replay_channel.store.lock().await;
+        store.set_session(
+            test_thread_session(thread_id, test_path_buf("/tmp/replay-only")),
+            vec![test_turn("stale-turn", TurnStatus::Completed, Vec::new())],
+        );
+    }
+    app.thread_event_channels.insert(thread_id, replay_channel);
+    app.agent_navigation.upsert(
+        thread_id,
+        Some("cached".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ true,
+        /*created_at*/ None,
+        /*updated_at*/ None,
+    );
+    app.active_thread_id = Some(thread_id);
+    let draft = "keep this draft while retrying".to_string();
+    app.chat_widget
+        .restore_user_message_to_composer(draft.clone().into());
+
+    let mut fallback_thread = scripted_lineage_thread(
+        &app.config,
+        thread_id,
+        ThreadId::new(),
+        /*depth*/ 1,
+    );
+    fallback_thread.turns = vec![test_turn(
+        "authoritative-fallback-turn",
+        TurnStatus::Completed,
+        Vec::new(),
+    )];
+    let thread_read_responses = Arc::new(Mutex::new(VecDeque::from([
+        ScriptedThreadReadResponse::Thread(serde_json::to_value(fallback_thread)?),
+    ])));
+    let (mut app_server, requests, proxy) = start_recording_app_server_with_lineage_and_state(
+        &app.config,
+        /*blocked_thread_read_id*/ None,
+        /*lineage_responses*/ None,
+        Some(thread_read_responses),
+        /*loaded_list_responses*/ None,
+        /*resume_error_thread_id*/ Some(thread_id),
+        /*with_state_db*/ true,
+    )
+    .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    while app_event_rx.try_recv().is_ok() {}
+
+    app.select_agent_thread(&mut tui, &mut app_server, thread_id)
+        .await?;
+
+    assert_eq!(app.active_thread_id, Some(thread_id));
+    assert_eq!(
+        app.thread_event_channels[&thread_id].attachment(),
+        ThreadEventAttachment::ReplayOnly
+    );
+    assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
+    while app_event_rx.try_recv().is_ok() {}
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "keep this draft while retrying"
+    );
+    assert!(
+        !std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })))
+    );
+    let recorded = take_recorded_requests(&requests);
+    assert!(recorded.iter().any(|request| request.method == "thread/resume"));
+    assert!(recorded.iter().any(|request| request.method == "thread/read"));
 
     app_server.shutdown().await?;
     proxy.await??;
@@ -1002,6 +1113,7 @@ fn no_state_lineage_fallback_recovers_only_loaded_direct_children() -> Result<()
             /*lineage_responses*/ None,
             /*thread_read_responses*/ None,
             /*loaded_list_responses*/ None,
+            /*resume_error_thread_id*/ None,
             /*with_state_db*/ false,
         )
         .await?;
@@ -1097,6 +1209,7 @@ fn loaded_fallback_skips_terminal_race_before_valid_child() -> Result<()> {
             Some(lineage_responses),
             Some(thread_read_responses),
             Some(loaded_list_responses),
+            /*resume_error_thread_id*/ None,
             /*with_state_db*/ true,
         )
         .await?;
@@ -1151,6 +1264,7 @@ fn authoritative_retry_promotes_fallback_child_behind_hidden_connector() -> Resu
             Some(lineage_responses),
             Some(thread_read_responses),
             Some(loaded_list_responses),
+            /*resume_error_thread_id*/ None,
             /*with_state_db*/ true,
         )
         .await?;
@@ -1210,6 +1324,7 @@ fn loaded_fallback_stops_paging_when_descendant_capacity_is_reached() -> Result<
             Some(lineage_responses),
             /*thread_read_responses*/ None,
             Some(Arc::clone(&loaded_list_responses)),
+            /*resume_error_thread_id*/ None,
             /*with_state_db*/ true,
         )
         .await?;
@@ -1303,6 +1418,7 @@ fn relation_failure_services_staged_prefix_before_retry() -> Result<()> {
             Some(lineage_responses),
             Some(thread_read_responses),
             Some(loaded_list_responses),
+            /*resume_error_thread_id*/ None,
             /*with_state_db*/ true,
         )
         .await?;
