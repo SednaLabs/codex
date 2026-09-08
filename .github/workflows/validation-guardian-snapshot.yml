@@ -1,0 +1,100 @@
+name: diagnostic-guardian-snapshot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: dfea6c2da50fa045c0f39e43295b1d2297111ecd
+  GUARDIAN_TEST: guardian::tests::guardian_reuses_prompt_cache_key_and_appends_prior_reviews
+  SNAPSHOT_PATH: codex-rs/core/src/guardian/snapshots/codex_core__guardian__tests__guardian_followup_review_request_layout.snap.new
+  INSTA_UPDATE: no
+
+jobs:
+  capture:
+    name: Capture Guardian follow-up snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out fixed source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 1
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+      - name: Install nextest
+        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8 # v2
+        with:
+          tool: nextest@0.9.103
+
+      - name: Generate fixed Guardian snapshot candidate
+        id: test
+        shell: bash
+        env:
+          CARGO_INCREMENTAL: "0"
+        working-directory: codex-rs
+        run: |
+          set +e
+          cargo nextest run -p codex-core --no-fail-fast --lib "${GUARDIAN_TEST}" --exact
+          exit_code=$?
+          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Prepare bounded diagnostic output
+        if: ${{ always() && !cancelled() }}
+        shell: bash
+        env:
+          TEST_EXIT: ${{ steps.test.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          output_dir="diagnostic-output/codex-rs/core/src/guardian/snapshots"
+          mkdir -p "$output_dir"
+          if [[ -f "$SNAPSHOT_PATH" ]]; then
+            size_bytes="$(wc -c < "$SNAPSHOT_PATH")"
+            if [[ "$size_bytes" -gt 1048576 ]]; then
+              echo "Guardian snapshot exceeds 1 MiB diagnostic bound" >&2
+              exit 1
+            fi
+            cp -- "$SNAPSHOT_PATH" "$output_dir/$(basename "$SNAPSHOT_PATH")"
+          else
+            size_bytes=0
+          fi
+          cat > diagnostic-output/receipt.txt <<EOF
+source_sha=$SOURCE_SHA
+guardian_test=$GUARDIAN_TEST
+command=cargo nextest run -p codex-core --no-fail-fast --lib $GUARDIAN_TEST --exact
+insta_update=$INSTA_UPDATE
+test_exit=$TEST_EXIT
+snapshot_path=$SNAPSHOT_PATH
+snapshot_size_bytes=$size_bytes
+EOF
+
+      - name: Upload exact diagnostic output
+        if: ${{ always() && !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: guardian-followup-snapshot-diagnostic
+          path: |
+            diagnostic-output/codex-rs/core/src/guardian/snapshots/codex_core__guardian__tests__guardian_followup_review_request_layout.snap.new
+            diagnostic-output/receipt.txt
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Preserve expected mismatch status
+        if: ${{ always() && !cancelled() }}
+        shell: bash
+        env:
+          TEST_EXIT: ${{ steps.test.outputs.exit_code }}
+        run: test "${TEST_EXIT}" = 0
