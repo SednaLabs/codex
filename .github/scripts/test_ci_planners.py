@@ -9812,7 +9812,7 @@ fi
         self.assertIn("Upload workflow artifacts", release_named_steps)
         self.assertEqual(
             release_named_steps["Generate SPDX SBOM"].get("uses"),
-            "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
+            "anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26",
         )
         self.assertEqual(
             release_named_steps["Attest Linux archive and SBOM provenance"].get("uses"),
