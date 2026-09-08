@@ -121,6 +121,7 @@ fn oauth_login_candidate(transport: &McpServerTransportConfig) -> Option<McpOAut
         bearer_token_env_var,
         http_headers,
         env_http_headers,
+        ..
     } = transport
     else {
         return None;
@@ -273,6 +274,7 @@ async fn compute_auth_status(
             bearer_token_env_var,
             http_headers,
             env_http_headers,
+            ..
         } => {
             let http_client = runtime_context
                 .resolve_http_client(server_name, config)

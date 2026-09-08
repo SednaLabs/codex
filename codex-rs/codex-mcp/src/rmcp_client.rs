@@ -1264,6 +1264,7 @@ async fn make_rmcp_client(
             http_headers,
             env_http_headers,
             bearer_token_env_var,
+            http_headers_helper: _,
         } => {
             let http_client = resolved_environment.as_ref().map_or_else(
                 || runtime_context.local_http_client(),
