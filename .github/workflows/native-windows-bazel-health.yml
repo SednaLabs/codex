@@ -163,6 +163,68 @@ jobs:
             -- \
             "${bazel_targets[@]}"
 
+      # A diagnostic dispatch reruns only the PTY unit-test target with Bazel
+      # success output retained and Rust/libtest output uncaptured. The normal
+      # whole-suite health invocation above remains unchanged; this bounded
+      # path makes the test-scoped ConPTY markers available for evidence.
+      - name: Run targeted ConPTY diagnostics
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.collect_diagnostics }}
+        id: conpty_diagnostics
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          diagnostic_dir="${RUNNER_TEMP}/native-windows-bazel-diagnostics"
+          mkdir -p "${diagnostic_dir}"
+          diagnostic_log="${diagnostic_dir}/pty-unit-tests-output.log"
+
+          set +e
+          ./.github/scripts/run-bazel-ci.sh \
+            --remote-download-toplevel \
+            -- \
+            test \
+            --test_output=all \
+            --test_arg=--nocapture \
+            --modify_execution_info=Rustc=+no-remote-cache \
+            --local_test_jobs=1 \
+            --test_verbose_timeout_warnings \
+            --build_metadata=COMMIT_SHA="${GITHUB_SHA}" \
+            --build_metadata=TAG_windows_native_conpty_diagnostics=true \
+            -- \
+            //codex-rs/utils/pty:pty-unit-tests \
+            2>&1 | tee "${diagnostic_log}"
+          test_status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ "${test_status}" -ne 0 ]]; then
+            echo "Targeted ConPTY diagnostic test failed with exit code ${test_status}." >&2
+            exit "${test_status}"
+          fi
+
+          required_markers=(
+            '[conpty-diagnostic] label='
+            'phase=child-command bytes='
+            'phase=child-command enqueue=accepted'
+            'phase=input bytes='
+            'phase=input enqueue=accepted'
+            'writer input raw_len='
+            'writer results write='
+            'terminal_marker_match=true'
+          )
+          missing_markers=0
+          for marker in "${required_markers[@]}"; do
+            if ! grep -Fq "${marker}" "${diagnostic_log}"; then
+              echo "Missing required ConPTY diagnostic marker: ${marker}" >&2
+              missing_markers=1
+            fi
+          done
+          if [[ "${missing_markers}" -ne 0 ]]; then
+            echo "Targeted ConPTY diagnostics produced no complete positive evidence set." >&2
+            exit 1
+          fi
+
       # The test remains fail-fast. This evidence path runs after a failure, or
       # when an operator explicitly asks for a diagnostic dispatch; it does not
       # turn a failing native test into a successful health result.
