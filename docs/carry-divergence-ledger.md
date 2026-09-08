@@ -3600,3 +3600,17 @@ broaden credentials. Hosted tests must cover parser selection, observer
 no-`/user` behavior, default-mode login behavior, and trusted-association/bot
 filtering with a blank identity; no live token or watcher activation belongs to
 this carry.
+
+## Exact-head PR watcher policy carry
+
+The canonical PR watcher keeps its existing read-only observer and review/check
+contracts while recording a compact decision receipt and the next scheduled wake
+against the exact repository, PR number, and observed head SHA. An unexplained
+GitHub `BLOCKED` merge state is surfaced as
+`action_required_merge_policy_blocked`; it fails closed for readiness and keeps
+the polling interval bounded instead of entering green-state backoff.
+
+Focused source guardrails cover BLOCKED versus CLEAN actions, pending checks,
+published review evidence, and a fake-clock exact-head schedule receipt. This
+carry does not include private lifecycle, merge-queue, credential, or mutation
+behavior; those remain separate ownership boundaries.
