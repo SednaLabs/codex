@@ -139,6 +139,45 @@ RUNTIME_SOURCE_PREIMAGE_MAP_COUNT = 174
 RUNTIME_SOURCE_PREIMAGE_MAP_SHA256 = "5f32136bcb1fd9b475971250263bf35748338dd2b3ff67e2ef4bb76433344b55"
 RUNTIME_SOURCE_POSTIMAGE_MAP_COUNT = 174
 RUNTIME_SOURCE_POSTIMAGE_MAP_SHA256 = "038f1a3addb3ca84932aad87fd60191c5d2510ff715d91709552f09f706df83d"
+
+SDK_API_GENERATION_DIAGNOSTIC_RUN_ID = "34177057384"
+SDK_API_GENERATION_DIAGNOSTIC_HEAD_SHA = "7081f5917fff0a54c7866203f59126938c7c148a"
+SDK_API_GENERATION_DIAGNOSTIC_HEAD_TREE = "9877b8f3c9776e48e397a4fd94367e71c9b84e02"
+SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_ID = "10037624493"
+SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_NAME = "sdk-api-generation-preimage-diagnostic-34177057384-1"
+SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_SIZE = 1837
+SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_DIGEST = "sha256:1a84262a842a12d14ecf0ef747817c887a04417c2cf18ec53f03078345ae8b83"
+SDK_API_GENERATION_DIAGNOSTIC_RECEIPT_SHA256 = "f81969fc1ada27bd85dc0660d0745932f2676af510c9976134ddd887192e0e25"
+SDK_API_GENERATION_DIAGNOSTIC_PATH_COUNT = 16
+SDK_API_GENERATION_DIAGNOSTIC_PATH_SET_SHA256 = "bd8b5454a81418453b6eb73e251de3ecdc86eab06e29429ad1b3f546db562c2f"
+SDK_API_GENERATION_DIAGNOSTIC_MISSING_PATH_COUNT = 0
+SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_SHA = SDK_CANDIDATE_SHA
+SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_TREE = SDK_CANDIDATE_TREE
+
+SDK_API_GENERATION_RESTORE_ENTRIES = {
+    "codex-rs/codex-mcp/src/binding.rs": ("100644", "blob", "4cd33fff3b1d433c1fdf61fea308d4b16b3af38b"),
+    "codex-rs/codex-mcp/src/binding_clients.rs": ("100644", "blob", "21eb493f50fdfc4f49709c24d66128bf3f6883c6"),
+    "codex-rs/codex-mcp/src/connection_manager/required.rs": ("100644", "blob", "4ba65c53ba3284d1423c3ed64584511e7137a08a"),
+    "codex-rs/codex-mcp/src/connection_manager/resources.rs": ("100644", "blob", "8a46971acbd232567353fa078792e55ab331d01e"),
+    "codex-rs/codex-mcp/src/connection_manager/startup.rs": ("100644", "blob", "ec255e58130cf1cddbc92f16f1c8b4f6ae58f659"),
+    "codex-rs/codex-mcp/src/elicitation.rs": ("100644", "blob", "34d7b314df670aecada7d8c7e8326a0535c8076a"),
+    "codex-rs/codex-mcp/src/mcp/mod.rs": ("100644", "blob", "a8523a6a735859c52ed920f58b3bb2d0d8313abb"),
+    "codex-rs/codex-mcp/src/resource_client.rs": ("100644", "blob", "eb4fa7bc340f44094a54e019afe51e4c617885af"),
+    "codex-rs/codex-mcp/src/server.rs": ("100644", "blob", "0811d80435809430823d0d7331fab1eba81b8832"),
+    "codex-rs/codex-mcp/src/tool_catalog_cache.rs": ("100644", "blob", "15c3ae3d59813ea31ae31b11fc0f101c063403f6"),
+}
+SDK_API_GENERATION_RESTORE_PREIMAGES = {
+    "codex-rs/codex-mcp/src/binding.rs": ("100644", "blob", "810ca8a52e6724a266aa3e4d4555fd03a4e4c2e1"),
+    "codex-rs/codex-mcp/src/binding_clients.rs": ("100644", "blob", "a20159e1a2c5e3566098b2c436de7947d72f92f7"),
+    "codex-rs/codex-mcp/src/connection_manager/required.rs": ("100644", "blob", "2ba8cb371d5a2758693f77a7688e3d0e86221df9"),
+    "codex-rs/codex-mcp/src/connection_manager/resources.rs": ("100644", "blob", "c84cc6b43f97383497cb9a03ea91cc06f56e40da"),
+    "codex-rs/codex-mcp/src/connection_manager/startup.rs": ("100644", "blob", "5d4c1fdd539908ef3e75159b83ac5d169253dade"),
+    "codex-rs/codex-mcp/src/elicitation.rs": ("100644", "blob", "b575eb01a5b995a8254a3608b5fe9f9bf8ce9424"),
+    "codex-rs/codex-mcp/src/mcp/mod.rs": ("100644", "blob", "78199816afbc95a70de37917f343413bfba420dc"),
+    "codex-rs/codex-mcp/src/resource_client.rs": ("100644", "blob", "43d82a8378d4dfc51f025afc009c13081a55aa31"),
+    "codex-rs/codex-mcp/src/server.rs": ("100644", "blob", "328080f207316827163bd7b36dd1cabe7659375c"),
+    "codex-rs/codex-mcp/src/tool_catalog_cache.rs": ("100644", "blob", "c0165f4ae9e4b7d24cf68d1a3cf56f2b27ffbe31"),
+}
 VOICE_HOST_DEFERRAL_BASELINE_SHA = "22a0c45ee711dc5ce47847dc04cbc5e7e76507c0"
 VOICE_HOST_DEFERRAL_BASELINE_ROOT_ENTRY = ("100644", "blob", "7bd8c144e52b169b907928bcf743363949d12cb2")
 BUILD_PATHS_SHA256 = "7dfbdc9e2a37f26c98451f904b7863743fdea91b34e5bacdc164708532ab8e90"
@@ -696,13 +735,36 @@ CODE_MODE_PROTOCOL_LIB_PREIMAGE = ("100644", "blob", "c253f5bcc789e05bbbadd7fcbc
 CODE_MODE_PROTOCOL_LIB_BUILD_SOURCE = ("100644", "blob", "bb47b1a4c48cf5296a739768a071166a43928307")
 CODE_MODE_PROTOCOL_LIB_OUTPUT = ("100644", "blob", "58e58be3c1f024797199c17660d2c82230c0997a")
 CODE_MODE_PROTOCOL_LIB_REMOVAL = b"pub use description::ImageDetailVisibility;\n"
+
+HISTORY_COMPATIBILITY_PATH = "codex-rs/history/src/lib.rs"
+HISTORY_COMPATIBILITY_PREIMAGE = ("100644", "blob", "9eb1c9e4ec38e1ae4ce43d05b1ed26b4501ab8e0")
+HISTORY_COMPATIBILITY_OUTPUT = ("100644", "blob", "aeb573f333bf5cf3fb193c5bf338a4e1ef6a5ecc")
+HISTORY_COMPATIBILITY_OUTPUT_SHA256 = "7b06c9bbf5007dc2ed09bdbd225120abf70e42671abb8a03bf46ff2d7e0e1291"
+HISTORY_COMPATIBILITY_REPLACEMENTS = {
+    "schema_name String": ("schema_name std::borrow::Cow<'static, str>", 2),
+    "RolloutItem.to_string": ("std::borrow::Cow::Borrowed RolloutItem", 1),
+    "CompactedItem.to_string": ("std::borrow::Cow::Borrowed CompactedItem", 1),
+    "schemars::schema::Schema": ("schemars::Schema", 2),
+}
+HISTORY_COMPATIBILITY_SCHEMA_NAME = b"fn schema_name() -> String {"
+HISTORY_COMPATIBILITY_SCHEMA_NAME_OUTPUT = b"fn schema_name() -> std::borrow::Cow<'static, str> {"
+HISTORY_COMPATIBILITY_ROLLOUT = b'"RolloutItem".to_string()'
+HISTORY_COMPATIBILITY_ROLLOUT_OUTPUT = b'std::borrow::Cow::Borrowed("RolloutItem")'
+HISTORY_COMPATIBILITY_COMPACTED = b'"CompactedItem".to_string()'
+HISTORY_COMPATIBILITY_COMPACTED_OUTPUT = b'std::borrow::Cow::Borrowed("CompactedItem")'
+HISTORY_COMPATIBILITY_SCHEMA = b"schemars::schema::Schema"
+HISTORY_COMPATIBILITY_SCHEMA_OUTPUT = b"schemars::Schema"
 RESTORE_SOURCE_ENTRIES[CODE_MODE_PROTOCOL_LIB_PATH] = CODE_MODE_PROTOCOL_LIB_OUTPUT
 RESTORE_SOURCE_PREIMAGE_ENTRIES[CODE_MODE_PROTOCOL_LIB_PATH] = CODE_MODE_PROTOCOL_LIB_PREIMAGE
+RESTORE_SOURCE_ENTRIES.update(SDK_API_GENERATION_RESTORE_ENTRIES)
+RESTORE_SOURCE_PREIMAGE_ENTRIES.update(SDK_API_GENERATION_RESTORE_PREIMAGES)
+RESTORE_SOURCE_ENTRIES[HISTORY_COMPATIBILITY_PATH] = HISTORY_COMPATIBILITY_OUTPUT
+RESTORE_SOURCE_PREIMAGE_ENTRIES[HISTORY_COMPATIBILITY_PATH] = HISTORY_COMPATIBILITY_PREIMAGE
 RESTORE_SOURCE_ENTRIES = dict(sorted(RESTORE_SOURCE_ENTRIES.items()))
 RESTORE_SOURCE_PREIMAGE_ENTRIES = dict(sorted(RESTORE_SOURCE_PREIMAGE_ENTRIES.items()))
 RESTORE_PATHS = list(RESTORE_SOURCE_ENTRIES)
-RESTORE_PATHS_SHA256 = "74063c29a08f26250793f7850e02f3ad24e0fb5b8b807cd529d57fe16fca6f77"
-RESTORE_ENTRIES_SHA256 = "da66e12107e43b7fc1730705ae04005cef441b397cac3a77931648703f021dd3"
+RESTORE_PATHS_SHA256 = "5c70c42dca6e8cc56305af3eb35a67d8e25ee86a4a52d6753ca1e4e7c3d0e2da"
+RESTORE_ENTRIES_SHA256 = "5848a75b8ed822ad73e3eb3c767ee5e1b68848202acad6c1ce7d1f61619d5270"
 
 OVERLAY_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     sorted({**BUILD_SOURCE_ENTRIES, **RESTORE_SOURCE_ENTRIES, **CORE_SKILLS_SOURCE_ENTRIES}.items())
@@ -715,13 +777,13 @@ OVERLAY_SOURCE_PREIMAGE_ENTRIES: dict[str, tuple[str, str, str] | None] = dict(
     }.items())
 )
 OVERLAY_PATHS = list(OVERLAY_SOURCE_ENTRIES)
-OVERLAY_PATHS_SHA256 = "568300e7ce6c714f665243b3fe5a917bbbd8c1b52a6ef008fc544a1ecd60c703"
+OVERLAY_PATHS_SHA256 = "b745b93019b30475f07ca0529c52be1d6ec9c38ca57964397949dfbbb17f553a"
 OVERLAY_CHANGED_PATHS = [
     path
     for path in OVERLAY_PATHS
     if OVERLAY_SOURCE_PREIMAGE_ENTRIES[path] != OVERLAY_SOURCE_ENTRIES[path]
 ]
-OVERLAY_CHANGED_PATHS_SHA256 = "475d009e39cb3dbd785f1782d6865b296ad4c4e5ce155ea81c1d51ca69184ce6"
+OVERLAY_CHANGED_PATHS_SHA256 = "bf1771be26a279deb121bb95ea181a9b857c8fc0cf7ff45bfadc0fb244ba936b"
 
 PATCH_DEPENDENCIES: dict[str, tuple[str, str, str]] = {
     "patches/rules_rs_windows_msvc_linker.patch": (
@@ -1166,6 +1228,24 @@ def code_mode_protocol_compatibility_bytes(repo: pathlib.Path) -> bytes:
     return output
 
 
+def history_compatibility_bytes(repo: pathlib.Path) -> bytes:
+    preimage = run_bytes("git", "cat-file", "-p", HISTORY_COMPATIBILITY_PREIMAGE[2], cwd=repo)
+    replacements = (
+        (HISTORY_COMPATIBILITY_SCHEMA_NAME, HISTORY_COMPATIBILITY_SCHEMA_NAME_OUTPUT, 2),
+        (HISTORY_COMPATIBILITY_ROLLOUT, HISTORY_COMPATIBILITY_ROLLOUT_OUTPUT, 1),
+        (HISTORY_COMPATIBILITY_COMPACTED, HISTORY_COMPATIBILITY_COMPACTED_OUTPUT, 1),
+        (HISTORY_COMPATIBILITY_SCHEMA, HISTORY_COMPATIBILITY_SCHEMA_OUTPUT, 2),
+    )
+    output = preimage
+    for before, after, count in replacements:
+        require(output.count(before) == count, f"history compatibility replacement count mismatch: {before!r}")
+        output = output.replace(before, after)
+    require(hashlib.sha256(output).hexdigest() == HISTORY_COMPATIBILITY_OUTPUT_SHA256, "history compatibility output SHA256 mismatch")
+    oid = hashlib.sha1(f"blob {len(output)}\0".encode() + output).hexdigest()
+    require(oid == HISTORY_COMPATIBILITY_OUTPUT[2], "history compatibility output blob mismatch")
+    return output
+
+
 def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
     require(list(BUILD_SOURCE_ENTRIES) == BUILD_PATHS, "build source path set mismatch")
     require(list(BUILD_SOURCE_PREIMAGE_ENTRIES) == BUILD_PATHS, "build source preimage set mismatch")
@@ -1220,6 +1300,12 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
                 f"code-mode compatibility source tuple mismatch: {path}",
             )
             require(code_mode_protocol_compatibility_bytes(repo), "empty code-mode compatibility output")
+        elif path == HISTORY_COMPATIBILITY_PATH:
+            require(
+                tree_entry(repo, SDK_CANDIDATE_SHA, path) == HISTORY_COMPATIBILITY_PREIMAGE,
+                f"history compatibility preimage mismatch: {path}",
+            )
+            require(history_compatibility_bytes(repo), "empty history compatibility output")
         else:
             require(tree_entry(repo, BUILD_SOURCE_SHA, path) == postimage, f"overlay postimage mismatch: {path}")
     changed = sorted([*operations["A"], *operations["M"], *operations["D"]])
@@ -1249,6 +1335,19 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
         "runtime_surfaces_diagnostic_head_sha": RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA,
         "runtime_surfaces_diagnostic_head_tree": RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE,
         "runtime_surfaces_diagnostic_repository_id": RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID,
+        "sdk_api_generation_diagnostic_run_id": SDK_API_GENERATION_DIAGNOSTIC_RUN_ID,
+        "sdk_api_generation_diagnostic_head_sha": SDK_API_GENERATION_DIAGNOSTIC_HEAD_SHA,
+        "sdk_api_generation_diagnostic_head_tree": SDK_API_GENERATION_DIAGNOSTIC_HEAD_TREE,
+        "sdk_api_generation_diagnostic_artifact_id": SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_ID,
+        "sdk_api_generation_diagnostic_artifact_name": SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_NAME,
+        "sdk_api_generation_diagnostic_artifact_size": SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_SIZE,
+        "sdk_api_generation_diagnostic_artifact_digest": SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_DIGEST,
+        "sdk_api_generation_diagnostic_receipt_sha256": SDK_API_GENERATION_DIAGNOSTIC_RECEIPT_SHA256,
+        "sdk_api_generation_diagnostic_path_count": SDK_API_GENERATION_DIAGNOSTIC_PATH_COUNT,
+        "sdk_api_generation_diagnostic_path_set_sha256": SDK_API_GENERATION_DIAGNOSTIC_PATH_SET_SHA256,
+        "sdk_api_generation_diagnostic_missing_path_count": SDK_API_GENERATION_DIAGNOSTIC_MISSING_PATH_COUNT,
+        "sdk_api_generation_diagnostic_candidate_sha": SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_SHA,
+        "sdk_api_generation_diagnostic_candidate_tree": SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_TREE,
         "declared_path_count": len(OVERLAY_PATHS),
         "declared_path_set_sha256": OVERLAY_PATHS_SHA256,
         "build_source_diff_path_count": len(BUILD_SOURCE_DIFF_PATHS),
@@ -2584,6 +2683,8 @@ def verify_build_source_checkout(repo: pathlib.Path) -> None:
                 f"code-mode compatibility source tuple mismatch: {path}",
             )
             require(code_mode_protocol_compatibility_bytes(repo), "empty code-mode compatibility output")
+        elif path == HISTORY_COMPATIBILITY_PATH:
+            require(history_compatibility_bytes(repo), "empty history compatibility output")
         else:
             require(source_entry == expected, f"build source tuple mismatch: {path}")
 
@@ -3570,7 +3671,8 @@ def prepare_candidate_worktree(repo: pathlib.Path, temp: pathlib.Path) -> pathli
     selected_paths = [
         path
         for path in OVERLAY_PATHS
-        if OVERLAY_SOURCE_ENTRIES[path] is not None and path != CODE_MODE_PROTOCOL_LIB_PATH
+        if OVERLAY_SOURCE_ENTRIES[path] is not None
+        and path not in {CODE_MODE_PROTOCOL_LIB_PATH, HISTORY_COMPATIBILITY_PATH}
     ]
     deleted_paths = [path for path in OVERLAY_PATHS if OVERLAY_SOURCE_ENTRIES[path] is None]
     if selected_paths:
@@ -3581,6 +3683,10 @@ def prepare_candidate_worktree(repo: pathlib.Path, temp: pathlib.Path) -> pathli
     compatibility_path.parent.mkdir(parents=True, exist_ok=True)
     compatibility_path.write_bytes(code_mode_protocol_compatibility_bytes(repo))
     run("git", "add", "--", CODE_MODE_PROTOCOL_LIB_PATH, cwd=worktree)
+    history_path = worktree / HISTORY_COMPATIBILITY_PATH
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    history_path.write_bytes(history_compatibility_bytes(repo))
+    run("git", "add", "--", HISTORY_COMPATIBILITY_PATH, cwd=worktree)
     for path, expected in OVERLAY_SOURCE_ENTRIES.items():
         require(index_entry(worktree, path) == expected, f"selected build source index tuple mismatch: {path}")
     staged_source = run("git", "diff", "--cached", "--name-only", SDK_CANDIDATE_SHA, cwd=worktree).splitlines()
@@ -4049,7 +4155,9 @@ def main() -> None:
             role = (
                 "generated"
                 if path in GENERATED_PATHS
-                else "compatibility-overlay" if path == CODE_MODE_PROTOCOL_LIB_PATH else "build-source"
+                else "compatibility-overlay"
+                if path in {CODE_MODE_PROTOCOL_LIB_PATH, HISTORY_COMPATIBILITY_PATH}
+                else "build-source"
             )
             changed = path in candidate_path_set
             if role in {"build-source", "compatibility-overlay"}:
@@ -4058,8 +4166,12 @@ def main() -> None:
                 expected_postimage = OVERLAY_SOURCE_ENTRIES[path]
                 require(parent_entry == expected_preimage, f"final overlay preimage mismatch: {path}")
                 if role == "compatibility-overlay":
-                    require(source_entry == CODE_MODE_PROTOCOL_LIB_BUILD_SOURCE, f"final compatibility source tuple mismatch: {path}")
-                    require(code_mode_protocol_compatibility_bytes(worktree) == worktree.joinpath(path).read_bytes(), f"final compatibility bytes mismatch: {path}")
+                    if path == CODE_MODE_PROTOCOL_LIB_PATH:
+                        require(source_entry == CODE_MODE_PROTOCOL_LIB_BUILD_SOURCE, f"final compatibility source tuple mismatch: {path}")
+                        require(code_mode_protocol_compatibility_bytes(worktree) == worktree.joinpath(path).read_bytes(), f"final compatibility bytes mismatch: {path}")
+                    else:
+                        require(source_entry is None, f"final history compatibility source tuple mismatch: {path}")
+                        require(history_compatibility_bytes(worktree) == worktree.joinpath(path).read_bytes(), f"final history compatibility bytes mismatch: {path}")
                 else:
                     require(source_entry == expected_postimage, f"final overlay source tuple mismatch: {path}")
                 require(selected_entry == expected_postimage, f"final overlay selected tuple mismatch: {path}")
@@ -4075,7 +4187,11 @@ def main() -> None:
                     "E": "verified-build-source-exact",
                 }[operation]
                 if role == "compatibility-overlay":
-                    disposition = "synthesized-fork-upstream-compatibility"
+                    disposition = (
+                        "synthesized-fork-upstream-compatibility"
+                        if path == CODE_MODE_PROTOCOL_LIB_PATH
+                        else "synthesized-history-compatibility"
+                    )
             else:
                 source_entry = (
                     tree_entry(worktree, BUILD_SOURCE_SHA, path)
@@ -4154,6 +4270,19 @@ def main() -> None:
             "runtime_surfaces_diagnostic_head_tree": RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE,
             "runtime_surfaces_diagnostic_repository_id": RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID,
             "runtime_surfaces_preimage_receipt_sha256": RUNTIME_SURFACES_PREIMAGE_RECEIPT_SHA256,
+            "sdk_api_generation_diagnostic_run_id": SDK_API_GENERATION_DIAGNOSTIC_RUN_ID,
+            "sdk_api_generation_diagnostic_head_sha": SDK_API_GENERATION_DIAGNOSTIC_HEAD_SHA,
+            "sdk_api_generation_diagnostic_head_tree": SDK_API_GENERATION_DIAGNOSTIC_HEAD_TREE,
+            "sdk_api_generation_diagnostic_artifact_id": SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_ID,
+            "sdk_api_generation_diagnostic_artifact_name": SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_NAME,
+            "sdk_api_generation_diagnostic_artifact_size": SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_SIZE,
+            "sdk_api_generation_diagnostic_artifact_digest": SDK_API_GENERATION_DIAGNOSTIC_ARTIFACT_DIGEST,
+            "sdk_api_generation_diagnostic_receipt_sha256": SDK_API_GENERATION_DIAGNOSTIC_RECEIPT_SHA256,
+            "sdk_api_generation_diagnostic_path_count": SDK_API_GENERATION_DIAGNOSTIC_PATH_COUNT,
+            "sdk_api_generation_diagnostic_path_set_sha256": SDK_API_GENERATION_DIAGNOSTIC_PATH_SET_SHA256,
+            "sdk_api_generation_diagnostic_missing_path_count": SDK_API_GENERATION_DIAGNOSTIC_MISSING_PATH_COUNT,
+            "sdk_api_generation_diagnostic_candidate_sha": SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_SHA,
+            "sdk_api_generation_diagnostic_candidate_tree": SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_TREE,
             "input_sdk_candidate": SDK_CANDIDATE_SHA,
             "input_sdk_tree": SDK_CANDIDATE_TREE,
             "input_sdk_parent": SDK_CANDIDATE_PARENT,
