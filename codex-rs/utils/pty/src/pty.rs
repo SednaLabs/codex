@@ -44,8 +44,19 @@ use crate::process::exit_code_from_status;
 static WINDOWS_TEST_WRITER_DIAGNOSTICS: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
-pub(crate) fn enable_windows_test_writer_diagnostics() {
+pub(crate) struct WindowsTestWriterDiagnosticsGuard;
+
+#[cfg(test)]
+impl Drop for WindowsTestWriterDiagnosticsGuard {
+    fn drop(&mut self) {
+        WINDOWS_TEST_WRITER_DIAGNOSTICS.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn enable_windows_test_writer_diagnostics() -> WindowsTestWriterDiagnosticsGuard {
     WINDOWS_TEST_WRITER_DIAGNOSTICS.store(true, Ordering::SeqCst);
+    WindowsTestWriterDiagnosticsGuard
 }
 
 /// Returns true when ConPTY support is available (Windows only).

@@ -238,7 +238,7 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
         eprintln!("python not found; skipping ConPTY input test");
         return Ok(());
     };
-    crate::pty::enable_windows_test_writer_diagnostics();
+    let _diagnostics = crate::pty::enable_windows_test_writer_diagnostics();
     let code = format!(
         "print('__CODEX_CHILD_'+'READY__', flush=True); value=input(); print('{VALUE_MARKER}'+value.encode('utf-8').hex(), flush=True)"
     );
