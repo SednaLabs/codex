@@ -368,10 +368,10 @@ jobs:
       SDK_ARTIFACT_HEAD_SHA: 0384d8ae9205e142fa4b352256d8c85a9e05f8c4
       SDK_CANDIDATE_SHA: 3a26f7dad12e96ea41dae025e77472af0dd273a8
       SDK_CANDIDATE_TREE: 6867e9e14ea8f416ee3075f959b880d038fe2cc0
-      BUILD_SOURCE_SHA: b1f542e7efa662eab4525c6d3673ffa655532412
-      BUILD_SOURCE_TREE: c68eece6e8809ecd95e090bfb80af44b2720298f
+      BUILD_SOURCE_SHA: b5be615fa7b73903bb198d6a430c421d28946f77
+      BUILD_SOURCE_TREE: 038e6852c501dad1d10013a4793f8ca175d93a97
       TARGET_HELPER_BRANCH: worker/w13825-sdk-build-consumer
-      TARGET_HELPER_SHA: 94be98a5d77fe01a82edd6e4c8be83c5b7147d30
+      TARGET_HELPER_SHA: 1a5129f4f7fafc44d980729f11b1e8b77e296137
     steps:
       - name: Check out exact diagnostic workflow
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -397,7 +397,7 @@ jobs:
       - name: Check out exact reviewed build source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: b1f542e7efa662eab4525c6d3673ffa655532412
+          ref: b5be615fa7b73903bb198d6a430c421d28946f77
           fetch-depth: 0
           persist-credentials: false
           path: source-candidate
@@ -425,8 +425,8 @@ jobs:
           IFS=$'\t' read -r target_helper_commit target_helper_tree target_helper_parent <<<"${target_helper_packet}"
           test "${target_helper_sha}" = "${TARGET_HELPER_SHA}"
           test "${target_helper_commit}" = "${TARGET_HELPER_SHA}"
-          test "${target_helper_tree}" = "64c7eda40dde58443f2266454ae30f1835de7993"
-          test "${target_helper_parent}" = "3c0fae0c1bb04fdf3cb3fdd2636019040d62135c"
+          test "${target_helper_tree}" = "7b97c1b5ddc2854812006fdb890aff531518e7d6"
+          test "${target_helper_parent}" = "127c31c549dee078f0ac27169f8fd0c9908ea621"
           jq -n \
             --arg id "${artifact_id}" \
             --arg name "${artifact_name}" \
