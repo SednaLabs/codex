@@ -22,7 +22,9 @@ INSTALLER = Path(__file__).parents[1] / "install_sedna_release_asset"
 
 
 class SednaReleaseInstallerTest(unittest.TestCase):
-    def test_automatic_candidate_rejections_preserve_current_and_request_order(self) -> None:
+    def test_automatic_candidate_rejections_preserve_current_and_request_order(
+        self,
+    ) -> None:
         current_version = "1.2.3-sedna.4"
         for candidate, expected_error in (
             ("v1.2.3-sedna.4", "is not newer than"),
@@ -42,7 +44,9 @@ class SednaReleaseInstallerTest(unittest.TestCase):
                 )
                 self.assertEqual(current_target, "previous-managed-release")
 
-    def test_automatic_newer_stable_candidate_activates_verified_legacy_release(self) -> None:
+    def test_automatic_newer_stable_candidate_activates_verified_legacy_release(
+        self,
+    ) -> None:
         result, requests, current_target = run_installer(
             "v1.2.4-sedna.1", "1.2.3-sedna.4", successful=True
         )
@@ -61,7 +65,9 @@ class SednaReleaseInstallerTest(unittest.TestCase):
         self.assertTrue(current_target.endswith("/releases/v1.2.4-sedna.1"))
         self.assertIn("installed sednalabs/codex@v1.2.4-sedna.1", result.stdout)
 
-    def test_manual_prerelease_explicit_opt_in_activates_verified_release(self) -> None:
+    def test_manual_prerelease_explicit_opt_in_activates_verified_release(
+        self,
+    ) -> None:
         result, requests, current_target = run_installer(
             "v1.2.4-alpha.1-sedna.1",
             "1.2.3-sedna.4",
@@ -83,9 +89,7 @@ class SednaReleaseInstallerTest(unittest.TestCase):
             current_target.endswith("/releases/v1.2.4-alpha.1-sedna.1"),
             current_target,
         )
-        self.assertIn(
-            "installed sednalabs/codex@v1.2.4-alpha.1-sedna.1", result.stdout
-        )
+        self.assertIn("installed sednalabs/codex@v1.2.4-alpha.1-sedna.1", result.stdout)
 
 
 def create_release(root: Path, release_tag: str) -> dict[str, Path]:
@@ -182,7 +186,9 @@ def run_installer(
         latest_json = root / "latest-release.json"
         latest_json.write_text(json.dumps({"tag_name": selected_tag}), encoding="utf-8")
         request_log = root / "requests.log"
-        release = create_release(root, selected_tag) if successful or allow_prerelease else {}
+        release = (
+            create_release(root, selected_tag) if successful or allow_prerelease else {}
+        )
         fake_uname = bin_dir / "uname"
         fake_uname.write_text(
             "#!/usr/bin/env bash\n"
@@ -209,7 +215,7 @@ def run_installer(
             '  */releases/assets/101) cp "$SEDNA_TEST_ARCHIVE" "$output" ;;\n'
             '  */releases/assets/102) cp "$SEDNA_TEST_CHECKSUM" "$output" ;;\n'
             '  */releases/assets/103) cp "$SEDNA_TEST_METADATA" "$output" ;;\n'
-            '  *) exit 22 ;;\n'
+            "  *) exit 22 ;;\n"
             "esac\n",
             encoding="utf-8",
         )
@@ -245,8 +251,14 @@ def run_installer(
             args.append("--allow-prerelease")
         else:
             args.extend(["--require-newer-than", current_version])
-        result = subprocess.run(args, capture_output=True, check=False, env=env, text=True)
-        requests = request_log.read_text(encoding="utf-8").splitlines() if request_log.exists() else []
+        result = subprocess.run(
+            args, capture_output=True, check=False, env=env, text=True
+        )
+        requests = (
+            request_log.read_text(encoding="utf-8").splitlines()
+            if request_log.exists()
+            else []
+        )
         return result, requests, os.readlink(current)
 
 
