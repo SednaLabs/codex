@@ -13,6 +13,13 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 help:
     just -l
 
+# Dispatch a prerelease for the exact protected main tip captured by GitHub.
+# The workflow resolves the version and tag on its runner, so this command does
+# not depend on a potentially stale local main ref.
+[no-cd]
+prerelease-main:
+    gh workflow run sedna-release.yml --repo sednalabs/codex --ref main -f channel=prerelease -f draft=false -f macos_release_mode=off -f allow_markerless_prerelease=true
+
 # `codex`
 
 alias c := codex

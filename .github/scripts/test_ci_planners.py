@@ -9632,6 +9632,14 @@ fi
                 "options": ["auto", "stable", "prerelease"],
             },
         )
+        markerless_input = inputs.get("allow_markerless_prerelease") or {}
+        self.assertEqual(
+            {
+                "default": markerless_input.get("default"),
+                "type": markerless_input.get("type"),
+            },
+            {"default": False, "type": "boolean"},
+        )
         self.assertEqual(
             {
                 "default": macos_input.get("default"),
@@ -9674,6 +9682,16 @@ fi
                         "options": ["off", "preview", "notarized"],
                     },
                 )
+
+    def test_prerelease_main_command_dispatches_explicit_markerless_opt_in(self) -> None:
+        justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+        self.assertIn("prerelease-main:", justfile)
+        self.assertIn(
+            "gh workflow run sedna-release.yml --repo sednalabs/codex --ref main "
+            "-f channel=prerelease -f draft=false -f macos_release_mode=off "
+            "-f allow_markerless_prerelease=true",
+            justfile,
+        )
 
     def test_sedna_release_main_pushes_are_routed_before_publisher(self) -> None:
         release_payload = load_workflow_payload(
@@ -9732,6 +9750,19 @@ fi
         self.assertIn(
             'if [[ "${target_sha}" != "${HOST_SHA}" ]]',
             resolve_metadata_step.get("run") or "",
+        )
+        resolve_script = resolve_named_steps["Resolve release metadata"].get("run") or ""
+        self.assertIn(
+            'INPUT_ALLOW_MARKERLESS_PRERELEASE',
+            resolve_metadata_step.get("env") or {},
+        )
+        self.assertIn(
+            '[[ "${INPUT_CHANNEL}" == "prerelease" && "${INPUT_ALLOW_MARKERLESS_PRERELEASE}" == "true" ]]',
+            resolve_script,
+        )
+        self.assertIn(
+            "--require-marker --missing-marker error",
+            resolve_script,
         )
         self.assertEqual(
             release_job.get("name"),
@@ -11966,6 +11997,17 @@ class SednaReleaseVersionResolverTests(unittest.TestCase):
                 "github_prerelease": True,
             },
         )
+
+    def test_explicit_prerelease_channel_allows_markerless_tag_allocation(self) -> None:
+        repo, _upstream, downstream = self.create_fixture(marker=None)
+        try:
+            result = self.resolve(repo, downstream, channel="prerelease")
+        finally:
+            repo.cleanup()
+
+        self.assertEqual(result["release_channel"], "prerelease")
+        self.assertEqual(result["release_tag"], "v0.126.0-alpha.3-sedna.1")
+        self.assertTrue(result["github_prerelease"])
 
     def test_future_upstream_tag_is_not_used_for_older_synced_upstream_base(self) -> None:
         repo, upstream, downstream = self.create_fixture(marker=None)

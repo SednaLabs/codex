@@ -24,6 +24,11 @@ on:
           - auto
           - stable
           - prerelease
+      allow_markerless_prerelease:
+        description: Explicitly allow a markerless prerelease from the selected protected main tip.
+        required: false
+        default: false
+        type: boolean
       release_tag:
         description: Optional expected Sedna release tag. The resolver must compute the same tag.
         required: false
@@ -230,6 +235,7 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           INPUT_TARGET_SHA: ${{ inputs.target_sha }}
           INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_ALLOW_MARKERLESS_PRERELEASE: ${{ inputs.allow_markerless_prerelease }}
           INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
           INPUT_DRAFT: ${{ inputs.draft }}
           INPUT_MACOS_RELEASE_MODE: ${{ inputs.macos_release_mode }}
@@ -255,6 +261,8 @@ jobs:
             args+=(--target-sha "${target_sha}" --channel "${INPUT_CHANNEL}")
             if [[ -n "${INPUT_RELEASE_TAG}" ]]; then
               args+=(--release-tag "${INPUT_RELEASE_TAG}")
+            elif [[ "${INPUT_CHANNEL}" == "prerelease" && "${INPUT_ALLOW_MARKERLESS_PRERELEASE}" == "true" ]]; then
+              : # Explicit prerelease-main opt-in permits automatic markerless tag allocation.
             else
               args+=(--require-marker --missing-marker error)
             fi
