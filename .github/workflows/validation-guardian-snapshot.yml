@@ -10,7 +10,7 @@ env:
   SOURCE_SHA: dfea6c2da50fa045c0f39e43295b1d2297111ecd
   GUARDIAN_TEST: guardian::tests::guardian_reuses_prompt_cache_key_and_appends_prior_reviews
   SNAPSHOT_PATH: codex-rs/core/src/guardian/snapshots/codex_core__guardian__tests__guardian_followup_review_request_layout.snap.new
-  INSTA_UPDATE: no
+  INSTA_UPDATE: "new"
 
 jobs:
   capture:
@@ -19,10 +19,20 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Check out fixed source
-        uses: actions/checkout@v7
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify fixed source identity
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$SOURCE_SHA"
+          echo "actual_sha=$actual_sha" >> "$GITHUB_OUTPUT"
 
       - name: Install Linux build dependencies
         shell: bash
@@ -32,7 +42,9 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+        with:
+          toolchain: "1.96.0"
 
       - name: Install nextest
         uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8 # v2
@@ -47,7 +59,7 @@ jobs:
         working-directory: codex-rs
         run: |
           set +e
-          cargo nextest run -p codex-core --no-fail-fast --lib "${GUARDIAN_TEST}" --exact
+          cargo nextest run -p codex-core --no-fail-fast --lib "${GUARDIAN_TEST}" -- --exact
           exit_code=$?
           echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
           exit 0
@@ -57,6 +69,7 @@ jobs:
         shell: bash
         env:
           TEST_EXIT: ${{ steps.test.outputs.exit_code }}
+          ACTUAL_SHA: ${{ steps.source.outputs.actual_sha }}
         run: |
           set -euo pipefail
           output_dir="diagnostic-output/codex-rs/core/src/guardian/snapshots"
@@ -71,25 +84,29 @@ jobs:
           else
             size_bytes=0
           fi
-          cat > diagnostic-output/receipt.txt <<EOF
-source_sha=$SOURCE_SHA
-guardian_test=$GUARDIAN_TEST
-command=cargo nextest run -p codex-core --no-fail-fast --lib $GUARDIAN_TEST --exact
-insta_update=$INSTA_UPDATE
-test_exit=$TEST_EXIT
-snapshot_path=$SNAPSHOT_PATH
-snapshot_size_bytes=$size_bytes
-EOF
+          printf '%s\n' \
+            "source_sha=$SOURCE_SHA" \
+            "actual_source_sha=$ACTUAL_SHA" \
+            "workflow_sha=$GITHUB_SHA" \
+            "guardian_test=$GUARDIAN_TEST" \
+            "command=cargo nextest run -p codex-core --no-fail-fast --lib $GUARDIAN_TEST -- --exact" \
+            "insta_update=$INSTA_UPDATE" \
+            "test_exit=$TEST_EXIT" \
+            "snapshot_path=$SNAPSHOT_PATH" \
+            "snapshot_size_bytes=$size_bytes" \
+            > diagnostic-output/receipt.txt
+          test "$size_bytes" -gt 0
+          test "$ACTUAL_SHA" = "$SOURCE_SHA"
 
       - name: Upload exact diagnostic output
         if: ${{ always() && !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: guardian-followup-snapshot-diagnostic
           path: |
             diagnostic-output/codex-rs/core/src/guardian/snapshots/codex_core__guardian__tests__guardian_followup_review_request_layout.snap.new
             diagnostic-output/receipt.txt
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 3
 
       - name: Preserve expected mismatch status
