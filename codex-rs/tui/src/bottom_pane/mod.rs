@@ -1017,8 +1017,8 @@ impl BottomPane {
     pub(crate) fn active_view_will_interrupt_turn_on_key_event(&self, key_event: KeyEvent) -> bool {
         !self.composer.is_replay_only_thread()
             && self
-            .active_view()
-            .is_some_and(|view| view.will_interrupt_turn_on_key_event(key_event))
+                .active_view()
+                .is_some_and(|view| view.will_interrupt_turn_on_key_event(key_event))
     }
 
     pub(crate) fn should_interrupt_running_task(&self, key_event: KeyEvent) -> bool {

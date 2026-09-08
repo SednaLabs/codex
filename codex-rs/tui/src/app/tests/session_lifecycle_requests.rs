@@ -611,12 +611,8 @@ async fn active_replay_only_selection_retries_failed_resume_and_preserves_draft(
     app.chat_widget
         .restore_user_message_to_composer(draft.clone().into());
 
-    let mut fallback_thread = scripted_lineage_thread(
-        &app.config,
-        thread_id,
-        ThreadId::new(),
-        /*depth*/ 1,
-    );
+    let mut fallback_thread =
+        scripted_lineage_thread(&app.config, thread_id, ThreadId::new(), /*depth*/ 1);
     fallback_thread.turns = vec![test_turn(
         "authoritative-fallback-turn",
         TurnStatus::Completed,
@@ -659,8 +655,16 @@ async fn active_replay_only_selection_retries_failed_resume_and_preserves_draft(
             .any(|event| matches!(event, AppEvent::CodexOp(Op::UserTurn { .. })))
     );
     let recorded = take_recorded_requests(&requests);
-    assert!(recorded.iter().any(|request| request.method == "thread/resume"));
-    assert!(recorded.iter().any(|request| request.method == "thread/read"));
+    assert!(
+        recorded
+            .iter()
+            .any(|request| request.method == "thread/resume")
+    );
+    assert!(
+        recorded
+            .iter()
+            .any(|request| request.method == "thread/read")
+    );
 
     app_server.shutdown().await?;
     proxy.await??;
