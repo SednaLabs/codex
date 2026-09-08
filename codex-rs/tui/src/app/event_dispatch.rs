@@ -115,7 +115,7 @@ impl App {
         !matches!(op, AppCommand::ListSkills { .. })
     }
 
-    fn reject_replay_only_mutation(&mut self, event: &AppEvent) -> bool {
+    pub(super) fn reject_replay_only_mutation(&mut self, event: &AppEvent) -> bool {
         if !Self::replay_only_event_is_mutating(event) {
             return false;
         }
@@ -2608,7 +2608,7 @@ impl App {
         }
     }
 
-    fn refresh_plugin_mentions_after_config_write(&mut self) {
+    pub(super) fn refresh_plugin_mentions_after_config_write(&mut self) {
         self.app_event_tx.send(AppEvent::RefreshPluginMentions);
         let replay_only = self
             .current_displayed_thread_id()
