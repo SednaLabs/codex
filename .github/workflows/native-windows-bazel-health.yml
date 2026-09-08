@@ -204,22 +204,24 @@ jobs:
             exit "${test_status}"
           fi
 
-          required_markers=(
-            '[conpty-diagnostic] label='
-            'phase=child-command bytes='
-            'phase=child-command enqueue=accepted'
-            'phase=input bytes='
-            'phase=input enqueue=accepted'
-            'writer input raw_len='
-            'writer results write='
-            'terminal_marker_match=true'
-          )
           missing_markers=0
-          for marker in "${required_markers[@]}"; do
-            if ! grep -Fq "${marker}" "${diagnostic_log}"; then
-              echo "Missing required ConPTY diagnostic marker: ${marker}" >&2
-              missing_markers=1
-            fi
+          for shell in cmd PowerShell; do
+            shell_label="label=conpty-${shell}-"
+            shell_markers=(
+              "${shell_label} writer input raw_len="
+              "${shell_label} writer results write="
+              "shell=${shell} phase=child-command bytes="
+              "shell=${shell} phase=child-command enqueue=accepted"
+              "shell=${shell} phase=input bytes="
+              "shell=${shell} phase=input enqueue=accepted"
+              "shell=${shell} phase=value terminal_marker_match=true"
+            )
+            for marker in "${shell_markers[@]}"; do
+              if ! grep -Fq "${marker}" "${diagnostic_log}"; then
+                echo "Missing required ConPTY diagnostic marker: ${marker}" >&2
+                missing_markers=1
+              fi
+            done
           done
           if [[ "${missing_markers}" -ne 0 ]]; then
             echo "Targeted ConPTY diagnostics produced no complete positive evidence set." >&2
