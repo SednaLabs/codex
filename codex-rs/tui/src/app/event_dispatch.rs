@@ -127,8 +127,12 @@ impl App {
             .map(|thread_id| self.thread_is_replay_only(thread_id))
             .unwrap_or(active_replay_only);
         if replay_only {
-            self.chat_widget
-                .add_error_message("Replay-only transcripts do not accept mutations.".to_string());
+            if targeted_thread.is_none()
+                || targeted_thread == self.current_displayed_thread_id()
+            {
+                self.chat_widget
+                    .add_error_message("Replay-only transcripts do not accept mutations.".to_string());
+            }
             return true;
         }
         false
@@ -2606,8 +2610,13 @@ impl App {
     }
 
     fn refresh_plugin_mentions_after_config_write(&mut self) {
-        self.chat_widget.refresh_plugin_mentions();
-        self.chat_widget.submit_op(AppCommand::reload_user_config());
+        self.app_event_tx.send(AppEvent::RefreshPluginMentions);
+        let replay_only = self
+            .current_displayed_thread_id()
+            .is_some_and(|thread_id| self.thread_is_replay_only(thread_id));
+        if !replay_only {
+            self.chat_widget.submit_op(AppCommand::reload_user_config());
+        }
     }
 
     async fn apply_keymap_clear(&mut self, context: String, action: String) {

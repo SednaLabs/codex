@@ -427,7 +427,7 @@ fn configure_backfill_primary(app: &mut App, primary_thread_id: ThreadId) {
 
 #[tokio::test]
 async fn replay_only_model_persistence_does_not_write_config() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
     let mut channel = ThreadEventChannel::new(/*capacity*/ 1);
     channel.mark_replay_only();
@@ -438,7 +438,8 @@ async fn replay_only_model_persistence_does_not_write_config() -> Result<()> {
         test_path_buf("/tmp/project"),
     ));
 
-    let (mut app_server, requests, proxy) = start_recording_app_server(&app.config).await?;
+    let (mut app_server, requests, proxy) =
+        start_recording_app_server(&app.config, /*blocked_thread_read_id*/ None).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
 
     let live_target = ThreadId::new();
@@ -450,12 +451,33 @@ async fn replay_only_model_persistence_does_not_write_config() -> Result<()> {
             status: codex_app_server_protocol::ThreadGoalStatus::Complete,
         })
     );
+    assert!(app_event_rx.try_recv().is_err());
     assert!(
         app.reject_replay_only_mutation(&AppEvent::SetThreadGoalStatus {
             thread_id,
             status: codex_app_server_protocol::ThreadGoalStatus::Complete,
         })
     );
+    assert_matches!(
+        app_event_rx.try_recv(),
+        Ok(AppEvent::InsertHistoryCell(_))
+    );
+
+    app.refresh_plugin_mentions_after_config_write();
+    assert_matches!(
+        app_event_rx.try_recv(),
+        Ok(AppEvent::RefreshPluginMentions)
+    );
+    assert!(op_rx.try_recv().is_err());
+
+    app.thread_event_channels
+        .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
+    app.refresh_plugin_mentions_after_config_write();
+    assert_matches!(
+        app_event_rx.try_recv(),
+        Ok(AppEvent::RefreshPluginMentions)
+    );
+    assert_matches!(op_rx.try_recv(), Ok(AppCommand::ReloadUserConfig));
 
     app.pending_plugin_enabled_writes
         .insert("plugin.test".to_string(), Some(true));
