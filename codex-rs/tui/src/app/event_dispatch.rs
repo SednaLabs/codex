@@ -112,15 +112,7 @@ impl App {
     }
 
     fn replay_only_app_command_is_mutating(op: &AppCommand) -> bool {
-        !matches!(
-            op,
-            AppCommand::Interrupt
-                | AppCommand::ExecApproval { .. }
-                | AppCommand::PatchApproval { .. }
-                | AppCommand::ResolveElicitation { .. }
-                | AppCommand::RequestPermissionsResponse { .. }
-                | AppCommand::UserInputAnswer { .. }
-        )
+        !matches!(op, AppCommand::ListSkills { .. })
     }
 
     fn reject_replay_only_mutation(&mut self, event: &AppEvent) -> bool {
@@ -2782,6 +2774,19 @@ mod tests {
         }));
         assert!(!App::replay_only_event_is_mutating(
             &AppEvent::OpenAgentPicker
+        ));
+    }
+
+    #[test]
+    fn replay_only_command_gate_allows_only_read_only_skill_listing() {
+        assert!(!App::replay_only_app_command_is_mutating(
+            &AppCommand::ListSkills {
+                cwds: Vec::new(),
+                force_reload: false,
+            }
+        ));
+        assert!(App::replay_only_app_command_is_mutating(
+            &AppCommand::Interrupt
         ));
     }
 
