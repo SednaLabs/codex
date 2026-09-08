@@ -406,7 +406,7 @@ BUILD_SOURCE_DIFF_PATHS = [
     "third_party/v8/rusty_v8_150_4_0.sha256",
 ]
 BUILD_SOURCE_DIFF_PATHS = sorted(set(BUILD_SOURCE_DIFF_PATHS) | {
-+    "codex-rs/app-server/src/message_processor.rs",
+    "codex-rs/app-server/src/message_processor.rs",
     "codex-rs/app-server/src/request_processors.rs",
     "codex-rs/app-server/src/request_processors/account_processor.rs",
     "codex-rs/codex-api/src/endpoint/responses_websocket.rs",
