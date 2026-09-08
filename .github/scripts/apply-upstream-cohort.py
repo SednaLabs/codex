@@ -151,8 +151,8 @@ SDK_API_GENERATION_DIAGNOSTIC_RECEIPT_SHA256 = "f81969fc1ada27bd85dc0660d0745932
 SDK_API_GENERATION_DIAGNOSTIC_PATH_COUNT = 16
 SDK_API_GENERATION_DIAGNOSTIC_PATH_SET_SHA256 = "bd8b5454a81418453b6eb73e251de3ecdc86eab06e29429ad1b3f546db562c2f"
 SDK_API_GENERATION_DIAGNOSTIC_MISSING_PATH_COUNT = 0
-SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_SHA = SDK_CANDIDATE_SHA
-SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_TREE = SDK_CANDIDATE_TREE
+SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_SHA = "3a26f7dad12e96ea41dae025e77472af0dd273a8"
+SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_TREE = "6867e9e14ea8f416ee3075f959b880d038fe2cc0"
 
 SDK_API_GENERATION_RESTORE_ENTRIES = {
     "codex-rs/codex-mcp/src/binding.rs": ("100644", "blob", "4cd33fff3b1d433c1fdf61fea308d4b16b3af38b"),
@@ -1247,6 +1247,14 @@ def history_compatibility_bytes(repo: pathlib.Path) -> bytes:
 
 
 def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
+    require(
+        SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_SHA == SDK_CANDIDATE_SHA,
+        "SDK API-generation diagnostic candidate SHA does not match active candidate",
+    )
+    require(
+        SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_TREE == SDK_CANDIDATE_TREE,
+        "SDK API-generation diagnostic candidate tree does not match active candidate",
+    )
     require(list(BUILD_SOURCE_ENTRIES) == BUILD_PATHS, "build source path set mismatch")
     require(list(BUILD_SOURCE_PREIMAGE_ENTRIES) == BUILD_PATHS, "build source preimage set mismatch")
     require(list(RESTORE_SOURCE_ENTRIES) == RESTORE_PATHS, "restore source path set mismatch")
