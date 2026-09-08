@@ -198,7 +198,8 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
     // line editor cannot leave it partially entered under ConPTY.  The
     // command still starts the same foreground Python child, while the test
     // script carries the input/output assertions above.
-    let script_path = std::env::temp_dir().join(format!(
+    let temp_dir = std::fs::canonicalize(std::env::temp_dir())?;
+    let script_path = temp_dir.join(format!(
         "codex-conpty-foreground-{}-{}.py",
         std::process::id(),
         std::time::SystemTime::now()
