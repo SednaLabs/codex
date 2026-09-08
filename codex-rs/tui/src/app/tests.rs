@@ -1907,6 +1907,48 @@ async fn replayed_turn_activity_registers_native_v2_descendant() {
 }
 
 #[tokio::test]
+async fn enqueue_primary_session_registers_turn_activity() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let primary_thread_id = ThreadId::new();
+    let child_thread_id = ThreadId::new();
+
+    app.enqueue_primary_thread_session(
+        test_thread_session(primary_thread_id, test_path_buf("/tmp/project")),
+        vec![Turn {
+            id: "turn-replay".to_string(),
+            items_view: codex_app_server_protocol::TurnItemsView::Full,
+            items: vec![ThreadItem::SubAgentActivity {
+                id: "activity-replay".to_string(),
+                kind: codex_app_server_protocol::SubAgentActivityKind::Started,
+                agent_thread_id: child_thread_id.to_string(),
+                agent_path: "/root/restarted-child".to_string(),
+                model: None,
+                reasoning_effort: None,
+            }],
+            status: TurnStatus::Completed,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        }],
+    )
+    .await?;
+
+    assert_eq!(
+        app.agent_navigation
+            .get(&child_thread_id)
+            .and_then(|entry| entry.agent_path.as_deref()),
+        Some("/root/restarted-child")
+    );
+    assert!(
+        app.agent_navigation
+            .get(&child_thread_id)
+            .is_some_and(|entry| entry.is_running && !entry.is_closed)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn open_agent_picker_preserves_running_hints_until_observed_completion() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(

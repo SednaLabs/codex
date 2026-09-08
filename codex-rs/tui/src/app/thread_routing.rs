@@ -1330,6 +1330,11 @@ impl App {
             self.app_event_tx
                 .send(AppEvent::BeginInitialHistoryReplayBuffer);
         }
+        for item in turns.iter().flat_map(|turn| turn.items.iter()) {
+            if let Some(activity) = sub_agent_activity_display(item) {
+                self.cache_sub_agent_activity(activity);
+            }
+        }
         self.chat_widget
             .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
         if should_buffer_initial_replay {
