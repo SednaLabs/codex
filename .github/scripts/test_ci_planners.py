@@ -10075,6 +10075,7 @@ fi
             "Signature=adhoc",
             "LC_BUILD_VERSION",
             "Monterey 12.0",
+            "version != (12, 0)",
             "UNNOTARIZED-PREVIEW",
             '"signing": "ad-hoc"',
             '"notarized": False',

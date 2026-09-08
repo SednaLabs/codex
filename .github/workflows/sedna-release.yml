@@ -1014,8 +1014,8 @@ jobs:
               version = tuple(int(part) for part in value.split(".")[:2])
           except ValueError as exc:
               raise SystemExit(f"error: invalid macOS minimum version {value!r}") from exc
-          if version < (12, 0):
-              raise SystemExit(f"error: macOS minimum version {value} is older than Monterey 12.0")
+          if version != (12, 0):
+              raise SystemExit(f"error: macOS minimum version {value} is not exactly Monterey 12.0")
           PY
             codesign --verify --strict --verbose=2 "${staged_path}"
             codesign -dvvv "${staged_path}" 2>&1 | grep -F "Signature=adhoc"
@@ -1376,8 +1376,8 @@ jobs:
               version = tuple(int(part) for part in value.split(".")[:2])
           except ValueError as exc:
               raise SystemExit(f"error: invalid macOS minimum version {value!r}") from exc
-          if version < (12, 0):
-              raise SystemExit(f"error: macOS minimum version {value} is older than Monterey 12.0")
+          if version != (12, 0):
+              raise SystemExit(f"error: macOS minimum version {value} is not exactly Monterey 12.0")
           PY
             codesign --verify --strict --verbose=2 "${path}"
             expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
