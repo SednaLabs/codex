@@ -410,7 +410,9 @@ def get_merge_queue_entry(repo, pr_number):
         return normalize_merge_queue_entry(None, field_present=False)
     if not isinstance(payload, dict) or payload.get("errors"):
         return normalize_merge_queue_entry(None, field_present=False)
-    pull_request = (((payload.get("data") or {}).get("repository") or {}).get("pullRequest"))
+    data = payload.get("data")
+    repository = data.get("repository") if isinstance(data, dict) else None
+    pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
     if not isinstance(pull_request, dict):
         return normalize_merge_queue_entry(None, field_present=False)
     return normalize_merge_queue_entry(pull_request.get("mergeQueueEntry"), "mergeQueueEntry" in pull_request)
@@ -419,8 +421,12 @@ def get_merge_queue_entry(repo, pr_number):
 def reconcile_merge_queue_entry(pr, state):
     current = pr.get("merge_queue") or normalize_merge_queue_entry(None, field_present=False)
     previous = state.get("last_merge_queue_entry")
-    if current.get("status") == "absent" and isinstance(previous, dict) and previous.get("status") == "waiting" and str(state.get("last_merge_queue_pr_head_sha") or "") == str(pr.get("head_sha") or ""):
-        current = {**current, "status": "removed", "id": str(previous.get("id") or ""), "state": str(previous.get("state") or ""), "head_sha": str(previous.get("head_sha") or "")}
+    same_head = str(state.get("last_merge_queue_pr_head_sha") or "") == str(pr.get("head_sha") or "")
+    if current.get("status") == "absent" and isinstance(previous, dict) and same_head:
+        if previous.get("status") == "waiting":
+            current = {**current, "status": "removed", "id": str(previous.get("id") or ""), "state": str(previous.get("state") or ""), "head_sha": str(previous.get("head_sha") or "")}
+        elif previous.get("status") in {"failed", "removed"}:
+            current = dict(previous)
     if current.get("status") == "waiting":
         state["last_merge_queue_entry"] = current
         state["last_merge_queue_pr_head_sha"] = str(pr.get("head_sha") or "")
@@ -1679,7 +1685,7 @@ def is_pr_ready_to_merge(pr, checks_summary, actionable_review_items, review_sta
         return False
     if str(pr.get("review_decision") or "") in MERGE_BLOCKING_REVIEW_DECISIONS:
         return False
-    if str((pr.get("merge_queue") or {}).get("status") or "") == "waiting":
+    if str((pr.get("merge_queue") or {}).get("status") or "") not in {"", "absent"}:
         return False
     return True
 
@@ -1728,6 +1734,7 @@ def recommend_actions(
         or actionable_review_items
         or int(review_state.get("active_unresolved_thread_count") or 0) > 0
         or str(pr.get("review_decision") or "") in MERGE_BLOCKING_REVIEW_DECISIONS
+        or str((pr.get("merge_queue") or {}).get("status") or "") == "waiting"
     )
     if (
         str(pr.get("merge_state_status") or "").upper() == "BLOCKED"

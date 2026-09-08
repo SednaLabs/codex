@@ -42,7 +42,7 @@ def sample_checks(**overrides):
 
 @pytest.fixture(autouse=True)
 def default_queue_absent(monkeypatch, request):
-    if request.node.name.startswith("test_collect_snapshot_reads_graphql"):
+    if request.node.name.startswith(("test_collect_snapshot_reads_graphql", "test_collect_malformed_queue")):
         return
     monkeypatch.setattr(
         gh_pr_watch,
@@ -599,7 +599,6 @@ def test_unreadable_pending_queue_head_stays_on_base_cadence():
 def test_queue_identity_change_resets_cadence():
     args = argparse.Namespace(poll_seconds=30)
     old = {
-        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123"},
         "checks": sample_checks(),
         "actions": ["idle"],
         "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123", "merge_queue": {"status": "waiting", "id": "entry-1", "state": "QUEUED"}},
@@ -650,6 +649,39 @@ def test_active_queue_cannot_report_ready():
     pr = sample_pr()
     pr["merge_queue"] = {"status": "waiting", "state": "QUEUED", "id": "entry-1"}
     assert not gh_pr_watch.is_pr_ready_to_merge(pr, sample_checks(), [], {})
+
+
+@pytest.mark.parametrize("state", sorted(gh_pr_watch.MERGE_QUEUE_WAITING_STATES))
+def test_active_queue_explains_blocked_merge_state(state):
+    pr = sample_pr()
+    pr.update(merge_state_status="BLOCKED", merge_queue={"status": "waiting", "state": state, "id": "entry-1"})
+    assert gh_pr_watch.recommend_actions(pr, sample_checks(), [], [], [], {}, 0, 3) == ["idle"]
+
+
+def test_queue_tombstone_preserves_failure_and_removal_until_head_changes():
+    base = {"head_sha": "head-1"}
+    state = {}
+    failed = {**base, "merge_queue": {"status": "failed", "id": "entry-1", "state": "FAILED"}}
+    gh_pr_watch.reconcile_merge_queue_entry(failed, state)
+    assert gh_pr_watch.reconcile_merge_queue_entry({**base, "merge_queue": {"status": "absent"}}, state)["status"] == "failed"
+
+    removed = {**base, "merge_queue": {"status": "removed", "id": "entry-1", "state": "QUEUED"}}
+    gh_pr_watch.reconcile_merge_queue_entry(removed, state)
+    assert gh_pr_watch.reconcile_merge_queue_entry({**base, "merge_queue": {"status": "absent"}}, state)["status"] == "removed"
+
+    new_head = {"head_sha": "head-2", "merge_queue": {"status": "absent"}}
+    assert gh_pr_watch.reconcile_merge_queue_entry(new_head, state)["status"] == "absent"
+
+
+@pytest.mark.parametrize("payload", [{"data": ["bad"]}, {"data": {"repository": "bad"}}, {"data": {"repository": {"pullRequest": "bad"}}}])
+def test_collect_malformed_queue_payload_is_unknown_and_not_ready(monkeypatch, payload):
+    monkeypatch.setattr(gh_pr_watch, "gh_json", lambda *_args, **_kwargs: payload)
+    queue = gh_pr_watch.get_merge_queue_entry("openai/codex", 123)
+    assert queue["status"] == "unknown"
+    pr = sample_pr()
+    pr["merge_queue"] = queue
+    actions = gh_pr_watch.recommend_actions(pr, sample_checks(), [], [], [], {}, 0, 3)
+    assert actions == [gh_pr_watch.STOP_MERGE_QUEUE_READ_ERROR]
 
 
 def test_schedule_persists_exact_head_and_fake_clock(monkeypatch, tmp_path):
