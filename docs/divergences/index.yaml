@@ -1575,6 +1575,7 @@
         "codex-rs/tui/src/app/tests.rs",
         "codex-rs/tui/src/app_server_session.rs",
         "codex-rs/tui/src/test_support.rs",
+        "scripts/recovery-snapshot/snapshot.py",
         "tools/argument-comment-lint/list-bazel-targets.sh",
         "justfile"
       ],
@@ -2835,6 +2836,12 @@
         ".github/scripts/validation-lanes/sedna-update-installer-contract.sh",
         "codex-rs/cli/src/doctor/updates.rs",
         "codex-rs/cli/src/main.rs",
+        "codex-rs/app-server-daemon/Cargo.toml",
+        "codex-rs/app-server-daemon/src/backend/pid.rs",
+        "codex-rs/app-server-daemon/src/lib.rs",
+        "codex-rs/app-server-daemon/src/managed_install.rs",
+        "codex-rs/app-server-daemon/src/managed_install_tests.rs",
+        "codex-rs/app-server-daemon/src/settings.rs",
         "codex-rs/app-server-daemon/src/update_loop.rs",
         "codex-rs/app-server-daemon/src/update_loop_tests.rs",
         "codex-rs/tui/src/update_action.rs",
@@ -2848,6 +2855,7 @@
         "scripts/install/install.sh",
         "scripts/install/install.ps1",
         "scripts/install/test_install_sh.py",
+        "scripts/install/test_sedna_release_lower_bound.py",
         "scripts/install/test_sedna_release_installer.py",
         "scripts/resolve_sedna_release_version"
       ],
