@@ -4559,7 +4559,7 @@ class ValidationPlanScriptTests(unittest.TestCase):
         )
         self.assertEqual(
             install_sccache_step.get("uses"),
-            "taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e",
+            "taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8",
         )
         configure_sccache_step = workflow_step_by_name(
             REPO_ROOT / ".github/workflows/sedna-branch-build.yml",
@@ -5112,7 +5112,7 @@ class ValidationPlanScriptTests(unittest.TestCase):
         tool_values: list[str] = []
         for job in (payload.get("jobs") or {}).values():
             for step in (job or {}).get("steps") or []:
-                if step.get("uses") != "taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e":
+                if step.get("uses") != "taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8":
                     continue
                 with_section = step.get("with") or {}
                 self.assertNotIn("version", with_section)
@@ -10439,7 +10439,7 @@ fi
             },
             {
                 "cargo_home_restore": "actions/cache/restore@v6",
-                "sccache_install": "taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e",
+                "sccache_install": "taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8",
                 "sccache_configure_run": "bash .github/scripts/configure_sccache_backend.sh write-fallback",
                 "sccache_restore": "actions/cache/restore@v6",
                 "cargo_home_save": "actions/cache/save@v6",
