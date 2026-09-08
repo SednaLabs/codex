@@ -30,6 +30,8 @@ PENDING_CHECK_STATES = {
     "WAITING",
     "REQUESTED",
 }
+MERGE_QUEUE_WAITING_STATES = {"AWAITING_CHECKS", "LOCKED", "MERGEABLE", "QUEUED"}
+MERGE_QUEUE_FAILED_STATES = {"FAILED", "CANCELLED", "REMOVED", "UNMERGEABLE"}
 REVIEW_BOT_LOGIN_KEYWORDS = {
     "codex",
 }
@@ -52,10 +54,16 @@ COMMAND_ONLY_ISSUE_COMMENT_MAX_TOKENS = 4
 GREEN_STATE_MAX_POLL_SECONDS = 60 * 60
 WATCH_UNTIL_ACTION_MAX_POLL_SECONDS = 20 * 60
 ACTION_REQUIRED_MERGE_POLICY_BLOCKED = "action_required_merge_policy_blocked"
+STOP_MERGE_QUEUE_FAILED = "stop_merge_queue_failed"
+STOP_MERGE_QUEUE_REMOVED = "stop_merge_queue_removed"
+STOP_MERGE_QUEUE_READ_ERROR = "stop_merge_queue_read_error"
 STOP_ACTIONS = {
     "stop_pr_closed",
     "stop_exhausted_retries",
     "stop_ready_to_merge",
+    STOP_MERGE_QUEUE_FAILED,
+    STOP_MERGE_QUEUE_REMOVED,
+    STOP_MERGE_QUEUE_READ_ERROR,
 }
 SEEN_FEEDBACK_STATE_KEYS = (
     "seen_issue_comment_ids",
@@ -367,6 +375,59 @@ def pr_view_fields():
         "headRepository,headRepositoryOwner,baseRefName,baseRefOid,"
         "mergeable,mergeStateStatus,reviewDecision"
     )
+
+
+def normalize_merge_queue_entry(raw_entry, field_present=True):
+    if not field_present:
+        return {"read_state": "error", "status": "unknown", "id": "", "state": "", "position": None, "head_sha": "", "source": "github", "details": "GitHub did not return merge-queue evidence."}
+    if raw_entry is None:
+        return {"read_state": "observed_absent", "status": "absent", "id": "", "state": "", "position": None, "head_sha": "", "source": "github", "details": "GitHub reports no active merge-queue entry."}
+    if not isinstance(raw_entry, dict):
+        return {"read_state": "error", "status": "unknown", "id": "", "state": "", "position": None, "head_sha": "", "source": "github", "details": "GitHub returned an invalid merge-queue entry."}
+    state = str(raw_entry.get("state") or "").upper()
+    status = "waiting" if state in MERGE_QUEUE_WAITING_STATES else "failed" if state in MERGE_QUEUE_FAILED_STATES else "unknown"
+    head_commit = raw_entry.get("headCommit") or {}
+    return {
+        "read_state": "observed",
+        "status": status,
+        "id": str(raw_entry.get("id") or ""),
+        "state": state,
+        "position": raw_entry.get("position"),
+        "head_sha": str(head_commit.get("oid") or "") if isinstance(head_commit, dict) else "",
+        "source": "github",
+        "details": "GitHub returned merge-queue evidence.",
+    }
+
+
+def get_merge_queue_entry(repo, pr_number):
+    owner, separator, name = str(repo or "").partition("/")
+    if not separator or not owner or not name:
+        return normalize_merge_queue_entry(None, field_present=False)
+    query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){mergeQueueEntry{id state position headCommit{oid}}}}}"
+    try:
+        payload = gh_json(["api", "graphql", "-f", f"query={query}", "-F", f"owner={owner}", "-F", f"name={name}", "-F", f"number={int(pr_number)}"])
+    except (GhCommandError, ValueError):
+        return normalize_merge_queue_entry(None, field_present=False)
+    if not isinstance(payload, dict) or payload.get("errors"):
+        return normalize_merge_queue_entry(None, field_present=False)
+    pull_request = (((payload.get("data") or {}).get("repository") or {}).get("pullRequest"))
+    if not isinstance(pull_request, dict):
+        return normalize_merge_queue_entry(None, field_present=False)
+    return normalize_merge_queue_entry(pull_request.get("mergeQueueEntry"), "mergeQueueEntry" in pull_request)
+
+
+def reconcile_merge_queue_entry(pr, state):
+    current = pr.get("merge_queue") or normalize_merge_queue_entry(None, field_present=False)
+    previous = state.get("last_merge_queue_entry")
+    if current.get("status") == "absent" and isinstance(previous, dict) and previous.get("status") == "waiting" and str(state.get("last_merge_queue_pr_head_sha") or "") == str(pr.get("head_sha") or ""):
+        current = {**current, "status": "removed", "id": str(previous.get("id") or ""), "state": str(previous.get("state") or ""), "head_sha": str(previous.get("head_sha") or "")}
+    if current.get("status") == "waiting":
+        state["last_merge_queue_entry"] = current
+        state["last_merge_queue_pr_head_sha"] = str(pr.get("head_sha") or "")
+    elif current.get("status") in {"failed", "removed"}:
+        state["last_merge_queue_entry"] = current
+        state["last_merge_queue_pr_head_sha"] = str(pr.get("head_sha") or "")
+    return current
 
 
 def checks_fields():
@@ -1618,6 +1679,8 @@ def is_pr_ready_to_merge(pr, checks_summary, actionable_review_items, review_sta
         return False
     if str(pr.get("review_decision") or "") in MERGE_BLOCKING_REVIEW_DECISIONS:
         return False
+    if str((pr.get("merge_queue") or {}).get("status") or "") == "waiting":
+        return False
     return True
 
 
@@ -1638,6 +1701,14 @@ def recommend_actions(
             actions.append("process_review_comment")
         actions.append("stop_pr_closed")
         return unique_actions(actions)
+
+    queue_status = str((pr.get("merge_queue") or {}).get("status") or "")
+    if queue_status == "failed":
+        actions.append(STOP_MERGE_QUEUE_FAILED)
+    elif queue_status == "removed":
+        actions.append(STOP_MERGE_QUEUE_REMOVED)
+    elif queue_status == "unknown":
+        actions.append(STOP_MERGE_QUEUE_READ_ERROR)
 
     if is_pr_ready_to_merge(pr, checks_summary, actionable_review_items, review_state):
         actions.append("stop_ready_to_merge")
@@ -1690,6 +1761,9 @@ def collect_snapshot(args, cache=None):
     validate_pr_resolution(args.pr, args.repo, pr, local_git_context)
     state_path = state_file_for(args, pr)
     state, fresh_state = load_state(state_path)
+    pr["merge_queue"] = reconcile_merge_queue_entry(
+        {**pr, "merge_queue": get_merge_queue_entry(pr["repo"], pr["number"])}, state
+    )
     maybe_reset_seen_feedback(args, state)
 
     if not state.get("started_at"):
@@ -2015,22 +2089,15 @@ def snapshot_change_key(snapshot):
     checks = snapshot.get("checks") or {}
     review_state = snapshot.get("review_state") or {}
     review_items = snapshot.get("actionable_review_items") or []
-    merge_queue = snapshot.get("merge_blockers") or []
-
+    merge_queue = pr.get("merge_queue") or {}
     # Queue identity is part of the lifecycle, even when the check rollup is
-    # unchanged.  A queue entry can be replaced or removed while the PR head
-    # and all checks remain green; treating that as an unchanged idle snapshot
-    # would incorrectly retain a long green-state backoff.
-    queue_identity = tuple(
-        (
-            str(item.get("kind") or ""),
-            str(item.get("id") or item.get("entry_id") or ""),
-            str(item.get("state") or ""),
-            str(item.get("head_sha") or ""),
-        )
-        for item in merge_queue
-        if isinstance(item, dict)
-        and str(item.get("kind") or "") == "merge_queue_waiting"
+    # unchanged. A replacement or removal must not retain stale backoff.
+    queue_identity = (
+        str(merge_queue.get("read_state") or ""),
+        str(merge_queue.get("status") or ""),
+        str(merge_queue.get("id") or ""),
+        str(merge_queue.get("state") or ""),
+        str(merge_queue.get("head_sha") or ""),
     )
     return (
         str(pr.get("head_sha") or ""),
@@ -2065,16 +2132,12 @@ def has_active_merge_queue_wait(snapshot):
     This prevents a stale green snapshot from sleeping for many minutes while
     queue lifecycle evidence is incomplete or changing.
     """
-    blockers = snapshot.get("merge_blockers") or []
-    for blocker in blockers:
-        if not isinstance(blocker, dict):
-            continue
-        if str(blocker.get("kind") or "") != "merge_queue_waiting":
-            continue
-        state = str(blocker.get("state") or "").upper()
-        if state in {"QUEUED", "AWAITING_CHECKS"}:
-            return True
-    return False
+    merge_queue = (snapshot.get("pr") or {}).get("merge_queue") or {}
+    return (
+        str(merge_queue.get("status") or "").lower() == "waiting"
+        and str(merge_queue.get("state") or "").upper()
+        in MERGE_QUEUE_WAITING_STATES
+    )
 
 
 def _compact_review_item(item):
