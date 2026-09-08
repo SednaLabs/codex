@@ -32,7 +32,7 @@ REPOSITORY_ID = "1152496647"
 WORKFLOW_PATH = ".github/workflows/apply-upstream-cohort.yml"
 VALIDATION_BRANCH = "worker/w13825-sdk-build-consumer"
 VALIDATION_REF = f"refs/heads/{VALIDATION_BRANCH}"
-PUSH_PREDECESSOR_SHA = "ca86c293d3d45a5b95890b6ef2e3bbf247fa528e"
+PUSH_PREDECESSOR_SHA = "2d34da4e23448474489fb38bcd2efab949c800cf"
 DIAGNOSTIC_TAIL_LINES = 80
 DIAGNOSTIC_LINE_LIMIT = 4096
 DIAGNOSTIC_BYTE_LIMIT = 131072
@@ -89,9 +89,9 @@ COMMON_PROVENANCE_SHA256 = "afbf269c8593c978ed706c9f2fddc0031383350fe216d88512ec
 COMMON_STAGED_PATCH_SHA256 = "dd4b59d9be8c2727d08de673085b36a1c61f6cee617855f210706412a5bfc66c"
 COMMON_STAGED_PATHS_SHA256 = "90b44134bb538a07fa03dfd674e96f08de4ba04a40252f6dc9f5c740dd5bb1ae"
 
-BUILD_SOURCE_SHA = "62e4e952d170bfbf3c66cdd1462543a653d678da"
-BUILD_SOURCE_TREE = "9b464547f96782e4e542f7fb1d632335a71433eb"
-BUILD_SOURCE_PARENT = "b5be615fa7b73903bb198d6a430c421d28946f77"
+BUILD_SOURCE_SHA = "2d056a5512abc4ddb30507513b65e890f10abd1a"
+BUILD_SOURCE_TREE = "3d70b95e60c6c2aa03a7df3e51fda445ad0bb1f0"
+BUILD_SOURCE_PARENT = "62e4e952d170bfbf3c66cdd1462543a653d678da"
 DIAGNOSTIC_PREDECESSOR_SOURCE_SHA = "b593ff0ba02ff08d0c44f6db95840c6cc59f0598"
 DIAGNOSTIC_PREDECESSOR_SOURCE_TREE = "8ed5ce3a16074ee4ca54d866e1041c59d0e6cc47"
 DIAGNOSTIC_PREDECESSOR_SOURCE_PARENT = "85b4fbedb76d439d64b6421fcbc213d54a7a89a9"
@@ -114,6 +114,8 @@ RUNTIME_SOURCE_PLUGIN_FALLBACK_PATH = "codex-rs/utils/plugins/src/plugin_namespa
 RUNTIME_SOURCE_PLUGIN_FALLBACK_PREIMAGE = ("100644", "blob", "b4da61deabe3a03a2acb66f25e20956719d2cfb8")
 RUNTIME_SOURCE_PLUGIN_FALLBACK_POSTIMAGE = ("100644", "blob", "b76739e9a8c4eef8132cb920d394e3651f0caf56")
 RUNTIME_SOURCE_FALLBACK_ENTRIES = {
+    "codex-rs/ext/extension-api/src/lib.rs": (("100644", "blob", "b4847ff578ae3d24312911e804aa6c5f5dc07948"), ("100644", "blob", "cb7fcda58dc785ab2de5bcc6760a3f6d18d4a12f")),
+    "codex-rs/ext/extension-api/src/registry.rs": (("100644", "blob", "842155ea295e1037ca6e7e87a52b5bed595fb90a"), ("100644", "blob", "be706b506152a30db62db4b7b0533b1640ef87e0")),
     "codex-rs/codex-mcp/src/connection_manager.rs": (("100644", "blob", "d3d20ff4bd4ed18022e7d9a21f3e1d0beb460d0f"), ("100644", "blob", "265545924a7698fd4dfeebbde5e6be8e036ccbe6")),
     "codex-rs/codex-mcp/src/mcp/auth.rs": (("100644", "blob", "799dd8b917acad719313b274bf52a8b5e2af54e2"), ("100644", "blob", "34dd29491637c0eac34d2df2958eae8ab92c2e04")),
     "codex-rs/codex-mcp/src/mcp/mod.rs": (("100644", "blob", "78199816afbc95a70de37917f343413bfba420dc"), ("100644", "blob", "f7e989cb4aa55fecf315b2c080e9a6054fdc330f")),
@@ -127,9 +129,10 @@ RUNTIME_SOURCE_FALLBACK_ENTRIES = {
     "codex-rs/rmcp-client/src/oauth_http_client.rs": (("100644", "blob", "a3f23d4cf40d37ddcaf2b8874c6ae1d534a7f303"), ("100644", "blob", "ed35a924f7e1ffeb7f9d401aa06367145f96c184")),
     "codex-rs/rmcp-client/src/stdio_server_launcher.rs": (("100644", "blob", "4a2c52a40fb03da30e0c2e2eb7293a918a0e0a6d"), ("100644", "blob", "604ae65f9feb0b96861543c4a06bf35052d70b53")),
     "codex-rs/tools/src/code_mode.rs": (("100644", "blob", "c096d654c6506387317a7fcee4f60111847f3458"), ("100644", "blob", "99463bdbc531473be347fe2e8f4043364114afcb")),
+    "codex-rs/protocol/src/openai_models.rs": (("100644", "blob", "9847c0562be046c42f46a6f0f7e8e95a43c6934b"), ("100644", "blob", "92b4616a86d4092c2c5f5d912c2afaf934e2c656")),
 }
-RUNTIME_SOURCE_UNION_PATH_COUNT = 178
-RUNTIME_SOURCE_UNION_PATH_SET_SHA256 = "05d7e4e2747c55f0a5524d76ccc0cd6ce4ffba310f010ece93a0345d760300bb"
+RUNTIME_SOURCE_UNION_PATH_COUNT = 181
+RUNTIME_SOURCE_UNION_PATH_SET_SHA256 = "1244ffd4fdb9a797b5aa6e825a1787121d2c81cf452d495be52deb0e1120caf4"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_ID = "10021647248"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_NAME = "sdk-runtime-surfaces-preimage-diagnostic-34129864201-1"
 RUNTIME_SURFACES_DIAGNOSTIC_ARTIFACT_SIZE = 6658
@@ -139,10 +142,10 @@ RUNTIME_SURFACES_DIAGNOSTIC_HEAD_BRANCH = "worker/w13825-sdk-network-proxy-diagn
 RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA = "7a80f886b7ebf979b8324f7e3527afdbe83a65b3"
 RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE = "aebca2b3e58d90124b0962b1bb51fa581dfcb0d1"
 RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID = "1152496647"
-RUNTIME_SOURCE_PREIMAGE_MAP_COUNT = 178
-RUNTIME_SOURCE_PREIMAGE_MAP_SHA256 = "698c815aeaa45bc3cb4a9d6f464f83079a674187bbb4766c8029978b06bf4ca9"
-RUNTIME_SOURCE_POSTIMAGE_MAP_COUNT = 178
-RUNTIME_SOURCE_POSTIMAGE_MAP_SHA256 = "f9659c60269eb2e26542eb08ec01dd81b3a675327eb6eb4b3551a2c9e4a73379"
+RUNTIME_SOURCE_PREIMAGE_MAP_COUNT = 181
+RUNTIME_SOURCE_PREIMAGE_MAP_SHA256 = "0ac06c845e12bdc4bee408a9769e15dabb94d9cce931b330db4d18420878e6e9"
+RUNTIME_SOURCE_POSTIMAGE_MAP_COUNT = 181
+RUNTIME_SOURCE_POSTIMAGE_MAP_SHA256 = "669a087dc292e00e7c1fb85ef50927cfb641f34b84b5d6a69f6023c8b8a3dc21"
 
 SDK_API_GENERATION_DIAGNOSTIC_RUN_ID = "34177057384"
 SDK_API_GENERATION_DIAGNOSTIC_HEAD_SHA = "7081f5917fff0a54c7866203f59126938c7c148a"
@@ -402,7 +405,188 @@ BUILD_SOURCE_DIFF_PATHS = [
     "patches/BUILD.bazel",
     "third_party/v8/rusty_v8_150_4_0.sha256",
 ]
-BUILD_SOURCE_DIFF_PATHS_SHA256 = "297950d9003ea76efeee9a6c4dfea603c671a3d8a7fd4a22485e996d5c854b10"
+BUILD_SOURCE_DIFF_PATHS = sorted(set(BUILD_SOURCE_DIFF_PATHS) | {
++    "codex-rs/app-server/src/message_processor.rs",
+    "codex-rs/app-server/src/request_processors.rs",
+    "codex-rs/app-server/src/request_processors/account_processor.rs",
+    "codex-rs/codex-api/src/endpoint/responses_websocket.rs",
+    "codex-rs/codex-mcp/src/connection_manager.rs",
+    "codex-rs/codex-mcp/src/mcp/auth.rs",
+    "codex-rs/codex-mcp/src/mcp/mod.rs",
+    "codex-rs/codex-mcp/src/rmcp_client.rs",
+    "codex-rs/core/src/client.rs",
+    "codex-rs/core/src/client_tests.rs",
+    "codex-rs/core/src/config/mod.rs",
+    "codex-rs/core/src/session/tests.rs",
+    "codex-rs/core/tests/suite/remote_env.rs",
+    "codex-rs/exec-server/BUILD.bazel",
+    "codex-rs/exec-server/Cargo.toml",
+    "codex-rs/exec-server/README.md",
+    "codex-rs/exec-server/src/capability_discovery.rs",
+    "codex-rs/exec-server/src/capability_discovery_cache.rs",
+    "codex-rs/exec-server/src/client.rs",
+    "codex-rs/exec-server/src/client/accepted.rs",
+    "codex-rs/exec-server/src/client/accepted_tests.rs",
+    "codex-rs/exec-server/src/client/http_response_body_stream.rs",
+    "codex-rs/exec-server/src/client/network_policy_audit.rs",
+    "codex-rs/exec-server/src/client/route_aware_http_client.rs",
+    "codex-rs/exec-server/src/client/tests/network_policy_tests.rs",
+    "codex-rs/exec-server/src/client_api.rs",
+    "codex-rs/exec-server/src/client_recovery.rs",
+    "codex-rs/exec-server/src/client_recovery_tests.rs",
+    "codex-rs/exec-server/src/client_refresh.rs",
+    "codex-rs/exec-server/src/client_refresh_tests.rs",
+    "codex-rs/exec-server/src/client_telemetry.rs",
+    "codex-rs/exec-server/src/client_transport.rs",
+    "codex-rs/exec-server/src/client_transport_tests.rs",
+    "codex-rs/exec-server/src/connection.rs",
+    "codex-rs/exec-server/src/environment.rs",
+    "codex-rs/exec-server/src/environment/accepted.rs",
+    "codex-rs/exec-server/src/environment/connect_options.rs",
+    "codex-rs/exec-server/src/environment/connect_options_tests.rs",
+    "codex-rs/exec-server/src/environment_config.rs",
+    "codex-rs/exec-server/src/environment_toml.rs",
+    "codex-rs/exec-server/src/forward.rs",
+    "codex-rs/exec-server/src/forward_tests.rs",
+    "codex-rs/exec-server/src/fs_helper.rs",
+    "codex-rs/exec-server/src/fs_helper_main.rs",
+    "codex-rs/exec-server/src/fs_sandbox.rs",
+    "codex-rs/exec-server/src/fs_sandbox_windows_tests.rs",
+    "codex-rs/exec-server/src/lib.rs",
+    "codex-rs/exec-server/src/local_file_system.rs",
+    "codex-rs/exec-server/src/local_file_system_path_uri_tests.rs",
+    "codex-rs/exec-server/src/local_process.rs",
+    "codex-rs/exec-server/src/network_policy_decisions.rs",
+    "codex-rs/exec-server/src/network_policy_decisions_tests.rs",
+    "codex-rs/exec-server/src/no_follow/mod.rs",
+    "codex-rs/exec-server/src/no_follow/unix.rs",
+    "codex-rs/exec-server/src/no_follow/windows.rs",
+    "codex-rs/exec-server/src/no_follow/windows_tests.rs",
+    "codex-rs/exec-server/src/noise_relay/executor_stream.rs",
+    "codex-rs/exec-server/src/noise_relay/executor_stream_tests.rs",
+    "codex-rs/exec-server/src/noise_relay/forward_stream_tests.rs",
+    "codex-rs/exec-server/src/noise_relay/harness.rs",
+    "codex-rs/exec-server/src/noise_relay/harness_tests.rs",
+    "codex-rs/exec-server/src/noise_relay/message_framing.rs",
+    "codex-rs/exec-server/src/noise_relay/message_framing_tests.rs",
+    "codex-rs/exec-server/src/noise_relay/mod.rs",
+    "codex-rs/exec-server/src/noise_relay/stream_handler.rs",
+    "codex-rs/exec-server/src/noise_relay/stream_handler_tests.rs",
+    "codex-rs/exec-server/src/process.rs",
+    "codex-rs/exec-server/src/process_sandbox.rs",
+    "codex-rs/exec-server/src/process_sandbox_tests.rs",
+    "codex-rs/exec-server/src/process_telemetry.rs",
+    "codex-rs/exec-server/src/proto/codex.exec_server.relay.v1.proto",
+    "codex-rs/exec-server/src/proto/codex.exec_server.relay.v1.rs",
+    "codex-rs/exec-server/src/regular_file.rs",
+    "codex-rs/exec-server/src/regular_file_tests.rs",
+    "codex-rs/exec-server/src/relay.rs",
+    "codex-rs/exec-server/src/relay_noise_tests.rs",
+    "codex-rs/exec-server/src/remote.rs",
+    "codex-rs/exec-server/src/remote/direct.rs",
+    "codex-rs/exec-server/src/remote/direct_tests.rs",
+    "codex-rs/exec-server/src/remote/registration_retry.rs",
+    "codex-rs/exec-server/src/remote/registration_retry_tests.rs",
+    "codex-rs/exec-server/src/remote_file_system.rs",
+    "codex-rs/exec-server/src/remote_file_system_path_uri_tests.rs",
+    "codex-rs/exec-server/src/remote_process.rs",
+    "codex-rs/exec-server/src/rpc.rs",
+    "codex-rs/exec-server/src/rpc_client_metrics_tests.rs",
+    "codex-rs/exec-server/src/rpc_server_requests.rs",
+    "codex-rs/exec-server/src/runtime_paths.rs",
+    "codex-rs/exec-server/src/sandboxed_file_open.rs",
+    "codex-rs/exec-server/src/sandboxed_file_system.rs",
+    "codex-rs/exec-server/src/sandboxed_file_system_path_uri_tests.rs",
+    "codex-rs/exec-server/src/server.rs",
+    "codex-rs/exec-server/src/server/file_system_handler.rs",
+    "codex-rs/exec-server/src/server/handler.rs",
+    "codex-rs/exec-server/src/server/handler/tests.rs",
+    "codex-rs/exec-server/src/server/process_handler.rs",
+    "codex-rs/exec-server/src/server/process_otel_tests.rs",
+    "codex-rs/exec-server/src/server/processor.rs",
+    "codex-rs/exec-server/src/server/registry.rs",
+    "codex-rs/exec-server/src/server/release_version.rs",
+    "codex-rs/exec-server/src/server/request_dispatcher.rs",
+    "codex-rs/exec-server/src/server/request_dispatcher_tests.rs",
+    "codex-rs/exec-server/src/server/transport.rs",
+    "codex-rs/exec-server/src/server/transport_tests.rs",
+    "codex-rs/exec-server/src/shell_snapshot.rs",
+    "codex-rs/exec-server/src/shell_snapshot_tests.rs",
+    "codex-rs/exec-server/src/telemetry.rs",
+    "codex-rs/exec-server/src/trace_context.rs",
+    "codex-rs/exec-server/testing/exec_server.rs",
+    "codex-rs/exec-server/testing/wine_remote_test_runner.rs",
+    "codex-rs/exec-server/tests/accepted_websocket.rs",
+    "codex-rs/exec-server/tests/capability_discovery.rs",
+    "codex-rs/exec-server/tests/chatgpt_cloudflare_affinity.rs",
+    "codex-rs/exec-server/tests/common/exec_server.rs",
+    "codex-rs/exec-server/tests/common/fake_bwrap.rs",
+    "codex-rs/exec-server/tests/common/mod.rs",
+    "codex-rs/exec-server/tests/common/relay.rs",
+    "codex-rs/exec-server/tests/deferred_environment.rs",
+    "codex-rs/exec-server/tests/environment.rs",
+    "codex-rs/exec-server/tests/environment_config.rs",
+    "codex-rs/exec-server/tests/exec_process.rs",
+    "codex-rs/exec-server/tests/file_stream.rs",
+    "codex-rs/exec-server/tests/file_system/shared.rs",
+    "codex-rs/exec-server/tests/file_system/support.rs",
+    "codex-rs/exec-server/tests/file_system_unix.rs",
+    "codex-rs/exec-server/tests/file_system_windows.rs",
+    "codex-rs/exec-server/tests/forward.rs",
+    "codex-rs/exec-server/tests/http_client.rs",
+    "codex-rs/exec-server/tests/http_request.rs",
+    "codex-rs/exec-server/tests/initialize.rs",
+    "codex-rs/exec-server/tests/process.rs",
+    "codex-rs/exec-server/tests/relay.rs",
+    "codex-rs/exec-server/tests/relay/registration_retry_tests.rs",
+    "codex-rs/exec-server/tests/support/BUILD.bazel",
+    "codex-rs/exec-server/tests/support/Cargo.toml",
+    "codex-rs/exec-server/tests/support/lib.rs",
+    "codex-rs/exec-server/tests/support/relay.rs",
+    "codex-rs/exec-server/tests/unit/client_provisioning_tests.rs",
+    "codex-rs/ext/extension-api/src/lib.rs",
+    "codex-rs/ext/extension-api/src/registry.rs",
+    "codex-rs/login/Cargo.toml",
+    "codex-rs/login/src/auth/agent_identity.rs",
+    "codex-rs/login/src/auth/auth_headers.rs",
+    "codex-rs/login/src/auth/auth_tests.rs",
+    "codex-rs/login/src/auth/bedrock_access_keys.rs",
+    "codex-rs/login/src/auth/bedrock_api_key.rs",
+    "codex-rs/login/src/auth/bedrock_api_key_tests.rs",
+    "codex-rs/login/src/auth/default_client.rs",
+    "codex-rs/login/src/auth/external_bearer.rs",
+    "codex-rs/login/src/auth/manager.rs",
+    "codex-rs/login/src/auth/mod.rs",
+    "codex-rs/login/src/auth/storage.rs",
+    "codex-rs/login/src/auth/storage_tests.rs",
+    "codex-rs/login/src/auth/workload_identity.rs",
+    "codex-rs/login/src/auth/workload_identity_tests.rs",
+    "codex-rs/login/src/callback_params.rs",
+    "codex-rs/login/src/callback_params_tests.rs",
+    "codex-rs/login/src/device_code_auth.rs",
+    "codex-rs/login/src/lib.rs",
+    "codex-rs/login/src/server.rs",
+    "codex-rs/login/src/test_support.rs",
+    "codex-rs/login/src/token_data_tests.rs",
+    "codex-rs/login/tests/suite/auth_refresh.rs",
+    "codex-rs/login/tests/suite/login_server_e2e.rs",
+    "codex-rs/login/tests/suite/logout.rs",
+    "codex-rs/model-provider/src/amazon_bedrock/mantle.rs",
+    "codex-rs/model-provider/src/amazon_bedrock/mod.rs",
+    "codex-rs/model-provider/src/auth.rs",
+    "codex-rs/model-provider/src/provider.rs",
+    "codex-rs/protocol/src/openai_models.rs",
+    "codex-rs/rmcp-client/src/auth_status.rs",
+    "codex-rs/rmcp-client/src/http_client_adapter.rs",
+    "codex-rs/rmcp-client/src/oauth_http_client.rs",
+    "codex-rs/rmcp-client/src/stdio_server_launcher.rs",
+    "codex-rs/tools/src/code_mode.rs",
+    "codex-rs/utils/plugins/src/plugin_namespace.rs",
+    "codex-rs/websocket-client/src/dialer.rs",
+    "codex-rs/websocket-client/src/dialer_tests.rs",
+    "codex-rs/websocket-client/src/lib_tests.rs",
+})
+BUILD_SOURCE_DIFF_PATHS_SHA256 = "d4f02d7d2c0013756b8fc93fe074dfb8f3bb3828a2dd98f18da3b3577734f336"
 
 RESTORE_SOURCE_ENTRIES: dict[str, tuple[str, str, str] | None] = {
     "codex-rs/config/src/profile_toml.rs": (
