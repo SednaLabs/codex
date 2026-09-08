@@ -28,15 +28,21 @@ async fn wait_for_output_contains_with_diagnostics(
         match tokio::time::timeout(remaining, output_rx.recv()).await {
             Ok(Ok(chunk)) => {
                 chunk_count += 1;
+                let chunk_contains_needle = String::from_utf8_lossy(&chunk).contains(needle);
+                collected.extend_from_slice(&chunk);
+                let cumulative_match = String::from_utf8_lossy(&collected).contains(needle);
                 eprintln!(
-                    "[conpty-diagnostic] shell={shell} phase={phase} chunk={chunk_count} len={} cr={} lf={} contains_needle={}",
+                    "[conpty-diagnostic] shell={shell} phase={phase} chunk={chunk_count} len={} cr={} lf={} chunk_contains_needle={} cumulative_match={}",
                     chunk.len(),
                     chunk.iter().filter(|&&byte| byte == b'\r').count(),
                     chunk.iter().filter(|&&byte| byte == b'\n').count(),
-                    String::from_utf8_lossy(&chunk).contains(needle)
+                    chunk_contains_needle,
+                    cumulative_match
                 );
-                collected.extend_from_slice(&chunk);
-                if String::from_utf8_lossy(&collected).contains(needle) {
+                if cumulative_match {
+                    eprintln!(
+                        "[conpty-diagnostic] shell={shell} phase={phase} terminal_marker_match=true chunks={chunk_count}"
+                    );
                     return Ok(collected);
                 }
             }
@@ -65,6 +71,7 @@ struct WindowsShell {
     program: String,
     args: Vec<String>,
     child_command: String,
+    diagnostic_token: String,
     ready_marker: Option<&'static str>,
 }
 
@@ -238,7 +245,6 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
         eprintln!("python not found; skipping ConPTY input test");
         return Ok(());
     };
-    let _diagnostics = crate::pty::enable_windows_test_writer_diagnostics();
     let code = format!(
         "print('__CODEX_CHILD_'+'READY__', flush=True); value=input(); print('{VALUE_MARKER}'+value.encode('utf-8').hex(), flush=True)"
     );
@@ -257,18 +263,28 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
     let script_path = script_path.to_string_lossy().into_owned();
     let expected = "cafeé 漢字";
     let expected_marker = format!("{VALUE_MARKER}{}", utf8_hex(expected));
+    let token_suffix = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    );
+    let cmd_token = format!("__CODEX_CONPTY_DIAGNOSTIC_cmd-{token_suffix}");
     let mut shells = vec![WindowsShell {
         name: "cmd",
         program: std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string()),
         args: vec!["/D".to_string(), "/Q".to_string()],
         child_command: format!(
-            "\"{}\" -u \"{}\"",
+            "\"{}\" -u \"{}\" & rem {cmd_token}",
             python.replace('"', "\"\""),
             script_path.replace('"', "\"\"")
         ),
+        diagnostic_token: cmd_token,
         ready_marker: None,
     }];
     if let Some(program) = find_powershell() {
+        let powershell_token = format!("__CODEX_CONPTY_DIAGNOSTIC_powershell-{token_suffix}");
         shells.push(WindowsShell {
             name: "PowerShell",
             program,
@@ -280,10 +296,11 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
                 format!("[Console]::WriteLine('{SHELL_READY_MARKER}')"),
             ],
             child_command: format!(
-                "& '{}' -u '{}'",
+                "& '{}' -u '{}'; # {powershell_token}",
                 python.replace('\'', "''"),
                 script_path.replace('\'', "''")
             ),
+            diagnostic_token: powershell_token,
             ready_marker: Some(SHELL_READY_MARKER),
         });
     }
@@ -317,13 +334,18 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
         }
         let child_command = format!("{}\n", shell.child_command).into_bytes();
         eprintln!(
-            "[conpty-diagnostic] shell={} phase=child-command bytes={} cr={} lf={}",
+            "[conpty-diagnostic] token={} shell={} phase=child-command bytes={} cr={} lf={}",
+            shell.diagnostic_token,
             shell.name,
             child_command.len(),
             child_command.iter().filter(|&&byte| byte == b'\r').count(),
             child_command.iter().filter(|&&byte| byte == b'\n').count()
         );
         writer.send(child_command).await?;
+        eprintln!(
+            "[conpty-diagnostic] token={} shell={} phase=child-command enqueue=accepted",
+            shell.diagnostic_token, shell.name
+        );
         wait_for_output_contains_with_diagnostics(
             &mut output_rx,
             shell.name,
@@ -336,7 +358,8 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
 
         let input = format!("{expected}X\u{8}\n").into_bytes();
         eprintln!(
-            "[conpty-diagnostic] shell={} phase=input bytes={} cr={} lf={} backspace={}",
+            "[conpty-diagnostic] token={} shell={} phase=input bytes={} cr={} lf={} backspace={}",
+            shell.diagnostic_token,
             shell.name,
             input.len(),
             input.iter().filter(|&&byte| byte == b'\r').count(),
@@ -344,6 +367,10 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
             input.iter().filter(|&&byte| byte == b'\x08').count()
         );
         writer.send(input).await?;
+        eprintln!(
+            "[conpty-diagnostic] token={} shell={} phase=input enqueue=accepted",
+            shell.diagnostic_token, shell.name
+        );
         let mut output =
             wait_for_output_contains_with_diagnostics(
                 &mut output_rx,
@@ -359,13 +386,18 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
 
         let exit_command = b"exit 0\n".to_vec();
         eprintln!(
-            "[conpty-diagnostic] shell={} phase=exit-command bytes={} cr={} lf={}",
+            "[conpty-diagnostic] token={} shell={} phase=exit-command bytes={} cr={} lf={}",
+            shell.diagnostic_token,
             shell.name,
             exit_command.len(),
             exit_command.iter().filter(|&&byte| byte == b'\r').count(),
             exit_command.iter().filter(|&&byte| byte == b'\n').count()
         );
         writer.send(exit_command).await?;
+        eprintln!(
+            "[conpty-diagnostic] token={} shell={} phase=exit-command enqueue=accepted",
+            shell.diagnostic_token, shell.name
+        );
         let (remaining, exit_code) =
             collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 10_000).await;
         output.extend_from_slice(&remaining);
