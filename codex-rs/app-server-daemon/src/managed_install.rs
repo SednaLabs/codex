@@ -185,8 +185,13 @@ fn checksum_matches_digest(checksums: &str, file_name: &str, digest: [u8; 32]) -
     expected.is_some_and(|expected| {
         expected.len() == 64
             && expected.bytes().all(|byte| byte.is_ascii_hexdigit())
-            && expected.eq_ignore_ascii_case(&sha256_hex(&digest))
+            && expected.eq_ignore_ascii_case(&digest_hex(&digest))
     })
+}
+
+#[cfg(unix)]
+fn digest_hex(digest: &[u8; 32]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(unix)]

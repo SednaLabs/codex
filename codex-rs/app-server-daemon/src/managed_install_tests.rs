@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 use super::ManagedReleaseMetadata;
+use super::checksum_matches_digest;
 use super::executable_identity;
 use super::executable_identity_from_bytes;
 use super::managed_sedna_automatic_update_release_from_metadata;
@@ -48,6 +49,11 @@ async fn streamed_sha256_matches_in_memory_hash_across_chunk_boundaries() {
 
     let streamed = sha256_file(&executable).await.expect("streamed digest");
     assert_eq!(sha256_hex(&bytes), sha256_hex(&streamed));
+    let checksums = format!("{}  codex\n", sha256_hex(&bytes));
+    assert!(checksum_matches_digest(&checksums, "codex", streamed));
+    fs::write(&executable, b"tampered").expect("tampered executable");
+    let tampered = sha256_file(&executable).await.expect("tampered digest");
+    assert!(!checksum_matches_digest(&checksums, "codex", tampered));
     assert_eq!(
         executable_identity(&executable).await.expect("identity"),
         executable_identity_from_bytes(&bytes)
