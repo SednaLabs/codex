@@ -712,6 +712,39 @@ class DispatchSednaReleaseTests(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_main_allows_unnotarized_macos_for_stable_release(self) -> None:
+        metadata = {
+            "release_tag": "v0.133.0-sedna.1",
+            "target_commit": "d4b356a4c23ff606556dac7232353c80d2ce8deb",
+            "github_prerelease": False,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                mock.patch.object(DISPATCH_SEDNA_RELEASE, "refresh_upstream_rust_tags"),
+                mock.patch.object(
+                    DISPATCH_SEDNA_RELEASE,
+                    "resolve_release_metadata",
+                    return_value=metadata,
+                ),
+                mock.patch.object(DISPATCH_SEDNA_RELEASE, "dispatch_release") as dispatch,
+            ):
+                result = DISPATCH_SEDNA_RELEASE.main(
+                    [
+                        "--repo",
+                        tmpdir,
+                        "--target-sha",
+                        metadata["target_commit"],
+                        "--channel",
+                        "stable",
+                        "--macos-release-mode",
+                        "unnotarized",
+                    ]
+                )
+
+        self.assertEqual(result, 0)
+        dispatch.assert_called_once()
+
 
 class RouteSelectionTests(unittest.TestCase):
     maxDiff = None
