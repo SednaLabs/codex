@@ -7065,7 +7065,7 @@ class ValidationPlanScriptTests(unittest.TestCase):
         self.assertEqual(payload["selected_rust_integration_lane_count"], 7)
         self.assertEqual(payload["selected_rust_integration_batch_count"], 13)
         self.assertEqual(payload["selected_release_lane_count"], 1)
-        self.assertEqual(payload["rust_minimal_max_parallel"], "28")
+        self.assertEqual(payload["rust_minimal_max_parallel"], "29")
         self.assertEqual(payload["rust_integration_max_parallel"], "27")
 
     def test_validation_lab_frontier_all_excludes_smoke_gate_lanes_by_metadata(self) -> None:
