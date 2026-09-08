@@ -179,9 +179,30 @@ impl ChatWidget {
                 let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
                 let should_pause_active_goal =
                     self.bottom_pane.should_interrupt_running_task(key_event);
+                let draft_before_input = self.bottom_pane.composer_draft_snapshot();
                 let input_result = self.bottom_pane.handle_key_event(key_event);
                 if should_pause_active_goal {
                     self.pause_active_goal_for_interrupt();
+                }
+                if self.replay_only_thread
+                    && !matches!(&input_result, InputResult::Command(SlashCommand::Skills))
+                    && !matches!(
+                        input_result,
+                        InputResult::None | InputResult::ParentOwnedInputBlocked
+                    )
+                {
+                    self.restore_composer_state(ThreadComposerState {
+                        text: draft_before_input.text,
+                        text_elements: draft_before_input.text_elements,
+                        local_images: draft_before_input.local_images,
+                        remote_image_urls: draft_before_input.remote_image_urls,
+                        mention_bindings: draft_before_input.mention_bindings,
+                        pending_pastes: draft_before_input.pending_pastes,
+                    });
+                    self.add_error_message(
+                        "Replay-only transcripts do not accept mutations.".to_string(),
+                    );
+                    return;
                 }
                 self.handle_composer_input_result(input_result, had_modal_or_popup);
             }

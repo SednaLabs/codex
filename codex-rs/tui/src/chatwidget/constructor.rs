@@ -118,6 +118,7 @@ impl ChatWidget {
             has_codex_backend_auth,
             model_catalog,
             session_telemetry,
+            replay_only_thread: false,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             status_account_display,

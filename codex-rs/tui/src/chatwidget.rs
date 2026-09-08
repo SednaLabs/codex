@@ -680,6 +680,7 @@ pub(crate) struct ChatWidget {
     thread_rename_block_message: Option<String>,
     active_side_conversation: bool,
     blocks_direct_input: bool,
+    replay_only_thread: bool,
     normal_placeholder_text: String,
     side_placeholder_text: String,
     forked_from: Option<ThreadId>,

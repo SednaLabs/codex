@@ -2552,6 +2552,12 @@ async fn should_attach_live_thread_for_selection_includes_closed_metadata_only_t
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
     assert!(!app.should_attach_live_thread_for_selection(thread_id));
+
+    app.thread_event_channels
+        .get_mut(&thread_id)
+        .expect("cached channel")
+        .mark_replay_only();
+    assert!(app.should_attach_live_thread_for_selection(thread_id));
 }
 
 #[test]
