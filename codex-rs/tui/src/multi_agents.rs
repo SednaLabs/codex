@@ -9,6 +9,8 @@ use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
 use crate::text_formatting::truncate_text;
 use chrono::Utc;
+use codex_app_server_protocol::AgentNotificationContent;
+use codex_app_server_protocol::AgentNotificationSummary;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::CollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus;
@@ -425,6 +427,8 @@ pub(crate) fn tool_call_history_cell(
         effective_model,
         effective_reasoning_effort,
         agents_states,
+        wake_notifications,
+        completion_reason,
         ..
     } = item
     else {
@@ -505,6 +509,8 @@ pub(crate) fn tool_call_history_cell(
                 Some(waiting_end(
                     receiver_thread_ids,
                     agents_states,
+                    wake_notifications.as_deref().unwrap_or_default(),
+                    *completion_reason,
                     &mut agent_metadata,
                 ))
             }
@@ -719,16 +725,61 @@ fn waiting_begin(
 fn waiting_end(
     receiver_thread_ids: &[String],
     agents_states: &std::collections::HashMap<String, CollabAgentState>,
+    notifications: &[AgentNotificationSummary],
+    completion_reason: Option<codex_protocol::protocol::CollabWaitingCompletionReason>,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
     let pending = pending_wait_thread_ids(receiver_thread_ids, agents_states);
-    let title = if pending.is_empty() {
+    let title = if matches!(
+        completion_reason,
+        Some(codex_protocol::protocol::CollabWaitingCompletionReason::Mailbox)
+    ) {
+        "Mailbox update received"
+    } else if pending.is_empty() {
         "Finished waiting"
     } else {
         "Mailbox update received"
     };
-    let details = wait_complete_lines(receiver_thread_ids, agents_states, &pending, agent_metadata);
+    let mut details =
+        wait_complete_lines(receiver_thread_ids, agents_states, &pending, agent_metadata);
+    details.extend(notification_lines(notifications));
     collab_event(title_text(title), details)
+}
+
+fn notification_lines(notifications: &[AgentNotificationSummary]) -> Vec<Line<'static>> {
+    notifications
+        .iter()
+        .map(|notification| {
+            let content = match &notification.content {
+                AgentNotificationContent::PlaintextPreview { text, truncated }
+                | AgentNotificationContent::SenderSummary { text, truncated } => {
+                    format!(
+                        ": {}{}",
+                        sanitize_notification_preview(text),
+                        if *truncated { "..." } else { "" }
+                    )
+                }
+                AgentNotificationContent::EncryptedUnavailable => {
+                    ": [encrypted content unavailable]".to_string()
+                }
+                AgentNotificationContent::Unavailable => ": [content unavailable]".to_string(),
+            };
+            Line::from(format!(
+                "Notification from {}{}",
+                notification.sender_agent_path, content
+            ))
+        })
+        .collect()
+}
+
+fn sanitize_notification_preview(text: &str) -> String {
+    text.chars()
+        .map(|ch| match ch {
+            '\n' | '\r' | '\t' => ' ',
+            ch if ch.is_control() => '\u{FFFD}',
+            ch => ch,
+        })
+        .collect()
 }
 
 fn close_end(
@@ -1534,6 +1585,9 @@ mod tests {
                     robie_id.to_string(),
                     agent_state(CollabAgentStatus::PendingInit, /*message*/ None),
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
@@ -1558,6 +1612,9 @@ mod tests {
                     robie_id.to_string(),
                     agent_state(CollabAgentStatus::Running, /*message*/ None),
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
@@ -1579,6 +1636,9 @@ mod tests {
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
@@ -1609,6 +1669,9 @@ mod tests {
                         agent_state(CollabAgentStatus::Errored, Some("tool timeout")),
                     ),
                 ]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
@@ -1633,6 +1696,9 @@ mod tests {
                     robie_id.to_string(),
                     agent_state(CollabAgentStatus::Completed, Some("39916800")),
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
@@ -1805,7 +1871,13 @@ mod tests {
             agent_state(CollabAgentStatus::Completed, Some("39916800")),
         );
         let waiting = waiting_begin(&receiver_thread_ids, &mut agent_metadata);
-        let finished = waiting_end(&receiver_thread_ids, &statuses, &mut agent_metadata);
+        let finished = waiting_end(
+            &receiver_thread_ids,
+            &statuses,
+            &[],
+            /*completion_reason*/ None,
+            &mut agent_metadata,
+        );
 
         let snapshot = [waiting, finished]
             .iter()
@@ -1922,6 +1994,9 @@ mod tests {
                     robie_id.to_string(),
                     agent_state(CollabAgentStatus::PendingInit, /*message*/ None),
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, ThreadId::new()),
@@ -1967,6 +2042,9 @@ mod tests {
                     robie_id.to_string(),
                     agent_state(CollabAgentStatus::Interrupted, /*message*/ None),
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, ThreadId::new()),
@@ -2004,6 +2082,9 @@ mod tests {
             effective_model: None,
             effective_reasoning_effort: None,
             agents_states: HashMap::new(),
+
+            wake_notifications: None,
+            completion_reason: None,
         }
     }
 

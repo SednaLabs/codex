@@ -362,6 +362,126 @@
         }
       ]
     },
+    "AgentNotificationContent": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "plaintextPreview",
+              "title": "PlaintextPreviewAgentNotificationContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text",
+            "truncated"
+          ],
+          "title": "PlaintextPreviewAgentNotificationContent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "senderSummary",
+              "title": "SenderSummaryAgentNotificationContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text",
+            "truncated"
+          ],
+          "title": "SenderSummaryAgentNotificationContent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "encryptedUnavailable",
+              "title": "EncryptedUnavailableAgentNotificationContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "EncryptedUnavailableAgentNotificationContent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unavailable",
+              "title": "UnavailableAgentNotificationContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "UnavailableAgentNotificationContent",
+          "type": "object"
+        }
+      ]
+    },
+    "AgentNotificationOrigin": {
+      "enum": [
+        "explicit_message",
+        "turn_result"
+      ],
+      "type": "string"
+    },
+    "AgentNotificationSummary": {
+      "properties": {
+        "communicationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content": {
+          "$ref": "#/definitions/AgentNotificationContent"
+        },
+        "origin": {
+          "$ref": "#/definitions/AgentNotificationOrigin"
+        },
+        "senderAgentPath": {
+          "type": "string"
+        },
+        "senderThreadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sequence",
+        "origin",
+        "senderAgentPath",
+        "content"
+      ],
+      "type": "object"
+    },
     "AnalyticsConfig": {
       "additionalProperties": true,
       "properties": {
@@ -3501,6 +3621,15 @@
         "inProgress",
         "completed",
         "failed"
+      ],
+      "type": "string"
+    },
+    "CollabWaitingCompletionReason": {
+      "enum": [
+        "terminal",
+        "mailbox",
+        "timeout",
+        "subscription_loss"
       ],
       "type": "string"
     },
@@ -16527,6 +16656,16 @@
               "description": "Last known status of the target agents, when available.",
               "type": "object"
             },
+            "completionReason": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CollabWaitingCompletionReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "effectiveModel": {
               "description": "Effective model observed for a spawned agent at terminal lifecycle time.\n\nThis required nullable field is null when unknown and must not be filled from thread metadata or a request.",
               "type": [
@@ -16615,6 +16754,16 @@
               "const": "collabAgentToolCall",
               "title": "CollabAgentToolCallThreadItemType",
               "type": "string"
+            },
+            "wakeNotifications": {
+              "description": "Safe mailbox notifications observed by a native wait.",
+              "items": {
+                "$ref": "#/definitions/AgentNotificationSummary"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
             }
           },
           "required": [
@@ -16628,7 +16777,9 @@
             "requestedReasoningEffort",
             "effectiveModel",
             "effectiveReasoningEffort",
-            "agentsStates"
+            "agentsStates",
+            "wakeNotifications",
+            "completionReason"
           ],
           "title": "CollabAgentToolCallThreadItem",
           "type": "object"

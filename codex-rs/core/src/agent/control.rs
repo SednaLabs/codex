@@ -712,6 +712,10 @@ impl AgentControl {
         )))
     }
 
+    pub(crate) fn agent_id_for_path(&self, agent_path: &AgentPath) -> Option<ThreadId> {
+        self.state.agent_id_for_path(agent_path)
+    }
+
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
     pub(crate) async fn subscribe_status(
         &self,
@@ -1222,13 +1226,15 @@ impl AgentControl {
                 ) else {
                     return;
                 };
-                let communication = InterAgentCommunication::new(
+                let mut communication = InterAgentCommunication::new(
                     child_agent_path,
                     parent_agent_path,
                     Vec::new(),
                     message,
                     /*trigger_turn*/ false,
                 );
+                communication.origin =
+                    Some(codex_protocol::protocol::AgentCommunicationOrigin::Result);
                 let context =
                     AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
                 let _ = control

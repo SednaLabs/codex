@@ -510,6 +510,9 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
         }),
         /*replay_kind*/ None,
@@ -539,6 +542,9 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
                         message: None,
                     },
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
         }),
         /*replay_kind*/ None,
@@ -1016,6 +1022,9 @@ async fn live_app_server_collab_wait_items_render_history() {
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
         }),
         /*replay_kind*/ None,
@@ -1058,6 +1067,9 @@ async fn live_app_server_collab_wait_items_render_history() {
                         },
                     ),
                 ]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
         }),
         /*replay_kind*/ None,
@@ -1098,6 +1110,9 @@ async fn live_app_server_collab_spawn_completed_renders_requested_model_and_effo
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
         }),
         /*replay_kind*/ None,
@@ -1128,6 +1143,9 @@ async fn live_app_server_collab_spawn_completed_renders_requested_model_and_effo
                         message: None,
                     },
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
         }),
         /*replay_kind*/ None,
@@ -1178,6 +1196,9 @@ async fn live_app_server_spawn_completion_does_not_fill_missing_effective_identi
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: HashMap::new(),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
         }),
         /*replay_kind*/ None,
@@ -1207,6 +1228,9 @@ async fn live_app_server_spawn_completion_does_not_fill_missing_effective_identi
                         message: None,
                     },
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
         }),
         /*replay_kind*/ None,

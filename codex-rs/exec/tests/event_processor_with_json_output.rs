@@ -968,6 +968,9 @@ fn collab_spawn_begin_and_end_emit_item_events() {
                 effective_model: None,
                 effective_reasoning_effort: None,
                 agents_states: std::collections::HashMap::new(),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             thread_id: "thread-parent".to_string(),
             turn_id: "turn-1".to_string(),
@@ -995,6 +998,9 @@ fn collab_spawn_begin_and_end_emit_item_events() {
                         message: None,
                     },
                 )]),
+
+                wake_notifications: None,
+                completion_reason: None,
             },
             thread_id: "thread-parent".to_string(),
             turn_id: "turn-1".to_string(),

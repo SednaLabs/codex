@@ -22,6 +22,9 @@ use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianA
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
 use codex_protocol::approvals::GuardianUserAuthorization as CoreGuardianUserAuthorization;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::AgentNotificationContent as CoreAgentNotificationContent;
+use codex_protocol::items::AgentNotificationOrigin as CoreAgentNotificationOrigin;
+use codex_protocol::items::AgentNotificationSummary as CoreAgentNotificationSummary;
 use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallStatus as CoreCollabAgentToolCallStatus;
 use codex_protocol::items::CommandExecutionStatus as CoreCommandExecutionStatus;
@@ -88,6 +91,38 @@ impl JsonSchema for RequiredNullableReasoningEffortSchema {
 
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         Option::<ReasoningEffort>::json_schema(generator)
+    }
+}
+
+struct RequiredNullableAgentNotificationSummarySchema;
+
+impl JsonSchema for RequiredNullableAgentNotificationSummarySchema {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> Cow<'static, str> {
+        "RequiredNullableAgentNotificationSummary".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        Option::<Vec<AgentNotificationSummary>>::json_schema(generator)
+    }
+}
+
+struct RequiredNullableCompletionReasonSchema;
+
+impl JsonSchema for RequiredNullableCompletionReasonSchema {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> Cow<'static, str> {
+        "RequiredNullableCompletionReason".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        Option::<codex_protocol::protocol::CollabWaitingCompletionReason>::json_schema(generator)
     }
 }
 
@@ -444,6 +479,18 @@ pub enum ThreadItem {
         effective_reasoning_effort: Option<ReasoningEffort>,
         /// Last known status of the target agents, when available.
         agents_states: HashMap<String, CollabAgentState>,
+        /// Safe mailbox notifications observed by a native wait.
+        #[serde(default)]
+        #[schemars(with = "RequiredNullableAgentNotificationSummarySchema", !default)]
+        #[ts(optional = false)]
+        wake_notifications: Option<Vec<AgentNotificationSummary>>,
+        #[serde(default)]
+        #[schemars(
+            with = "RequiredNullableCompletionReasonSchema",
+            !default
+        )]
+        #[ts(optional = false)]
+        completion_reason: Option<codex_protocol::protocol::CollabWaitingCompletionReason>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1107,6 +1154,10 @@ impl From<CoreTurnItem> for ThreadItem {
                         .into_iter()
                         .map(|(thread_id, status)| (thread_id.to_string(), status.into()))
                         .collect(),
+                    wake_notifications: call
+                        .wake_notifications
+                        .map(|notifications| notifications.into_iter().map(Into::into).collect()),
+                    completion_reason: call.completion_reason,
                 }
             }
             CoreTurnItem::SubAgentActivity(activity) => ThreadItem::SubAgentActivity {
@@ -1357,6 +1408,66 @@ pub enum CollabAgentToolCallStatus {
     InProgress,
     Completed,
     Failed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum AgentNotificationOrigin {
+    ExplicitMessage,
+    TurnResult,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+#[ts(tag = "type")]
+pub enum AgentNotificationContent {
+    PlaintextPreview { text: String, truncated: bool },
+    SenderSummary { text: String, truncated: bool },
+    EncryptedUnavailable,
+    Unavailable,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AgentNotificationSummary {
+    pub communication_id: Option<String>,
+    pub sequence: u64,
+    pub origin: AgentNotificationOrigin,
+    pub sender_agent_path: String,
+    pub sender_thread_id: Option<String>,
+    pub content: AgentNotificationContent,
+}
+
+impl From<CoreAgentNotificationSummary> for AgentNotificationSummary {
+    fn from(value: CoreAgentNotificationSummary) -> Self {
+        Self {
+            communication_id: value.communication_id.map(|id| id.to_string()),
+            sequence: value.sequence,
+            origin: match value.origin {
+                CoreAgentNotificationOrigin::ExplicitMessage => {
+                    AgentNotificationOrigin::ExplicitMessage
+                }
+                CoreAgentNotificationOrigin::TurnResult => AgentNotificationOrigin::TurnResult,
+            },
+            sender_agent_path: value.sender_agent_path.to_string(),
+            sender_thread_id: value.sender_thread_id.map(|id| id.to_string()),
+            content: match value.content {
+                CoreAgentNotificationContent::PlaintextPreview { text, truncated } => {
+                    AgentNotificationContent::PlaintextPreview { text, truncated }
+                }
+                CoreAgentNotificationContent::SenderSummary { text, truncated } => {
+                    AgentNotificationContent::SenderSummary { text, truncated }
+                }
+                CoreAgentNotificationContent::EncryptedUnavailable => {
+                    AgentNotificationContent::EncryptedUnavailable
+                }
+                CoreAgentNotificationContent::Unavailable => AgentNotificationContent::Unavailable,
+            },
+        }
+    }
 }
 
 impl From<CoreCollabAgentTool> for CollabAgentTool {

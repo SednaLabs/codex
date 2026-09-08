@@ -112,6 +112,8 @@ impl Handler {
                     requested_model: None,
                     requested_reasoning_effort: None,
                     agents_states: Default::default(),
+                    wake_notifications: None,
+                    completion_reason: None,
                 }),
             )
             .await;
@@ -149,6 +151,8 @@ impl Handler {
                                 requested_model: None,
                                 requested_reasoning_effort: None,
                                 agents_states: statuses,
+                                wake_notifications: None,
+                                completion_reason: None,
                             }),
                         )
                         .await;
@@ -220,6 +224,8 @@ impl Handler {
                     requested_model: None,
                     requested_reasoning_effort: None,
                     agents_states: statuses_by_id,
+                    wake_notifications: None,
+                    completion_reason: None,
                 }),
             )
             .await;
