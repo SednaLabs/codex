@@ -44,7 +44,7 @@ jobs:
       RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID: "1152496647"
       BUILD_SOURCE_SHA: e5030a8ddb2b8d47748ba26b95c39e7b1abfba86
       BUILD_SOURCE_TREE: 67445c918236c3657aebff39fb1636a877673795
-      BUILD_SOURCE_BRANCH: worker/w13825-build-source-api-coherent
+      BUILD_SOURCE_BRANCH: worker/w13825-build-source-authoring-20260907
     steps:
       - name: Check out exact reviewed consumer helper
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
