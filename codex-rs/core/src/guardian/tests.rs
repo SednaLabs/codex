@@ -1766,7 +1766,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         .collect::<Vec<_>>();
     assert_eq!(
         guardian_tool_names,
-        vec!["exec_command", "write_stdin", "view_image"]
+        vec!["exec", "wait"]
     );
     let guardian_user_text = request.message_input_texts("user").join("\n");
     assert!(
