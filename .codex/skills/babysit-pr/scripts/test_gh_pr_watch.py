@@ -40,6 +40,17 @@ def sample_checks(**overrides):
     return checks
 
 
+@pytest.fixture(autouse=True)
+def default_queue_absent(monkeypatch, request):
+    if request.node.name.startswith(("test_collect_snapshot_reads_graphql", "test_collect_malformed_queue")):
+        return
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "get_merge_queue_entry",
+        lambda *_args, **_kwargs: gh_pr_watch.normalize_merge_queue_entry(None),
+    )
+
+
 def test_resolve_pr_rejects_bare_number_without_repo(monkeypatch):
     called = False
 
@@ -531,6 +542,146 @@ def test_policy_blocker_does_not_backoff_and_decision_is_exact_head(monkeypatch)
     assert decision["head_sha"] == "abc123"
     assert decision["decision"] == "action_required"
     assert decision["primary_action"] == gh_pr_watch.ACTION_REQUIRED_MERGE_POLICY_BLOCKED
+
+
+@pytest.mark.parametrize("queue_state", ["QUEUED", "AWAITING_CHECKS"])
+def test_active_merge_queue_wait_uses_base_cadence_when_checks_are_green(queue_state):
+    args = argparse.Namespace(poll_seconds=30)
+    snapshot = {
+        "checks": sample_checks(),
+        "actions": ["idle"],
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123", "merge_queue": {"status": "waiting", "id": "entry-1", "state": queue_state, "head_sha": "abc123"}},
+    }
+
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(
+        args, snapshot, gh_pr_watch.snapshot_change_key(snapshot), 600, 3600
+    )
+    assert delay == 30
+
+
+def test_collect_snapshot_reads_graphql_queue_and_keeps_base_cadence(monkeypatch, tmp_path):
+    pr = sample_pr()
+    monkeypatch.setattr(gh_pr_watch, "resolve_pr", lambda *_args, **_kwargs: pr)
+    monkeypatch.setattr(gh_pr_watch, "detect_local_git_context", lambda: {})
+    monkeypatch.setattr(gh_pr_watch, "load_state", lambda _path: ({}, True))
+    monkeypatch.setattr(gh_pr_watch, "save_state", lambda *_args: None)
+    monkeypatch.setattr(gh_pr_watch, "get_authenticated_login", lambda *_args: "octocat")
+    monkeypatch.setattr(gh_pr_watch, "fetch_new_review_items", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(gh_pr_watch, "get_review_threads", lambda *_args: [])
+    monkeypatch.setattr(gh_pr_watch, "partition_unresolved_review_threads", lambda *_args: ([], []))
+    monkeypatch.setattr(gh_pr_watch, "build_actionable_review_items", lambda *_args: [])
+    monkeypatch.setattr(gh_pr_watch, "get_pr_checks", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(gh_pr_watch, "get_workflow_runs_for_sha", lambda *_args: [])
+    monkeypatch.setattr(gh_pr_watch, "failed_runs_from_workflow_runs", lambda *_args: [])
+    monkeypatch.setattr(gh_pr_watch, "failed_jobs_from_workflow_runs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(gh_pr_watch, "gh_json", lambda *_args, **_kwargs: {"data": {"repository": {"pullRequest": {"mergeQueueEntry": {"id": "entry-1", "state": "QUEUED", "position": 2}}}}})
+    args = argparse.Namespace(pr="123", repo="openai/codex", state_file=f"{tmp_path.name}.json", ignore_review_thread=[], max_flaky_retries=3, reset_seen_feedback=False)
+    snapshot, _ = gh_pr_watch.collect_snapshot(args)
+    assert snapshot["pr"]["merge_queue"]["status"] == "waiting"
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(argparse.Namespace(poll_seconds=30), snapshot, gh_pr_watch.snapshot_change_key(snapshot), 600, 3600)
+    assert delay == 30
+
+
+def test_unreadable_pending_queue_head_stays_on_base_cadence():
+    args = argparse.Namespace(poll_seconds=30)
+    snapshot = {
+        "checks": sample_checks(),
+        "actions": ["idle"],
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123", "merge_queue": {"status": "waiting", "id": "entry-1", "state": "QUEUED", "head_sha": "", "read_state": "unreadable"}},
+    }
+
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(
+        args, snapshot, gh_pr_watch.snapshot_change_key(snapshot), 600, 3600
+    )
+    assert delay == 30
+
+
+def test_queue_identity_change_resets_cadence():
+    args = argparse.Namespace(poll_seconds=30)
+    old = {
+        "checks": sample_checks(),
+        "actions": ["idle"],
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123", "merge_queue": {"status": "waiting", "id": "entry-1", "state": "QUEUED"}},
+    }
+    current = {
+        **old,
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123", "merge_queue": {"status": "waiting", "id": "entry-2", "state": "QUEUED"}},
+    }
+
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(
+        args, current, gh_pr_watch.snapshot_change_key(old), 600, 3600
+    )
+    assert delay == 30
+
+
+def test_nonqueued_green_idle_snapshot_keeps_backoff():
+    args = argparse.Namespace(poll_seconds=30)
+    snapshot = {
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123"},
+        "checks": sample_checks(),
+        "actions": ["idle"],
+        "merge_blockers": [],
+    }
+
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(
+        args, snapshot, gh_pr_watch.snapshot_change_key(snapshot), 600, 3600
+    )
+    assert delay == 1200
+
+
+@pytest.mark.parametrize(
+    "queue_status, expected",
+    [
+        ("failed", gh_pr_watch.STOP_MERGE_QUEUE_FAILED),
+        ("removed", gh_pr_watch.STOP_MERGE_QUEUE_REMOVED),
+    ],
+)
+def test_queue_failure_and_removal_are_actionable(queue_status, expected):
+    pr = sample_pr()
+    pr["merge_queue"] = {"status": queue_status, "state": "QUEUED", "id": "entry-1"}
+    actions = gh_pr_watch.recommend_actions(
+        pr, sample_checks(), [], [], [], {}, 0, 3
+    )
+    assert expected in actions
+
+
+def test_active_queue_cannot_report_ready():
+    pr = sample_pr()
+    pr["merge_queue"] = {"status": "waiting", "state": "QUEUED", "id": "entry-1"}
+    assert not gh_pr_watch.is_pr_ready_to_merge(pr, sample_checks(), [], {})
+
+
+@pytest.mark.parametrize("state", sorted(gh_pr_watch.MERGE_QUEUE_WAITING_STATES))
+def test_active_queue_explains_blocked_merge_state(state):
+    pr = sample_pr()
+    pr.update(merge_state_status="BLOCKED", merge_queue={"status": "waiting", "state": state, "id": "entry-1"})
+    assert gh_pr_watch.recommend_actions(pr, sample_checks(), [], [], [], {}, 0, 3) == ["idle"]
+
+
+def test_queue_tombstone_preserves_failure_and_removal_until_head_changes():
+    base = {"head_sha": "head-1"}
+    state = {}
+    failed = {**base, "merge_queue": {"status": "failed", "id": "entry-1", "state": "FAILED"}}
+    gh_pr_watch.reconcile_merge_queue_entry(failed, state)
+    assert gh_pr_watch.reconcile_merge_queue_entry({**base, "merge_queue": {"status": "absent"}}, state)["status"] == "failed"
+
+    removed = {**base, "merge_queue": {"status": "removed", "id": "entry-1", "state": "QUEUED"}}
+    gh_pr_watch.reconcile_merge_queue_entry(removed, state)
+    assert gh_pr_watch.reconcile_merge_queue_entry({**base, "merge_queue": {"status": "absent"}}, state)["status"] == "removed"
+
+    new_head = {"head_sha": "head-2", "merge_queue": {"status": "absent"}}
+    assert gh_pr_watch.reconcile_merge_queue_entry(new_head, state)["status"] == "absent"
+
+
+@pytest.mark.parametrize("payload", [{"data": ["bad"]}, {"data": {"repository": "bad"}}, {"data": {"repository": {"pullRequest": "bad"}}}])
+def test_collect_malformed_queue_payload_is_unknown_and_not_ready(monkeypatch, payload):
+    monkeypatch.setattr(gh_pr_watch, "gh_json", lambda *_args, **_kwargs: payload)
+    queue = gh_pr_watch.get_merge_queue_entry("openai/codex", 123)
+    assert queue["status"] == "unknown"
+    pr = sample_pr()
+    pr["merge_queue"] = queue
+    actions = gh_pr_watch.recommend_actions(pr, sample_checks(), [], [], [], {}, 0, 3)
+    assert actions == [gh_pr_watch.STOP_MERGE_QUEUE_READ_ERROR]
 
 
 def test_schedule_persists_exact_head_and_fake_clock(monkeypatch, tmp_path):

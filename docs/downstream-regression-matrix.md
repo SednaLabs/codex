@@ -50,8 +50,11 @@ Focused targeted lanes for iterative work on the current carry seams:
 - `codex.agent-workflow-sanity`
   - Runs `test_gh_pr_watch.py` and compiles `gh_pr_watch.py`. The source
     contract covers exact-head decision and wake receipts, BLOCKED-versus-CLEAN
-    readiness, pending checks, and published/ignored review evidence. An
-    unexplained BLOCKED merge state must remain action-required and must not
+    readiness, pending checks, published/ignored review evidence, and active
+    merge-queue cadence. QUEUED/AWAITING_CHECKS entries, including unreadable
+    pending heads, stay on base cadence; queue identity changes reset cadence;
+    ordinary green PRs without an active queue entry retain bounded backoff.
+    An unexplained BLOCKED merge state must remain action-required and must not
     trigger green-state polling backoff.
 
 - `codex.core-startup-sync-targeted`
