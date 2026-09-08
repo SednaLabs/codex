@@ -452,6 +452,15 @@ async fn replay_only_model_persistence_does_not_write_config() -> Result<()> {
         })
     );
     assert!(app_event_rx.try_recv().is_err());
+    app.active_thread_id = Some(live_target);
+    assert!(
+        app.reject_replay_only_mutation(&AppEvent::SetThreadGoalStatus {
+            thread_id,
+            status: codex_app_server_protocol::ThreadGoalStatus::Complete,
+        })
+    );
+    assert!(app_event_rx.try_recv().is_err());
+    app.active_thread_id = Some(thread_id);
     assert!(
         app.reject_replay_only_mutation(&AppEvent::SetThreadGoalStatus {
             thread_id,
@@ -478,6 +487,10 @@ async fn replay_only_model_persistence_does_not_write_config() -> Result<()> {
         Ok(AppEvent::RefreshPluginMentions)
     );
     assert_matches!(op_rx.try_recv(), Ok(AppCommand::ReloadUserConfig));
+
+    let mut replay_channel = ThreadEventChannel::new(/*capacity*/ 1);
+    replay_channel.mark_replay_only();
+    app.thread_event_channels.insert(thread_id, replay_channel);
 
     app.pending_plugin_enabled_writes
         .insert("plugin.test".to_string(), Some(true));
