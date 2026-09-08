@@ -73,8 +73,7 @@ class SednaReleaseInstallerTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/sednalabs/codex/releases/tags/"
-                "v1.2.4-alpha.1-sedna.1",
+                "https://api.github.com/repos/sednalabs/codex/releases/tags/v1.2.4-alpha.1-sedna.1",
                 "https://api.github.com/repos/sednalabs/codex/releases/assets/101",
                 "https://api.github.com/repos/sednalabs/codex/releases/assets/102",
                 "https://api.github.com/repos/sednalabs/codex/releases/assets/103",
