@@ -1,6 +1,7 @@
 pub(crate) mod agent_resolver;
 #[allow(dead_code, unused_imports)]
 pub(crate) mod control;
+pub(crate) mod goal_notifications;
 mod lifecycle;
 mod registry;
 #[allow(dead_code, unused_imports)]

@@ -119,6 +119,8 @@ async fn handle_spawn_agent(
                 requested_model: args.model.clone(),
                 requested_reasoning_effort: args.reasoning_effort.clone(),
                 agents_states: Default::default(),
+                wake_notifications: None,
+                completion_reason: None,
             }),
         )
         .await;
@@ -210,6 +212,8 @@ async fn handle_spawn_agent(
                 requested_model: args.model.clone(),
                 requested_reasoning_effort: args.reasoning_effort.clone(),
                 agents_states,
+                wake_notifications: None,
+                completion_reason: None,
             }),
         )
         .await;

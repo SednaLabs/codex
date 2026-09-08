@@ -115,6 +115,15 @@ queue evidence.
 - Blocking waits return a compact action-complete receipt by default. Use `--verbose-details` only for debugging when the compact receipt and saved state file are insufficient.
 - After any fix commit or flaky rerun, restart the same monitoring mode immediately and keep exactly one watcher session active for the PR.
 
+The source watcher records a compact `watch_decision` and a `watch_schedule`
+receipt keyed by the exact repository, PR number, and observed head SHA. An
+unexplained `mergeStateStatus=BLOCKED` is reported as the actionable
+`action_required_merge_policy_blocked` outcome. Readiness remains fail-closed,
+and this blocker keeps the next wake bounded at the configured poll interval;
+it must not enter green-state backoff. These receipts are observer state only:
+they do not authorize merge, rerun, review, credential, or other provider
+mutation.
+
 ## Inputs
 Accept any of the following:
 

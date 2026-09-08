@@ -464,6 +464,101 @@ def test_recommend_actions_prioritizes_review_comments():
     ]
 
 
+def test_blocked_merge_policy_is_action_required_but_clean_is_ready():
+    blocked = sample_pr()
+    blocked["merge_state_status"] = "BLOCKED"
+    actions = gh_pr_watch.recommend_actions(
+        blocked,
+        sample_checks(),
+        [],
+        [],
+        [],
+        {},
+        0,
+        3,
+    )
+    assert actions == [gh_pr_watch.ACTION_REQUIRED_MERGE_POLICY_BLOCKED]
+
+    clean = sample_pr()
+    assert gh_pr_watch.recommend_actions(
+        clean, sample_checks(), [], [], [], {}, 0, 3
+    ) == ["stop_ready_to_merge"]
+
+
+@pytest.mark.parametrize(
+    "checks, failed_jobs, actionable, review_state, review_decision, expected",
+    [
+        (sample_checks(pending_count=1, all_terminal=False), [], [], {}, "", ["idle"]),
+        (sample_checks(failed_count=1), [], [], {}, "", ["diagnose_ci_failure"]),
+        (sample_checks(), [], [{"kind": "review_comment", "id": "1"}], {}, "", ["process_review_comment"]),
+        (sample_checks(), [], [], {"active_unresolved_thread_count": 1}, "", ["idle"]),
+        (sample_checks(), [], [], {}, "CHANGES_REQUESTED", ["idle"]),
+    ],
+)
+def test_blocked_with_explaining_evidence_does_not_add_policy_action(
+    checks, failed_jobs, actionable, review_state, review_decision, expected
+):
+    blocked = sample_pr()
+    blocked["merge_state_status"] = "BLOCKED"
+    blocked["review_decision"] = review_decision
+    assert gh_pr_watch.recommend_actions(
+        blocked, checks, [], failed_jobs, actionable, review_state, 0, 3
+    ) == expected
+
+
+@pytest.mark.parametrize("mergeable", ["CONFLICTING", "UNKNOWN", ""])
+def test_blocked_mergeability_evidence_is_not_an_unexplained_policy(mergeable):
+    blocked = sample_pr()
+    blocked.update(merge_state_status="BLOCKED", mergeable=mergeable)
+    assert gh_pr_watch.recommend_actions(
+        blocked, sample_checks(), [], [], [], {}, 0, 3
+    ) == ["idle"]
+
+
+def test_policy_blocker_does_not_backoff_and_decision_is_exact_head(monkeypatch):
+    args = argparse.Namespace(poll_seconds=30)
+    snapshot = {
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123"},
+        "checks": sample_checks(),
+        "review_state": {},
+        "actions": [gh_pr_watch.ACTION_REQUIRED_MERGE_POLICY_BLOCKED],
+    }
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(
+        args, snapshot, ("unchanged",), 600, 3600
+    )
+    assert delay == 30
+    decision = gh_pr_watch.build_watch_decision(snapshot, recorded_at=100)
+    assert decision["head_sha"] == "abc123"
+    assert decision["decision"] == "action_required"
+    assert decision["primary_action"] == gh_pr_watch.ACTION_REQUIRED_MERGE_POLICY_BLOCKED
+
+
+def test_schedule_persists_exact_head_and_fake_clock(monkeypatch, tmp_path):
+    saved = {}
+    monkeypatch.setattr(gh_pr_watch, "load_state", lambda _path: ({}, True))
+    monkeypatch.setattr(gh_pr_watch, "save_state", lambda _path, state: saved.update(state))
+    snapshot = {"pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123"}}
+
+    gh_pr_watch.persist_watch_schedule(
+        tmp_path / "state.json",
+        snapshot,
+        "watch-until-action",
+        30,
+        scheduled_at=100,
+    )
+
+    assert saved["watch_schedule"] == {
+        "schema_version": 1,
+        "mode": "watch-until-action",
+        "repo": "openai/codex",
+        "number": 123,
+        "head_sha": "abc123",
+        "poll_seconds": 30,
+        "scheduled_at": 100,
+        "wake_at": 130,
+    }
+
+
 def test_pending_review_feedback_surfaces_only_after_publication(monkeypatch):
     state = {
         "seen_review_comment_ids": ["20"],
@@ -692,6 +787,7 @@ def test_compact_wait_snapshot_caps_review_body():
             }
         ],
         "actions": ["address_review_feedback"],
+        "watch_decision": {"head_sha": "abc123", "decision": "action_required"},
     }
 
     compact = gh_pr_watch.compact_wait_snapshot(snapshot)
@@ -699,6 +795,7 @@ def test_compact_wait_snapshot_caps_review_body():
     assert "large_unneeded_field" not in compact["pr"]
     assert "large_unneeded_field" not in compact["actionable_review_items"][0]
     assert len(compact["actionable_review_items"][0]["body"]) == 1000
+    assert compact["watch_decision"]["head_sha"] == "abc123"
 
 
 def test_watch_until_action_is_silent_by_default(monkeypatch, tmp_path, capsys):
@@ -725,6 +822,7 @@ def test_watch_until_action_is_silent_by_default(monkeypatch, tmp_path, capsys):
         "review_state": {"active_unresolved_thread_count": 0},
         "actionable_review_items": [],
         "actions": ["diagnose_ci_failure"],
+        "watch_decision": {"head_sha": "abc123", "decision": "action_required"},
     }
     snapshots = iter(
         [
@@ -733,6 +831,12 @@ def test_watch_until_action_is_silent_by_default(monkeypatch, tmp_path, capsys):
         ]
     )
     monkeypatch.setattr(gh_pr_watch, "collect_snapshot", lambda args, cache=None: next(snapshots))
+    schedules = []
+    monkeypatch.setattr(
+        gh_pr_watch,
+        "persist_watch_schedule",
+        lambda _path, _snapshot, mode, delay: schedules.append((mode, delay)),
+    )
     monkeypatch.setattr(gh_pr_watch.time, "sleep", lambda _seconds: None)
     args = argparse.Namespace(
         poll_seconds=30,
@@ -747,6 +851,8 @@ def test_watch_until_action_is_silent_by_default(monkeypatch, tmp_path, capsys):
     receipt = json.loads(captured.out)
     assert receipt["polls_completed"] == 2
     assert receipt["snapshot"]["actions"] == ["diagnose_ci_failure"]
+    assert receipt["snapshot"]["watch_decision"]["head_sha"] == "abc123"
+    assert schedules[-1] == ("watch-until-action", 0)
 
 
 def test_watch_until_action_waits_for_terminal_ci_failure(

@@ -5949,7 +5949,12 @@ class ValidationPlanScriptTests(unittest.TestCase):
                     generated,
                     {
                         "name": f"codex-codeql-rust-{rust_scope}",
-                        "queries": [{"uses": "security-and-quality"}],
+                        "queries": [
+                            {"uses": "security-and-quality"},
+                            {
+                                "uses": "./.github/codeql/rust-computer-use-contract/suites/rust-computer-use-production.qls"
+                            },
+                        ],
                         "paths": expected_paths,
                         "paths-ignore": [".github/codeql/rust-computer-use-contract/test/**"],
                         "threat-models": "local",
@@ -6129,6 +6134,9 @@ class ValidationPlanScriptTests(unittest.TestCase):
                 "name": "codex-codeql-rust",
                 "queries": [
                     {"uses": "security-and-quality"},
+                    {
+                        "uses": "./.github/codeql/rust-computer-use-contract/suites/rust-computer-use-production.qls"
+                    },
                 ],
                 "paths": ["codex-rs", "tools"],
                 "paths-ignore": [".github/codeql/rust-computer-use-contract/test/**"],
@@ -7955,14 +7963,21 @@ class RustCiModeScriptTests(unittest.TestCase):
             (toolchain.get("with") or {}).get("target"),
             "x86_64-unknown-linux-gnu",
         )
-        clippy = next(step for step in steps if step.get("name") == "cargo clippy (targeted packages)")
+        clippy = next(
+            step for step in steps if step.get("name") == "cargo clippy (targeted packages)"
+        )
         clippy_run = clippy.get("run") or ""
-        self.assertIn("--all-features", clippy_run)
-        self.assertIn("--tests", clippy_run)
-        self.assertIn("--profile dev", clippy_run)
-        self.assertIn("--no-deps", clippy_run)
-        self.assertIn("-- -D warnings", clippy_run)
-        self.assertNotIn("--workspace", clippy_run)
+        self.assertIn("run_targeted_clippy.sh", clippy_run)
+        helper = (REPO_ROOT / ".github/scripts/run_targeted_clippy.sh").read_text()
+        for flag in (
+            "--all-features",
+            "--tests",
+            "--profile dev",
+            "--no-deps",
+            "-- -D warnings",
+        ):
+            self.assertIn(flag, helper)
+        self.assertNotIn("--workspace", helper)
         self.assertIn("steps.targeted_clippy_packages.outputs.packages", clippy.get("if") or "")
 
     def test_rust_ci_argument_comment_lint_uses_single_cached_bazel_action(self) -> None:

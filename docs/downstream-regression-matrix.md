@@ -47,6 +47,13 @@ Fast lanes used by `core-test-smoke` locally and by the remote smoke matrix:
 
 Focused targeted lanes for iterative work on the current carry seams:
 
+- `codex.agent-workflow-sanity`
+  - Runs `test_gh_pr_watch.py` and compiles `gh_pr_watch.py`. The source
+    contract covers exact-head decision and wake receipts, BLOCKED-versus-CLEAN
+    readiness, pending checks, and published/ignored review evidence. An
+    unexplained BLOCKED merge state must remain action-required and must not
+    trigger green-state polling backoff.
+
 - `codex.core-startup-sync-targeted`
 - `codex.core-subagent-surface-targeted`
 - `codex.core-subagent-notification-contract-targeted`

@@ -155,8 +155,67 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           components: rustfmt
+      - name: Run typed failure diagnostic fixtures
+        run: python3 -m unittest discover -s ../.github/scripts -p 'test_ci_failure_diagnostic.py'
       - name: cargo fmt
-        run: cargo fmt -- --config imports_granularity=Item --check
+        id: rustfmt
+        shell: bash
+        run: |
+          set +e
+          cargo fmt -- --config imports_granularity=Item --check 2>&1 | tee "${RUNNER_TEMP}/rustfmt.log"
+          status=${PIPESTATUS[0]}
+          echo "exit_status=${status}" >> "$GITHUB_OUTPUT"
+          exit "${status}"
+      - name: Produce typed rustfmt diagnostic
+        if: always()
+        continue-on-error: true
+        id: rustfmt_diagnostic
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_DISPLAY_NAME: Format / etc
+          DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/rust-ci-full-rustfmt-diagnostic.json
+          SOURCE_SHA: ${{ env.RUST_CI_FULL_CHECKOUT_REF }}
+          EXECUTION_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+          JOB_NAME: ${{ github.job }}
+        run: |
+          set -euo pipefail
+          job_url="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name == env.JOB_DISPLAY_NAME) | .html_url' 2>/dev/null | head -n 1 || true)"
+          source_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+          python3 "${GITHUB_WORKSPACE}/.github/scripts/write_failure_diagnostic.py" \
+            --output "${DIAGNOSTIC_OUTPUT}" \
+            --repository "${REPOSITORY}" \
+            --source-sha "${source_sha:-${SOURCE_SHA}}" \
+            --execution-sha "${EXECUTION_SHA}" \
+            --workflow-sha "${WORKFLOW_SHA}" \
+            --event "${EVENT_NAME}" \
+            --run-id "${RUN_ID}" \
+            --run-attempt "${RUN_ATTEMPT}" \
+            --run-url "${RUN_URL}" \
+            --job "${JOB_NAME}" \
+            --job-url "${job_url}" \
+            --lane "rust-ci-full.general.rustfmt" \
+            --outcome "${{ steps.rustfmt.outcome }}" \
+            --exit-code "${{ steps.rustfmt.outputs.exit_status }}" \
+            --diagnostic-kind rustfmt \
+            --log-file "${RUNNER_TEMP}/rustfmt.log" \
+            --reproducer-id cargo-fmt-check \
+            --reproducer-args-json '{}'
+      - name: Upload typed rustfmt diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rust-ci-full-rustfmt-diagnostic
+          path: ${{ runner.temp }}/rust-ci-full-rustfmt-diagnostic.json
+          if-no-files-found: error
       - name: Rust benchmark smoke test
         run: just bench-smoke
 
@@ -513,6 +572,57 @@ jobs:
           status=${PIPESTATUS[0]}
           echo "exit_status=${status}" >> "$GITHUB_OUTPUT"
           exit "${status}"
+
+      - name: Produce typed Clippy diagnostic
+        if: always()
+        continue-on-error: true
+        id: clippy_diagnostic
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_DISPLAY_NAME: Lint/Build — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
+          DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/rust-ci-full-clippy-diagnostic-${{ matrix.target }}-${{ matrix.profile }}.json
+          EXECUTION_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+          JOB_NAME: ${{ github.job }}
+        run: |
+          set -euo pipefail
+          job_url="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name == env.JOB_DISPLAY_NAME) | .html_url' 2>/dev/null | head -n 1 || true)"
+          source_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+          python3 "${GITHUB_WORKSPACE}/.github/scripts/write_failure_diagnostic.py" \
+            --output "${DIAGNOSTIC_OUTPUT}" \
+            --repository "${REPOSITORY}" \
+            --source-sha "${source_sha}" \
+            --execution-sha "${EXECUTION_SHA}" \
+            --workflow-sha "${WORKFLOW_SHA}" \
+            --event "${EVENT_NAME}" \
+            --run-id "${RUN_ID}" \
+            --run-attempt "${RUN_ATTEMPT}" \
+            --run-url "${RUN_URL}" \
+            --job "${JOB_NAME}" \
+            --job-url "${job_url}" \
+            --lane "rust-ci-full.lint-build.clippy-${{ matrix.target }}-${{ matrix.profile }}" \
+            --outcome "${{ steps.clippy.outcome }}" \
+            --exit-code "${{ steps.clippy.outputs.exit_status }}" \
+            --diagnostic-kind clippy \
+            --log-file "${RUNNER_TEMP}/clippy.log" \
+            --reproducer-id cargo-clippy \
+            --reproducer-args-json '{"target":"${{ matrix.target }}","profile":"${{ matrix.profile }}"}'
+
+      - name: Upload typed Clippy diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rust-ci-full-clippy-diagnostic-${{ matrix.target }}-${{ matrix.profile }}
+          path: ${{ runner.temp }}/rust-ci-full-clippy-diagnostic-${{ matrix.target }}-${{ matrix.profile }}.json
+          if-no-files-found: error
 
       - name: Summarize clippy failure
         if: always()

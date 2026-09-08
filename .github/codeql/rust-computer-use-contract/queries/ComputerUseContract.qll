@@ -30,7 +30,12 @@ predicate nodeInsideFunction(AstNode node, Function function) {
 }
 
 predicate androidComputerUseRuntimeFile(File file) {
-  file.getRelativePath() = "codex-rs/computer-use-runtime/src/lib.rs"
+  // Keep the historical fixture path while binding production analysis to the
+  // current Android provider crate.  The fixture path is intentionally
+  // retained so the existing focused contract tests remain valid; production
+  // witnesses must use the real path below.
+  file.getRelativePath() = "codex-rs/computer-use-runtime/src/lib.rs" or
+  file.getRelativePath() = "codex-rs/android-computer-use/src/lib.rs"
 }
 
 predicate computerUseHandlerFile(File file) {
