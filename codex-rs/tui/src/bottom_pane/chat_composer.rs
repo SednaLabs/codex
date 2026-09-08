@@ -4905,6 +4905,7 @@ mod tests {
         let (mut composer, mut rx) = new_test_composer();
         composer.set_replay_only_thread(true);
         composer.set_text_content("/skills".to_string(), Vec::new(), Vec::new());
+        composer.move_cursor_to_end();
 
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -4929,6 +4930,7 @@ mod tests {
         );
         assert_eq!(composer.current_text(), "/skills!");
         assert!(!composer.is_in_paste_burst());
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
