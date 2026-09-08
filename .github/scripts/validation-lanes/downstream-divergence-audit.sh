@@ -94,8 +94,8 @@ try:
             "paths_truncated": len(paths) > MAX_PATHS,
         },
     }
-except (OSError, UnicodeError, ValueError, TypeError, KeyError) as error:
-    print(f"downstream divergence audit diagnostic unavailable: {error}")
+except (OSError, UnicodeError, ValueError, TypeError, KeyError):
+    print("downstream divergence audit diagnostic unavailable")
 else:
     print("downstream divergence audit diagnostic: " + json.dumps(diagnostic, sort_keys=True))
 PY
