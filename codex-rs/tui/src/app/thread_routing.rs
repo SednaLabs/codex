@@ -8,6 +8,7 @@ use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_server_session::source_agent_path;
 use crate::chatwidget::ThreadInputStateRestoreMode;
+use crate::multi_agents::SubAgentActivityDisplay;
 use crate::session_resume::SessionModelSettings;
 use crate::session_resume::read_session_model_settings;
 use codex_app_server_protocol::TurnInterruptParams;
