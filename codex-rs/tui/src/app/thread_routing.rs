@@ -1054,27 +1054,7 @@ impl App {
         if let Some(activity) =
             sub_agent_activity_item(notification).and_then(sub_agent_activity_display)
         {
-            let thread_id = activity.thread_id;
-            let update = if activity.is_running_hint {
-                let protected = [self.primary_thread_id, self.active_thread_id]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>();
-                self.agent_navigation
-                    .record_sub_agent_activity_retaining(activity, &protected)
-            } else if self.agent_navigation.record_sub_agent_activity(activity) {
-                AgentNavigationUpdate::Accepted { evicted: None }
-            } else {
-                AgentNavigationUpdate::Rejected
-            };
-            if let Some(evicted) = update.evicted() {
-                self.chat_widget.remove_collab_agent_metadata(evicted);
-            }
-            if !update.accepted() {
-                return;
-            }
-            self.sync_agent_picker_identity(thread_id);
-            self.sync_active_agent_label();
+            self.cache_sub_agent_activity(activity);
             return;
         }
 
@@ -1104,6 +1084,30 @@ impl App {
                 /*is_closed*/ false,
             );
         }
+    }
+
+    fn cache_sub_agent_activity(&mut self, activity: SubAgentActivityDisplay) {
+        let thread_id = activity.thread_id;
+        let update = if activity.is_running_hint {
+            let protected = [self.primary_thread_id, self.active_thread_id]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            self.agent_navigation
+                .record_sub_agent_activity_retaining(activity, &protected)
+        } else if self.agent_navigation.record_sub_agent_activity(activity) {
+            AgentNavigationUpdate::Accepted { evicted: None }
+        } else {
+            AgentNavigationUpdate::Rejected
+        };
+        if let Some(evicted) = update.evicted() {
+            self.chat_widget.remove_collab_agent_metadata(evicted);
+        }
+        if !update.accepted() {
+            return;
+        }
+        self.sync_agent_picker_identity(thread_id);
+        self.sync_active_agent_label();
     }
 
     pub(super) async fn infer_session_for_thread_notification(
@@ -1563,6 +1567,11 @@ impl App {
                 preserve_in_flight_turn: true,
             },
         );
+        for item in snapshot.turns.iter().flat_map(|turn| turn.items.iter()) {
+            if let Some(activity) = sub_agent_activity_display(item) {
+                self.cache_sub_agent_activity(activity);
+            }
+        }
         if !snapshot.turns.is_empty() {
             self.chat_widget
                 .replay_thread_turns(snapshot.turns, ReplayKind::ThreadSnapshot);
