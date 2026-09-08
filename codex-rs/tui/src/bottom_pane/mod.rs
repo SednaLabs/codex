@@ -721,12 +721,12 @@ impl BottomPane {
             // configured action to interrupt even while the composer has focus.
             // When a popup is active, prefer dismissing it over interrupting the task.
             let is_bare_esc = key_event.code == KeyCode::Esc && key_event.modifiers.is_empty();
-            if !self.composer.is_replay_only_thread()
-                && self.keymap.chat.interrupt_turn.is_pressed(key_event)
-                && self.is_task_running
-                && !(is_agent_command && key_event.code == KeyCode::Esc)
-                && !self.composer.popup_active()
-                && !self.composer_should_handle_vim_insert_escape(key_event)
+            if !(self.composer.is_replay_only_thread()
+                || !self.keymap.chat.interrupt_turn.is_pressed(key_event)
+                || !self.is_task_running
+                || (is_agent_command && key_event.code == KeyCode::Esc)
+                || self.composer.popup_active()
+                || self.composer_should_handle_vim_insert_escape(key_event))
                 && self.status.is_some()
             {
                 let should_interrupt = if self.esc_interrupt_requires_double_press && is_bare_esc {
