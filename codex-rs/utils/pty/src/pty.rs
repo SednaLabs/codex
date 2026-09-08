@@ -17,6 +17,7 @@ use std::process::Command as StdCommand;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -215,13 +216,13 @@ async fn spawn_process_portable(
 
     let writer = pair.master.take_writer()?;
     let writer = Arc::new(tokio::sync::Mutex::new(writer));
+    #[cfg(test)]
+    let diagnostic_label = diagnostic_label.map(str::to_owned);
     let writer_handle: JoinHandle<()> = tokio::spawn({
         let writer = Arc::clone(&writer);
         async move {
             #[cfg(windows)]
             let mut windows_input = crate::WindowsTtyInputNormalizer::default();
-            #[cfg(test)]
-            let diagnostic_label = diagnostic_label.map(str::to_owned);
             while let Some(bytes) = writer_rx.recv().await {
                 #[cfg(test)]
                 let raw_len = bytes.len();
