@@ -2589,7 +2589,18 @@ fn select_persisted_paginated_closed_thread_resumes_before_replay_fallback() -> 
         );
         let mut replay_channel = ThreadEventChannel::new(/*capacity*/ 1);
         replay_channel.mark_replay_only();
+        {
+            let mut store = replay_channel.store.lock().await;
+            store.set_session(
+                test_thread_session(thread_id, test_path_buf("/tmp/replay-only")),
+                Vec::new(),
+            );
+        }
         app.thread_event_channels.insert(thread_id, replay_channel);
+        app.active_thread_id = Some(thread_id);
+        let draft = "preserve this draft through a successful retry";
+        app.chat_widget
+            .restore_user_message_to_composer(draft.to_string().into());
 
         let mut tui = crate::tui::test_support::make_test_tui()?;
         while app_event_rx.try_recv().is_ok() {}
@@ -2602,6 +2613,7 @@ fn select_persisted_paginated_closed_thread_resumes_before_replay_fallback() -> 
             .get(&thread_id)
             .expect("paginated thread should have a live resumed channel");
         assert_eq!(channel.attachment(), ThreadEventAttachment::Live);
+        assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
         {
             let store = channel.store.lock().await;
             assert_eq!(

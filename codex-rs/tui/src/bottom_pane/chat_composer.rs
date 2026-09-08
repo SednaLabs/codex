@@ -9326,6 +9326,9 @@ mod tests {
             InputResult::ParentOwnedInputBlocked => {
                 panic!("expected command dispatch, but parent-owned input was blocked")
             }
+            InputResult::ReplayOnlyInputBlocked => {
+                panic!("expected command dispatch, but replay-only input was blocked")
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(
@@ -9836,6 +9839,9 @@ mod tests {
             InputResult::ParentOwnedInputBlocked => {
                 panic!("expected command dispatch, but parent-owned input was blocked")
             }
+            InputResult::ReplayOnlyInputBlocked => {
+                panic!("expected command dispatch, but replay-only input was blocked")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.draft.textarea.is_empty());
@@ -10035,6 +10041,9 @@ mod tests {
             }
             InputResult::ParentOwnedInputBlocked => {
                 panic!("expected command dispatch, but parent-owned input was blocked")
+            }
+            InputResult::ReplayOnlyInputBlocked => {
+                panic!("expected command dispatch, but replay-only input was blocked")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }
