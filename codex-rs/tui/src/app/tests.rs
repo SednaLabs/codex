@@ -1853,10 +1853,11 @@ async fn replayed_root_activity_registers_native_v2_descendant() {
             .and_then(|entry| entry.agent_path.as_deref()),
         Some("/root/restarted-child")
     );
-    assert!(app
-        .agent_navigation
-        .get(&child_thread_id)
-        .is_some_and(|entry| entry.is_running && !entry.is_closed));
+    assert!(
+        app.agent_navigation
+            .get(&child_thread_id)
+            .is_some_and(|entry| entry.is_running && !entry.is_closed)
+    );
 }
 
 #[tokio::test]
