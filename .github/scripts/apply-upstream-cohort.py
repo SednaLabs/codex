@@ -544,7 +544,6 @@ BUILD_SOURCE_DIFF_PATHS = sorted(set(BUILD_SOURCE_DIFF_PATHS) | {
     "codex-rs/exec-server/tests/support/relay.rs",
     "codex-rs/exec-server/tests/unit/client_provisioning_tests.rs",
     "codex-rs/ext/extension-api/src/lib.rs",
-    "codex-rs/ext/extension-api/src/registry.rs",
     "codex-rs/login/Cargo.toml",
     "codex-rs/login/src/auth/agent_identity.rs",
     "codex-rs/login/src/auth/auth_headers.rs",
