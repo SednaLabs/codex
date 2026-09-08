@@ -45,12 +45,15 @@ set -e
 # summary intentionally omits raw commands and excerpts, so this is the
 # narrowest safe readback available to the existing lane contract.
 if [[ -f "${audit_report}" ]]; then
-  python3 - "${audit_report}" <<'PY'
+  if ! python3 - "${audit_report}" <<'PY'
 import json
+import re
 import sys
 
 MAX_PATHS = 64
 MAX_PATH_BYTES = 240
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+MIRROR_HEALTH = {"exact", "stale_ff_only", "illegal_ahead", "illegal_diverged"}
 
 try:
     with open(sys.argv[1], encoding="utf-8") as audit_file:
@@ -62,6 +65,13 @@ try:
     paths = registry["uncovered_code_paths"]
     if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
         raise TypeError("registry_reconciliation.uncovered_code_paths is not a string list")
+    shas = [snapshot[key]["sha"] for key in ("downstream", "mirror", "upstream")]
+    if not all(isinstance(sha, str) and SHA_RE.fullmatch(sha) for sha in shas):
+        raise ValueError("snapshot SHA identity is malformed")
+    if mirror["health"] not in MIRROR_HEALTH:
+        raise ValueError("mirror health is outside the producer vocabulary")
+    if not isinstance(tree_diff["tree_equal"], bool):
+        raise TypeError("tree equality is not boolean")
     safe_paths = [
         path
         for path in paths[:MAX_PATHS]
@@ -84,11 +94,14 @@ try:
             "paths_truncated": len(paths) > MAX_PATHS,
         },
     }
-except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError) as error:
+except (OSError, UnicodeError, ValueError, TypeError, KeyError) as error:
     print(f"downstream divergence audit diagnostic unavailable: {error}")
 else:
     print("downstream divergence audit diagnostic: " + json.dumps(diagnostic, sort_keys=True))
 PY
+  then
+    echo "downstream divergence audit diagnostic unavailable"
+  fi
 fi
 
 if [[ "${audit_exit}" -ne 0 ]]; then
