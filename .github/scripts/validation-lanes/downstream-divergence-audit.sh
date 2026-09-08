@@ -40,6 +40,57 @@ python3 scripts/downstream-divergence-audit.py \
 audit_exit=$?
 set -e
 
+# Keep the producer's report authoritative while exposing only a bounded,
+# repository-relative diagnostic projection in the lane log.  The workflow
+# summary intentionally omits raw commands and excerpts, so this is the
+# narrowest safe readback available to the existing lane contract.
+if [[ -f "${audit_report}" ]]; then
+  python3 - "${audit_report}" <<'PY'
+import json
+import sys
+
+MAX_PATHS = 64
+MAX_PATH_BYTES = 240
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as audit_file:
+        audit = json.load(audit_file)
+    snapshot = audit["snapshot"]["initial"]
+    mirror = audit["mirror"]
+    tree_diff = audit["tree_diff"]
+    registry = audit["registry_reconciliation"]
+    paths = registry["uncovered_code_paths"]
+    if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths):
+        raise TypeError("registry_reconciliation.uncovered_code_paths is not a string list")
+    safe_paths = [
+        path
+        for path in paths[:MAX_PATHS]
+        if path and "\\" not in path and not path.startswith("/") and ".." not in path.split("/")
+        and len(path.encode("utf-8")) <= MAX_PATH_BYTES
+    ]
+    diagnostic = {
+        "snapshot": {
+            "downstream_sha": snapshot["downstream"]["sha"],
+            "mirror_sha": snapshot["mirror"]["sha"],
+            "upstream_sha": snapshot["upstream"]["sha"],
+        },
+        "mirror": {
+            "health": mirror["health"],
+            "tree_equal": tree_diff["tree_equal"],
+        },
+        "registry_reconciliation": {
+            "uncovered_code_path_count": len(paths),
+            "uncovered_code_paths": safe_paths,
+            "paths_truncated": len(paths) > MAX_PATHS,
+        },
+    }
+except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError) as error:
+    print(f"downstream divergence audit diagnostic unavailable: {error}")
+else:
+    print("downstream divergence audit diagnostic: " + json.dumps(diagnostic, sort_keys=True))
+PY
+fi
+
 if [[ "${audit_exit}" -ne 0 ]]; then
   # The producer's stdout/stderr is intentionally left untouched above.  In
   # particular, do not try to parse a partial or stale report here: its parser
