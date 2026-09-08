@@ -1246,7 +1246,7 @@ def history_compatibility_bytes(repo: pathlib.Path) -> bytes:
     return output
 
 
-def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
+def verify_api_generation_diagnostic_candidate_binding() -> None:
     require(
         SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_SHA == SDK_CANDIDATE_SHA,
         "SDK API-generation diagnostic candidate SHA does not match active candidate",
@@ -1255,6 +1255,10 @@ def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
         SDK_API_GENERATION_DIAGNOSTIC_CANDIDATE_TREE == SDK_CANDIDATE_TREE,
         "SDK API-generation diagnostic candidate tree does not match active candidate",
     )
+
+
+def verify_overlay_contract(repo: pathlib.Path) -> dict[str, Any]:
+    verify_api_generation_diagnostic_candidate_binding()
     require(list(BUILD_SOURCE_ENTRIES) == BUILD_PATHS, "build source path set mismatch")
     require(list(BUILD_SOURCE_PREIMAGE_ENTRIES) == BUILD_PATHS, "build source preimage set mismatch")
     require(list(RESTORE_SOURCE_ENTRIES) == RESTORE_PATHS, "restore source path set mismatch")
@@ -3999,6 +4003,7 @@ def verify_emitted_bundle(
 
 
 def main() -> None:
+    verify_api_generation_diagnostic_candidate_binding()
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=pathlib.Path)
     parser.add_argument("--artifact-dir", type=pathlib.Path)
