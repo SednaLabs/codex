@@ -2567,17 +2567,63 @@ fn select_persisted_paginated_closed_thread_resumes_before_replay_fallback() -> 
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
         app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
-        let thread_id = ThreadId::from_string(
-            &app_test_support::create_fake_paginated_rollout(
-                codex_home.path(),
-                "2026-01-01T00-00-00",
-                "2026-01-01T00:00:00Z",
-                "Saved paginated message",
-                Some(app.config.model_provider_id.as_str()),
-                /*git_info*/ None,
-            )
-            .expect("create paginated rollout"),
-        )?;
+        let persisted_thread_id = app_test_support::create_fake_paginated_rollout(
+            codex_home.path(),
+            "2026-01-01T00-00-00",
+            "2026-01-01T00:00:00Z",
+            "Saved paginated message",
+            Some(app.config.model_provider_id.as_str()),
+            /*git_info*/ None,
+        )
+        .expect("create paginated rollout");
+        let persisted_rollout_path = app_test_support::rollout_path(
+            codex_home.path(),
+            "2026-01-01T00-00-00",
+            &persisted_thread_id,
+        );
+        let thread_id = ThreadId::from_string(&persisted_thread_id)?;
+        let persisted_turn_id = "persisted-turn";
+        for item in [
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: persisted_turn_id.to_string(),
+                trace_id: None,
+                started_at: Some(1),
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::default(),
+            })),
+            RolloutItem::EventMsg(EventMsg::ItemCompleted(
+                codex_protocol::protocol::ItemCompletedEvent {
+                    thread_id: thread_id.clone(),
+                    turn_id: persisted_turn_id.to_string(),
+                    item: codex_protocol::items::TurnItem::UserMessage(
+                        codex_protocol::items::UserMessageItem {
+                            id: "persisted-user-message".to_string(),
+                            client_id: None,
+                            content: vec![codex_protocol::user_input::UserInput::Text {
+                                text: "Saved paginated message".to_string(),
+                                text_elements: Vec::new(),
+                            }],
+                        },
+                    ),
+                    completed_at_ms: 1,
+                },
+            )),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: persisted_turn_id.to_string(),
+                last_agent_message: None,
+                error: None,
+                started_at: Some(1),
+                compaction_events_in_turn: 0,
+                final_model: None,
+                model_snapshot: None,
+                completed_at: Some(2),
+                duration_ms: Some(1),
+                time_to_first_token_ms: None,
+                provider_usage: None,
+            })),
+        ] {
+            codex_rollout::append_rollout_item_to_path(&persisted_rollout_path, &item).await?;
+        }
         let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
         app.agent_navigation.upsert(
             thread_id,
@@ -2620,6 +2666,21 @@ fn select_persisted_paginated_closed_thread_resumes_before_replay_fallback() -> 
                 store.session.as_ref().map(|session| session.thread_id),
                 Some(thread_id),
                 "the successful resume should seed the selected thread session"
+            );
+            assert!(
+                store.turns.iter().any(|turn| {
+                    turn.id == persisted_turn_id
+                        && matches!(
+                            turn.items.as_slice(),
+                            [ThreadItem::UserMessage { content, .. }]
+                                if matches!(
+                                    content.as_slice(),
+                                    [AppServerUserInput::Text { text, .. }]
+                                        if text == "Saved paginated message"
+                                )
+                        )
+                }),
+                "the authoritative resume response should contain the persisted turn"
             );
         }
         let mut replayed_history = String::new();

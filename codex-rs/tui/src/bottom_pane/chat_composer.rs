@@ -4910,7 +4910,7 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(result, InputResult::ReplayOnlyInputBlocked);
-        assert!(!needs_redraw);
+        assert!(needs_redraw);
         assert_eq!(composer.current_text(), "/skills");
         assert!(rx.try_recv().is_err());
 
