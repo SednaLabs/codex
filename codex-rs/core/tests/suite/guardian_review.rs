@@ -111,8 +111,18 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review() -> Result<()
         })
         .expect("guardian startup prewarm request");
     assert_eq!(guardian_prewarm["generate"].as_bool(), Some(false));
-    let guardian_instructions = guardian_prewarm["instructions"]
-        .as_str()
+    assert_eq!(guardian_prewarm.get("instructions"), None);
+    let guardian_instructions = guardian_prewarm["input"]
+        .as_array()
+        .expect("responses lite input")
+        .iter()
+        .filter(|item| item["role"].as_str() == Some("developer"))
+        .flat_map(|item| item["content"].as_array().into_iter().flatten())
+        .find_map(|content| {
+            (content["type"].as_str() == Some("input_text"))
+                .then(|| content["text"].as_str())
+                .flatten()
+        })
         .expect("guardian instructions");
     assert!(guardian_instructions.contains("Catalog-provided Guardian template:"));
     assert!(guardian_instructions.contains("- Organization: default generic tenant."));

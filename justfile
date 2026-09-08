@@ -117,6 +117,15 @@ bench-smoke:
 core-compile-smoke:
     cargo check -p codex-linux-sandbox -p codex-core --tests
 
+# Focused model catalog compatibility and overlay regression slice.
+model-catalog-compat-targeted:
+    cargo test -p codex-protocol --lib model_catalog_deserializer
+    cargo test -p codex-models-manager --lib bundled_models_json_roundtrips
+    cargo test -p codex-models-manager --lib cache_deserializer_accepts_catalog_without_legacy_base
+    cargo test -p codex-models-manager --lib openai_overlay_preserves_unrelated_metadata_and_static_catalog_precedence
+    cargo test -p codex-models-manager --lib openai_overlay_applies_after_remote_and_cache_composition
+    cargo fmt -p codex-protocol -p codex-models-manager -- --check
+
 # Carry-only downstream behavior smoke checks (core-only seam).
 core-carry-core-smoke:
     RUST_MIN_STACK={{ rust_min_stack }} CODEX_JS_REPL_NODE_PATH="${CODEX_JS_REPL_NODE_PATH:-/tmp/codex-node22/bin/node}" cargo nextest run -p codex-core --no-fail-fast --test all -- suite::subagent_notifications::spawn_agent_requested_model_and_reasoning_override_inherited_settings_without_role suite::subagent_notifications::spawn_agent_role_overrides_requested_model_and_reasoning_settings suite::code_mode::code_mode_exports_all_tools_metadata_for_builtin_tools suite::code_mode::code_mode_exports_all_tools_metadata_for_namespaced_mcp_tools suite::code_mode::code_mode_exec_nested_limit_formats_result_variable_before_default_history_truncation suite::code_mode::code_mode_exec_nested_limit_truncates_result_variable_when_exceeded suite::code_mode::code_mode_exec_nested_limit_formats_result_variable_before_configured_history_truncation suite::code_mode::code_mode_exec_without_nested_limit_formats_result_variable_before_default_history_truncation suite::code_mode::code_mode_exec_without_nested_limit_formats_result_variable_before_configured_history_truncation suite::compact_remote::remote_request_with_v3_initial_items_uses_custom_experimental_realtime_start_instructions suite::compact_resume_fork::snapshot_rollback_past_compaction_replays_append_only_history suite::compact_resume_fork::snapshot_rollback_followup_turn_trims_context_updates suite::unified_exec::exec_command_reports_chunk_and_exit_metadata suite::unified_exec::write_stdin_returns_exit_metadata_and_clears_session --exact
