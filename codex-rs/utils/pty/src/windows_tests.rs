@@ -13,6 +13,53 @@ const READY_MARKER: &str = "__CODEX_CHILD_READY__";
 const SHELL_READY_MARKER: &str = "__CODEX_SHELL_READY__";
 const VALUE_MARKER: &str = "__CODEX_CHILD_VALUE__";
 
+async fn wait_for_output_contains_with_diagnostics(
+    output_rx: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
+    shell: &str,
+    phase: &str,
+    needle: &str,
+    timeout_ms: u64,
+) -> anyhow::Result<Vec<u8>> {
+    let mut collected = Vec::new();
+    let mut chunk_count = 0;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, output_rx.recv()).await {
+            Ok(Ok(chunk)) => {
+                chunk_count += 1;
+                eprintln!(
+                    "[conpty-diagnostic] shell={shell} phase={phase} chunk={chunk_count} len={} cr={} lf={} contains_needle={}",
+                    chunk.len(),
+                    chunk.iter().filter(|&&byte| byte == b'\r').count(),
+                    chunk.iter().filter(|&&byte| byte == b'\n').count(),
+                    String::from_utf8_lossy(&chunk).contains(needle)
+                );
+                collected.extend_from_slice(&chunk);
+                if String::from_utf8_lossy(&collected).contains(needle) {
+                    return Ok(collected);
+                }
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped))) => {
+                eprintln!(
+                    "[conpty-diagnostic] shell={shell} phase={phase} output_lagged={skipped}"
+                );
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                anyhow::bail!(
+                    "PTY output closed while waiting for {needle:?}: {:?}",
+                    String::from_utf8_lossy(&collected)
+                );
+            }
+            Err(_) => break,
+        }
+    }
+    anyhow::bail!(
+        "timed out waiting for {needle:?} in PTY output: {:?}",
+        String::from_utf8_lossy(&collected)
+    );
+}
+
 struct WindowsShell {
     name: &'static str,
     program: String,
@@ -191,6 +238,7 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
         eprintln!("python not found; skipping ConPTY input test");
         return Ok(());
     };
+    crate::pty::enable_windows_test_writer_diagnostics();
     let code = format!(
         "print('__CODEX_CHILD_'+'READY__', flush=True); value=input(); print('{VALUE_MARKER}'+value.encode('utf-8').hex(), flush=True)"
     );
@@ -255,30 +303,69 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
         let (session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
         let writer = session.writer_sender();
         if let Some(marker) = shell.ready_marker {
-            wait_for_output_contains(&mut output_rx, marker, /*timeout_ms*/ 10_000)
+            wait_for_output_contains_with_diagnostics(
+                &mut output_rx,
+                shell.name,
+                "shell-ready",
+                marker,
+                /*timeout_ms*/ 10_000,
+            )
                 .await
                 .map_err(|err| {
                     anyhow::anyhow!("{} shell did not become ready: {err}", shell.name)
                 })?;
         }
-        writer
-            .send(format!("{}\n", shell.child_command).into_bytes())
-            .await?;
-        wait_for_output_contains(&mut output_rx, READY_MARKER, /*timeout_ms*/ 10_000)
+        let child_command = format!("{}\n", shell.child_command).into_bytes();
+        eprintln!(
+            "[conpty-diagnostic] shell={} phase=child-command bytes={} cr={} lf={}",
+            shell.name,
+            child_command.len(),
+            child_command.iter().filter(|&&byte| byte == b'\r').count(),
+            child_command.iter().filter(|&&byte| byte == b'\n').count()
+        );
+        writer.send(child_command).await?;
+        wait_for_output_contains_with_diagnostics(
+            &mut output_rx,
+            shell.name,
+            "child-ready",
+            READY_MARKER,
+            /*timeout_ms*/ 10_000,
+        )
             .await
             .map_err(|err| anyhow::anyhow!("{} child did not become ready: {err}", shell.name))?;
 
-        writer
-            .send(format!("{expected}X\u{8}\n").into_bytes())
-            .await?;
+        let input = format!("{expected}X\u{8}\n").into_bytes();
+        eprintln!(
+            "[conpty-diagnostic] shell={} phase=input bytes={} cr={} lf={} backspace={}",
+            shell.name,
+            input.len(),
+            input.iter().filter(|&&byte| byte == b'\r').count(),
+            input.iter().filter(|&&byte| byte == b'\n').count(),
+            input.iter().filter(|&&byte| byte == b'\x08').count()
+        );
+        writer.send(input).await?;
         let mut output =
-            wait_for_output_contains(&mut output_rx, &expected_marker, /*timeout_ms*/ 10_000)
+            wait_for_output_contains_with_diagnostics(
+                &mut output_rx,
+                shell.name,
+                "value",
+                &expected_marker,
+                /*timeout_ms*/ 10_000,
+            )
                 .await
                 .map_err(|err| {
                     anyhow::anyhow!("{} child received incorrect input: {err}", shell.name)
                 })?;
 
-        writer.send(b"exit 0\n".to_vec()).await?;
+        let exit_command = b"exit 0\n".to_vec();
+        eprintln!(
+            "[conpty-diagnostic] shell={} phase=exit-command bytes={} cr={} lf={}",
+            shell.name,
+            exit_command.len(),
+            exit_command.iter().filter(|&&byte| byte == b'\r').count(),
+            exit_command.iter().filter(|&&byte| byte == b'\n').count()
+        );
+        writer.send(exit_command).await?;
         let (remaining, exit_code) =
             collect_output_until_exit(output_rx, exit_rx, /*timeout_ms*/ 10_000).await;
         output.extend_from_slice(&remaining);

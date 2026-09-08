@@ -18,6 +18,8 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -37,6 +39,14 @@ use crate::process::SpawnedProcess;
 use crate::process::TerminalSize;
 #[cfg(unix)]
 use crate::process::exit_code_from_status;
+
+#[cfg(test)]
+static WINDOWS_TEST_WRITER_DIAGNOSTICS: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn enable_windows_test_writer_diagnostics() {
+    WINDOWS_TEST_WRITER_DIAGNOSTICS.store(true, Ordering::SeqCst);
+}
 
 /// Returns true when ConPTY support is available (Windows only).
 #[cfg(windows)]
@@ -209,11 +219,30 @@ async fn spawn_process_portable(
             let mut windows_input = crate::WindowsTtyInputNormalizer::default();
             while let Some(bytes) = writer_rx.recv().await {
                 #[cfg(windows)]
+                let raw_len = bytes.len();
+                let raw_lf = bytes.iter().filter(|&&byte| byte == b'\n').count();
+                let raw_cr = bytes.iter().filter(|&&byte| byte == b'\r').count();
                 let bytes = windows_input.normalize(&bytes);
+                #[cfg(test)]
+                if WINDOWS_TEST_WRITER_DIAGNOSTICS.load(Ordering::SeqCst) {
+                    eprintln!(
+                        "[conpty-diagnostic] writer input raw_len={raw_len} normalized_len={} raw_cr={raw_cr} raw_lf={raw_lf} normalized_cr={}",
+                        bytes.len(),
+                        bytes.iter().filter(|&&byte| byte == b'\r').count()
+                    );
+                }
                 let mut guard = writer.lock().await;
                 use std::io::Write;
-                let _ = guard.write_all(&bytes);
-                let _ = guard.flush();
+                let write_result = guard.write_all(&bytes);
+                let flush_result = guard.flush();
+                #[cfg(test)]
+                if WINDOWS_TEST_WRITER_DIAGNOSTICS.load(Ordering::SeqCst) {
+                    eprintln!(
+                        "[conpty-diagnostic] writer results write={:?} flush={:?}",
+                        write_result.as_ref().err(),
+                        flush_result.as_ref().err()
+                    );
+                }
             }
         }
     });
