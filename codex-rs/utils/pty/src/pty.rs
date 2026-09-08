@@ -145,7 +145,20 @@ pub async fn spawn_process(
             .await;
     }
 
-    spawn_process_portable(program, args, cwd, env, arg0, size).await
+    spawn_process_portable(program, args, cwd, env, arg0, size, None).await
+}
+
+#[cfg(test)]
+pub(crate) async fn spawn_process_with_diagnostic_label(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+    size: TerminalSize,
+    label: &str,
+) -> Result<SpawnedProcess> {
+    spawn_process_portable(program, args, cwd, env, arg0, size, Some(label)).await
 }
 
 async fn spawn_process_portable(
@@ -155,6 +168,7 @@ async fn spawn_process_portable(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     size: TerminalSize,
+    diagnostic_label: Option<&str>,
 ) -> Result<SpawnedProcess> {
     let pty_system = platform_native_pty_system();
     let pair = pty_system.openpty(size.into())?;
@@ -200,38 +214,27 @@ async fn spawn_process_portable(
     });
 
     let writer = pair.master.take_writer()?;
-        let writer = Arc::new(tokio::sync::Mutex::new(writer));
-        let writer_handle: JoinHandle<()> = tokio::spawn({
-            let writer = Arc::clone(&writer);
-            async move {
-                #[cfg(windows)]
-                let mut windows_input = crate::WindowsTtyInputNormalizer::default();
-                #[cfg(test)]
-                let mut diagnostic_token = None;
-                while let Some(bytes) = writer_rx.recv().await {
+    let writer = Arc::new(tokio::sync::Mutex::new(writer));
+    let writer_handle: JoinHandle<()> = tokio::spawn({
+        let writer = Arc::clone(&writer);
+        async move {
+            #[cfg(windows)]
+            let mut windows_input = crate::WindowsTtyInputNormalizer::default();
+            #[cfg(test)]
+            let diagnostic_label = diagnostic_label.map(str::to_owned);
+            while let Some(bytes) = writer_rx.recv().await {
                 #[cfg(test)]
                 let raw_len = bytes.len();
                 #[cfg(test)]
                 let raw_lf = bytes.iter().filter(|&&byte| byte == b'\n').count();
                 #[cfg(test)]
                 let raw_cr = bytes.iter().filter(|&&byte| byte == b'\r').count();
-                #[cfg(test)]
-                if let Some(start) = String::from_utf8_lossy(&bytes)
-                    .find("__CODEX_CONPTY_DIAGNOSTIC_")
-                {
-                    let token = String::from_utf8_lossy(&bytes[start..])
-                        .split(['\r', '\n'])
-                        .next()
-                        .unwrap_or_default()
-                        .to_string();
-                    diagnostic_token = Some(token);
-                }
                 #[cfg(windows)]
                 let bytes = windows_input.normalize(&bytes);
                 #[cfg(test)]
-                if let Some(token) = diagnostic_token.as_deref() {
+                if let Some(label) = diagnostic_label.as_deref() {
                     eprintln!(
-                        "[conpty-diagnostic] token={token} writer input raw_len={raw_len} normalized_len={} raw_cr={raw_cr} raw_lf={raw_lf} normalized_cr={}",
+                        "[conpty-diagnostic] label={label} writer input raw_len={raw_len} normalized_len={} raw_cr={raw_cr} raw_lf={raw_lf} normalized_cr={}",
                         bytes.len(),
                         bytes.iter().filter(|&&byte| byte == b'\r').count()
                     );
@@ -241,9 +244,9 @@ async fn spawn_process_portable(
                 let write_result = guard.write_all(&bytes);
                 let flush_result = guard.flush();
                 #[cfg(test)]
-                if let Some(token) = diagnostic_token.as_deref() {
+                if let Some(label) = diagnostic_label.as_deref() {
                     eprintln!(
-                        "[conpty-diagnostic] token={token} writer results write={:?} flush={:?}",
+                        "[conpty-diagnostic] label={label} writer results write={:?} flush={:?}",
                         write_result.as_ref().err(),
                         flush_result.as_ref().err()
                     );
