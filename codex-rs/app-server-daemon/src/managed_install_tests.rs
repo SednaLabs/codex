@@ -6,10 +6,12 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 use super::ManagedReleaseMetadata;
+use super::executable_identity;
 use super::executable_identity_from_bytes;
 use super::managed_sedna_automatic_update_release_from_metadata;
 use super::parse_codex_version;
 use super::resolved_managed_standalone_release;
+use super::sha256_file;
 use super::sha256_hex;
 
 #[test]
@@ -33,6 +35,23 @@ fn executable_identity_uses_binary_contents() {
 
     assert_eq!(old, same);
     assert_ne!(old, new);
+}
+
+#[tokio::test]
+async fn streamed_sha256_matches_in_memory_hash_across_chunk_boundaries() {
+    let temp = TempDir::new().expect("temporary directory");
+    let bytes: Vec<u8> = (0..(64 * 1024 * 2 + 17))
+        .map(|index| (index % 251) as u8)
+        .collect();
+    let executable = temp.path().join("codex");
+    fs::write(&executable, &bytes).expect("executable");
+
+    let streamed = sha256_file(&executable).await.expect("streamed digest");
+    assert_eq!(sha256_hex(&bytes), sha256_hex(&streamed));
+    assert_eq!(
+        executable_identity(&executable).await.expect("identity"),
+        executable_identity_from_bytes(&bytes)
+    );
 }
 
 #[test]

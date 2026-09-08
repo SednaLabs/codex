@@ -16,6 +16,8 @@ use sha2::Sha256;
 #[cfg(unix)]
 use tokio::fs;
 #[cfg(unix)]
+use tokio::io::AsyncReadExt;
+#[cfg(unix)]
 use tokio::process::Command;
 
 pub(crate) fn managed_codex_bin(codex_home: &Path) -> PathBuf {
@@ -132,11 +134,11 @@ async fn verified_sedna_auto_update_release(release_dir: &Path) -> Option<Manage
     let checksums = fs::read_to_string(release_dir.join("INSTALLED-SHA256SUMS.txt"))
         .await
         .ok()?;
-    let executable = fs::read(release_dir.join(managed_codex_file_name()))
+    let executable_digest = sha256_file(&release_dir.join(managed_codex_file_name()))
         .await
         .ok()?;
     if !checksum_matches(&checksums, "RELEASE-METADATA.json", &metadata)
-        || !checksum_matches(&checksums, managed_codex_file_name(), &executable)
+        || !checksum_matches_digest(&checksums, managed_codex_file_name(), executable_digest)
     {
         return None;
     }
@@ -170,6 +172,41 @@ fn checksum_matches(checksums: &str, file_name: &str, contents: &[u8]) -> bool {
             && expected.bytes().all(|byte| byte.is_ascii_hexdigit())
             && expected.eq_ignore_ascii_case(&actual)
     })
+}
+
+#[cfg(unix)]
+fn checksum_matches_digest(checksums: &str, file_name: &str, digest: [u8; 32]) -> bool {
+    let expected = checksums.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let digest = fields.next()?;
+        let candidate = fields.next()?.trim_start_matches('*');
+        (candidate == file_name).then_some(digest)
+    });
+    expected.is_some_and(|expected| {
+        expected.len() == 64
+            && expected.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && expected.eq_ignore_ascii_case(&sha256_hex(&digest))
+    })
+}
+
+#[cfg(unix)]
+async fn sha256_file(path: &Path) -> Result<[u8; 32]> {
+    let mut file = fs::File::open(path)
+        .await
+        .with_context(|| format!("failed to read file {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .with_context(|| format!("failed to read file {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
 }
 
 #[cfg(unix)]
@@ -208,10 +245,11 @@ pub(crate) struct ExecutableIdentity {
 
 #[cfg(unix)]
 pub(crate) async fn executable_identity(executable: &Path) -> Result<ExecutableIdentity> {
-    let bytes = fs::read(executable)
-        .await
-        .with_context(|| format!("failed to read executable {}", executable.display()))?;
-    Ok(executable_identity_from_bytes(&bytes))
+    Ok(ExecutableIdentity {
+        digest: sha256_file(executable)
+            .await
+            .with_context(|| format!("failed to read executable {}", executable.display()))?,
+    })
 }
 
 #[cfg(unix)]
