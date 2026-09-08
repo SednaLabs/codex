@@ -168,7 +168,7 @@ jobs:
       # whole-suite health invocation above remains unchanged; this bounded
       # path makes the test-scoped ConPTY markers available for evidence.
       - name: Run targeted ConPTY diagnostics
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.collect_diagnostics }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.collect_diagnostics }}
         id: conpty_diagnostics
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
@@ -185,6 +185,7 @@ jobs:
             --remote-download-toplevel \
             -- \
             test \
+            --cache_test_results=no \
             --test_output=all \
             --test_arg=--nocapture \
             --modify_execution_info=Rustc=+no-remote-cache \
