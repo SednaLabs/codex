@@ -619,6 +619,7 @@ async fn active_replay_only_selection_retries_failed_resume_and_preserves_draft(
         Vec::new(),
     )];
     let thread_read_responses = Arc::new(Mutex::new(VecDeque::from([
+        ScriptedThreadReadResponse::Thread(serde_json::to_value(fallback_thread.clone())?),
         ScriptedThreadReadResponse::Thread(serde_json::to_value(fallback_thread)?),
     ])));
     let (mut app_server, requests, proxy) = start_recording_app_server_with_lineage_and_state(
@@ -665,6 +666,87 @@ async fn active_replay_only_selection_retries_failed_resume_and_preserves_draft(
             .iter()
             .any(|request| request.method == "thread/read")
     );
+
+    app_server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_replay_only_selection_reports_unavailable_retry_and_keeps_draft() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    let mut replay_channel = ThreadEventChannel::new(/*capacity*/ 1);
+    replay_channel.mark_replay_only();
+    {
+        let mut store = replay_channel.store.lock().await;
+        store.set_session(
+            test_thread_session(thread_id, test_path_buf("/tmp/replay-only")),
+            vec![test_turn("stale-turn", TurnStatus::Completed, Vec::new())],
+        );
+    }
+    app.thread_event_channels.insert(thread_id, replay_channel);
+    app.agent_navigation.upsert(
+        thread_id,
+        Some("cached".to_string()),
+        Some("worker".to_string()),
+        /*is_closed*/ true,
+        /*created_at*/ None,
+        /*updated_at*/ None,
+    );
+    app.active_thread_id = Some(thread_id);
+    let draft = "keep this draft when retry is unavailable".to_string();
+    app.chat_widget
+        .restore_user_message_to_composer(draft.clone().into());
+
+    let thread_read_responses = Arc::new(Mutex::new(VecDeque::from([
+        ScriptedThreadReadResponse::Error("liveness read unavailable".to_string()),
+        ScriptedThreadReadResponse::Error("fallback read unavailable".to_string()),
+    ])));
+    let (mut app_server, requests, proxy) = start_recording_app_server_with_lineage_and_state(
+        &app.config,
+        /*blocked_thread_read_id*/ None,
+        /*lineage_responses*/ None,
+        Some(thread_read_responses),
+        /*loaded_list_responses*/ None,
+        /*resume_error_thread_id*/ Some(thread_id),
+        /*with_state_db*/ true,
+    )
+    .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    while app_event_rx.try_recv().is_ok() {}
+
+    app.select_agent_thread(&mut tui, &mut app_server, thread_id)
+        .await?;
+
+    assert_eq!(app.active_thread_id, Some(thread_id));
+    assert_eq!(
+        app.thread_event_channels[&thread_id].attachment(),
+        ThreadEventAttachment::ReplayOnly
+    );
+    assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
+    let mut errors = String::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            errors.push_str(&lines_to_single_string(
+                &cell.transcript_lines(/*width*/ 80),
+            ));
+        }
+    }
+    assert!(
+        errors.contains("Failed to attach to agent thread")
+            && errors.contains("fallback read unavailable"),
+        "expected an in-app retry error, got {errors:?}"
+    );
+    let recorded = take_recorded_requests(&requests);
+    assert_eq!(
+        recorded
+            .iter()
+            .filter(|request| request.method == "thread/read")
+            .count(),
+        2
+    );
+    assert!(recorded.iter().any(|request| request.method == "thread/resume"));
 
     app_server.shutdown().await?;
     proxy.await??;
