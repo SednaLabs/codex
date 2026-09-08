@@ -42,8 +42,8 @@ jobs:
       RUNTIME_SURFACES_DIAGNOSTIC_HEAD_SHA: 7a80f886b7ebf979b8324f7e3527afdbe83a65b3
       RUNTIME_SURFACES_DIAGNOSTIC_HEAD_TREE: aebca2b3e58d90124b0962b1bb51fa581dfcb0d1
       RUNTIME_SURFACES_DIAGNOSTIC_REPOSITORY_ID: "1152496647"
-      BUILD_SOURCE_SHA: 2d056a5512abc4ddb30507513b65e890f10abd1a
-      BUILD_SOURCE_TREE: 3d70b95e60c6c2aa03a7df3e51fda445ad0bb1f0
+      BUILD_SOURCE_SHA: 79ffc74e2ba84062e29c468afd4e8c005de384d8
+      BUILD_SOURCE_TREE: 6f127de45e67e20c0c2a5b2d53aa80fae520d417
       BUILD_SOURCE_BRANCH: worker/w13825-build-source-authoring-20260907
     steps:
       - name: Check out exact reviewed consumer helper
@@ -107,7 +107,7 @@ jobs:
           workflow_tree = sys.argv[3]
           push = {
               "ref": "refs/heads/worker/w13825-sdk-build-consumer",
-              "before": "2d34da4e23448474489fb38bcd2efab949c800cf",
+              "before": "03bf6428aab44a17ce3d9920466e2f711f493ef1",
               "after": workflow_sha,
               "created": False,
               "deleted": False,
@@ -287,7 +287,7 @@ jobs:
       - name: Check out exact reviewed build source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 2d056a5512abc4ddb30507513b65e890f10abd1a
+          ref: 79ffc74e2ba84062e29c468afd4e8c005de384d8
           fetch-depth: 0
           persist-credentials: false
           path: source-candidate
@@ -299,7 +299,7 @@ jobs:
           source_root="${GITHUB_WORKSPACE}/source-candidate"
           test "${BUILD_SOURCE_SHA}" = "$(git -C "${source_root}" rev-parse HEAD)"
           test "${BUILD_SOURCE_TREE}" = "$(git -C "${source_root}" rev-parse HEAD^{tree})"
-          test "62e4e952d170bfbf3c66cdd1462543a653d678da" = "$(git -C "${source_root}" show -s --format=%P HEAD)"
+          test "2d056a5512abc4ddb30507513b65e890f10abd1a" = "$(git -C "${source_root}" show -s --format=%P HEAD)"
           test -z "$(git -C "${source_root}" status --porcelain)"
           remote_source="$({ git -C "${source_root}" ls-remote --heads origin "refs/heads/${BUILD_SOURCE_BRANCH}"; } | awk '{print $1}')"
           test "${remote_source}" = "${BUILD_SOURCE_SHA}"
