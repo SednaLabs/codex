@@ -218,10 +218,13 @@ async fn spawn_process_portable(
             #[cfg(windows)]
             let mut windows_input = crate::WindowsTtyInputNormalizer::default();
             while let Some(bytes) = writer_rx.recv().await {
-                #[cfg(windows)]
+                #[cfg(test)]
                 let raw_len = bytes.len();
+                #[cfg(test)]
                 let raw_lf = bytes.iter().filter(|&&byte| byte == b'\n').count();
+                #[cfg(test)]
                 let raw_cr = bytes.iter().filter(|&&byte| byte == b'\r').count();
+                #[cfg(windows)]
                 let bytes = windows_input.normalize(&bytes);
                 #[cfg(test)]
                 if WINDOWS_TEST_WRITER_DIAGNOSTICS.load(Ordering::SeqCst) {
