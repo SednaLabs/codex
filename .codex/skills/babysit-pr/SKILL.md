@@ -124,6 +124,14 @@ it must not enter green-state backoff. These receipts are observer state only:
 they do not authorize merge, rerun, review, credential, or other provider
 mutation.
 
+An active merge-queue entry in `QUEUED` or `AWAITING_CHECKS` likewise keeps the
+watcher on the configured base cadence, including when checks are green. A
+missing or unreadable pending queue head is not readiness evidence and remains
+on that base cadence. Queue-entry identity changes are part of snapshot change
+detection, so re-enqueue, replacement, or removal cannot silently retain a
+green-state backoff. Ordinary green PRs with no active queue entry retain the
+existing bounded backoff.
+
 ## Inputs
 Accept any of the following:
 

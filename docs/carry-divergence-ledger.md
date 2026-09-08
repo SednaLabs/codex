@@ -3612,5 +3612,10 @@ the polling interval bounded instead of entering green-state backoff.
 
 Focused source guardrails cover BLOCKED versus CLEAN actions, pending checks,
 published review evidence, and a fake-clock exact-head schedule receipt. This
-carry does not include private lifecycle, merge-queue, credential, or mutation
-behavior; those remain separate ownership boundaries.
+carry also keeps active `QUEUED` and `AWAITING_CHECKS` merge-queue entries on
+the configured base cadence, including when the pending queue head is missing
+or unreadable, and includes queue-entry identity in change detection so a
+replacement or removal cannot preserve stale green backoff. Ordinary green
+PRs without an active queue entry retain bounded backoff. Queue failure,
+removal, readiness, credential, and mutation behavior remain fail-closed and
+separate ownership boundaries.
