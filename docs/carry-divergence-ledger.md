@@ -1971,6 +1971,14 @@ bundles during upstream sync merely because they once shared this carry entry.
   stale updater compatibility; the explicit historical-x86 escape hatch cannot downgrade current
   releases. A previously present release directory is activated only when it matches the freshly
   verified binaries, metadata, and checksum manifest byte-for-byte.
+- Automatic update discovery is intentionally narrower than the published target matrix: it is
+  enabled only for stable, strictly newer Linux `x86_64` and `aarch64` releases. Unsupported
+  targets, prerelease candidates, and macOS are automatic no-ops. The `--require-newer-than`
+  floor rejects equality or older candidates before asset fetch or `current` activation;
+  `--allow-prerelease` and `--macos-preview` are explicit manual modes and do not broaden that
+  automatic boundary. The lower-bound, legacy-fixture installer tests, TUI update-version and
+  prompt surfaces, `codex doctor` diagnostics, and hosted `sedna.release-linux-smoke` lane are
+  the current references.
 - Preserve the dual-native Linux matrix, target-isolated names and caches, exact-source
   hosted-runner trust checks, mandatory Arm64 hardening, historical x86 compatibility, protected-main
   marker/manual publication, and release tags as outputs rather than workflow authority as one
