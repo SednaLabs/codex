@@ -2593,7 +2593,7 @@ fn select_persisted_paginated_closed_thread_resumes_before_replay_fallback() -> 
             })),
             RolloutItem::EventMsg(EventMsg::ItemCompleted(
                 codex_protocol::protocol::ItemCompletedEvent {
-                    thread_id: thread_id.clone(),
+                    thread_id,
                     turn_id: persisted_turn_id.to_string(),
                     item: codex_protocol::items::TurnItem::UserMessage(
                         codex_protocol::items::UserMessageItem {

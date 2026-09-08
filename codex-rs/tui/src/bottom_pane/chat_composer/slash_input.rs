@@ -681,7 +681,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             /*disable_paste_burst*/ false,
         );
-        composer.set_replay_only_thread(true);
+        composer.set_replay_only_thread(/*replay_only*/ true);
         composer.set_text_content("/review".to_string(), Vec::new(), Vec::new());
         composer.sync_popups();
         assert!(composer.popup_active());
@@ -704,7 +704,7 @@ mod tests {
             "Ask Codex to do anything".to_string(),
             /*disable_paste_burst*/ false,
         );
-        composer.set_replay_only_thread(true);
+        composer.set_replay_only_thread(/*replay_only*/ true);
         composer.set_text_content("/skills".to_string(), Vec::new(), Vec::new());
         composer.sync_popups();
         assert!(composer.popup_active());

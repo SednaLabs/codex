@@ -4903,7 +4903,7 @@ mod tests {
     #[test]
     fn replay_only_submission_keeps_draft_and_blocks_slash_dispatch() {
         let (mut composer, mut rx) = new_test_composer();
-        composer.set_replay_only_thread(true);
+        composer.set_replay_only_thread(/*replay_only*/ true);
         composer.set_text_content("/skills".to_string(), Vec::new(), Vec::new());
         composer.move_cursor_to_end();
 
