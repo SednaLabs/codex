@@ -1,0 +1,15 @@
+<!DOCTYPE qhelp SYSTEM "qhelp.dtd">
+<qhelp>
+  <overview>
+    <p>
+      This summary metric is an applicability witness for the native visual
+      response detector.  It reports each production Android and browser
+      visual handler with the number of successful response exits that the
+      query can inspect.
+    </p>
+    <p>
+      A missing handler row or a zero exit count is an evidence gap.  Fixture
+      paths and source-file presence do not qualify as production coverage.
+    </p>
+  </overview>
+</qhelp>

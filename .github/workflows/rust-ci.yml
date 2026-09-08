@@ -407,6 +407,8 @@ jobs:
         run: python3 -m unittest discover -s .github/scripts -p 'test_ci_planners.py'
       - name: Test targeted Clippy package selector
         run: python3 .github/scripts/test_targeted_clippy_packages.py
+      - name: Test targeted Clippy command bridge
+        run: python3 .github/scripts/test_run_targeted_clippy.py
 
       - name: Check for a clean worktree
         if: always() && !cancelled()
@@ -496,20 +498,7 @@ jobs:
           TARGETED_CLIPPY_PACKAGES: ${{ steps.targeted_clippy_packages.outputs.packages }}
         shell: bash
         run: |
-          set -euo pipefail
-          mapfile -t packages < <(python3 -c 'import json, os; print("\\n".join(json.loads(os.environ["TARGETED_CLIPPY_PACKAGES"])))')
-          package_args=()
-          for package in "${packages[@]}"; do
-            package_args+=(--package "${package}")
-          done
-          cargo clippy \
-            --target x86_64-unknown-linux-gnu \
-            --all-features \
-            --tests \
-            --profile dev \
-            --no-deps \
-            "${package_args[@]}" \
-            -- -D warnings
+          bash "${GITHUB_WORKSPACE}/.github/scripts/run_targeted_clippy.sh"
 
       - name: Rust benchmark smoke test
         run: just bench-smoke

@@ -427,7 +427,7 @@ fn followup_task_tool_requires_message_and_describes_model_receipt() {
     assert_eq!(name, "followup_task");
     assert_eq!(
         description,
-        "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
+        "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes. The receipt's effective_* identity fields describe the recipient agent named by target, never the sending agent."
     );
     assert_eq!(
         parameters.schema_type,
@@ -461,25 +461,36 @@ fn followup_task_tool_requires_message_and_describes_model_receipt() {
                     "type": "string",
                     "description": "Canonical task name of the agent receiving the follow-up."
                 },
+                "recipient_task_name": {
+                    "type": "string",
+                    "description": "Explicit canonical task name of the recipient; the effective_* fields below describe this recipient, not the sending agent."
+                },
+                "effective_identity_scope": {
+                    "type": "string",
+                    "enum": ["recipient"],
+                    "description": "Identity scope for the effective_* fields in this receipt."
+                },
                 "effective_model": {
                     "type": "string",
-                    "description": "Effective model retained by the agent for the follow-up turn."
+                    "description": "Effective model retained by the recipient agent for the follow-up turn."
                 },
                 "effective_model_provider_id": {
                     "type": "string",
-                    "description": "Effective model provider retained by the agent for the follow-up turn."
+                    "description": "Effective model provider retained by the recipient agent for the follow-up turn."
                 },
                 "effective_reasoning_effort": {
                     "type": ["string", "null"],
-                    "description": "Effective reasoning effort retained by the agent for the follow-up turn, when configured."
+                    "description": "Effective reasoning effort retained by the recipient agent for the follow-up turn, when configured."
                 },
                 "effective_service_tier": {
                     "type": ["string", "null"],
-                    "description": "Effective service tier retained by the agent for the follow-up turn, when configured."
+                    "description": "Effective service tier retained by the recipient agent for the follow-up turn, when configured."
                 }
             },
             "required": [
                 "task_name",
+                "recipient_task_name",
+                "effective_identity_scope",
                 "effective_model",
                 "effective_model_provider_id",
                 "effective_reasoning_effort",
@@ -703,6 +714,8 @@ fn send_message_tool_declares_non_acknowledgement_handoff_receipt() {
         output_schema["required"],
         json!([
             "task_name",
+            "recipient_task_name",
+            "effective_identity_scope",
             "handoff_state",
             "effective_model",
             "effective_model_provider_id",
@@ -721,5 +734,9 @@ fn send_message_tool_declares_non_acknowledgement_handoff_receipt() {
     assert_eq!(
         output_schema["properties"]["effective_model_provider_id"]["type"],
         json!(["string", "null"])
+    );
+    assert_eq!(
+        output_schema["properties"]["effective_identity_scope"]["enum"],
+        json!(["recipient"])
     );
 }
