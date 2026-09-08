@@ -467,25 +467,16 @@ async fn replay_only_model_persistence_does_not_write_config() -> Result<()> {
             status: codex_app_server_protocol::ThreadGoalStatus::Complete,
         })
     );
-    assert_matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::InsertHistoryCell(_))
-    );
+    assert_matches!(app_event_rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
 
     app.refresh_plugin_mentions_after_config_write();
-    assert_matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::RefreshPluginMentions)
-    );
+    assert_matches!(app_event_rx.try_recv(), Ok(AppEvent::RefreshPluginMentions));
     assert!(op_rx.try_recv().is_err());
 
     app.thread_event_channels
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
     app.refresh_plugin_mentions_after_config_write();
-    assert_matches!(
-        app_event_rx.try_recv(),
-        Ok(AppEvent::RefreshPluginMentions)
-    );
+    assert_matches!(app_event_rx.try_recv(), Ok(AppEvent::RefreshPluginMentions));
     assert_matches!(op_rx.try_recv(), Ok(AppCommand::ReloadUserConfig));
 
     let mut replay_channel = ThreadEventChannel::new(/*capacity*/ 1);

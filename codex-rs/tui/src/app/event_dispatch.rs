@@ -127,11 +127,10 @@ impl App {
             .map(|thread_id| self.thread_is_replay_only(thread_id))
             .unwrap_or(active_replay_only);
         if replay_only {
-            if targeted_thread.is_none()
-                || targeted_thread == self.current_displayed_thread_id()
-            {
-                self.chat_widget
-                    .add_error_message("Replay-only transcripts do not accept mutations.".to_string());
+            if targeted_thread.is_none() || targeted_thread == self.current_displayed_thread_id() {
+                self.chat_widget.add_error_message(
+                    "Replay-only transcripts do not accept mutations.".to_string(),
+                );
             }
             return true;
         }
