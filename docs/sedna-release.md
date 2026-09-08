@@ -69,9 +69,21 @@ The current contract is covered by the installer lower-bound and candidate
 tests (`scripts/install/test_sedna_release_lower_bound.py` and
 `scripts/install/test_sedna_release_installer.py`), the TUI update-version and
 prompt surfaces, `codex doctor` diagnostics, and the hosted
-`sedna.release-linux-smoke` validation lane. The tests use a legacy unsigned
+`sedna.update-installer-contract` validation lane. The tests use a legacy unsigned
 fixture only to preserve compatibility; they are not modern release-trust
 assurance.
+
+The public installer form is explicit about its release source and candidate:
+
+```bash
+scripts/install_sedna_release_asset \
+  --repository sednalabs/codex \
+  --release-tag TAG
+```
+
+Manual prerelease verification adds `--allow-prerelease`. Intel macOS preview
+verification requires both `--allow-prerelease` and `--macos-preview`; neither
+flag changes automatic update discovery.
 
 ### GitHub Actions
 

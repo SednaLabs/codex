@@ -125,7 +125,7 @@ Focused references:
 - `scripts/install/test_sedna_release_installer.py`
 - TUI update-version and prompt tests
 - `codex doctor` release diagnostics
-- hosted `sedna.release-linux-smoke`
+- hosted `sedna.update-installer-contract`
 
 Validation workflow reference:
 
