@@ -51,6 +51,40 @@ builds use `rust-v<semver>@<upstream-sha>`, while builds whose upstream merge-ba
 tag use `rust-v<semver>+<distance>@<upstream-sha>`, for example
 `0.126.0-alpha.5-sedna.1+upstream.1 (up:rust-v0.126.0-alpha.5+1@4f1d5f00 down:82fafe27)`.
 
+### Automatic update boundary
+
+Automatic update discovery is enabled only for supported Linux `x86_64` and
+`aarch64` installations. It selects a stable, strictly newer Sedna release;
+the `--require-newer-than` floor is checked before release assets are fetched or
+the `current` link can change. Equality and older candidates are rejected
+without mutating the installed release.
+
+Automatic discovery is a no-op for unsupported targets, prerelease candidates,
+and macOS. A manual operator invocation may opt into a prerelease with
+`--allow-prerelease`; Intel macOS preview verification is a separate explicit
+`--macos-preview` mode. These manual opt-ins do not change the automatic
+candidate boundary.
+
+The current contract is covered by the installer lower-bound and candidate
+tests (`scripts/install/test_sedna_release_lower_bound.py` and
+`scripts/install/test_sedna_release_installer.py`), the TUI update-version and
+prompt surfaces, `codex doctor` diagnostics, and the hosted
+`sedna.update-installer-contract` validation lane. The tests use a legacy unsigned
+fixture only to preserve compatibility; they are not modern release-trust
+assurance.
+
+The public installer form is explicit about its release source and candidate:
+
+```bash
+scripts/install_sedna_release_asset \
+  --repository sednalabs/codex \
+  --release-tag TAG
+```
+
+Manual prerelease verification adds `--allow-prerelease`. Intel macOS preview
+verification requires both `--allow-prerelease` and `--macos-preview`; neither
+flag changes automatic update discovery.
+
 ### GitHub Actions
 
 Use the `sedna-release` workflow for fork-owned GitHub releases.

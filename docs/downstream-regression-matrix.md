@@ -110,6 +110,23 @@ Focused targeted lanes for iterative work on the current carry seams:
   - Explicit full-history registry/code audit against the checked-out head and
     current upstream mirror.
 
+## Sedna release update routing
+
+The installer and update surfaces share one boundary: automatic discovery is
+limited to stable, strictly newer releases on Linux `x86_64` and `aarch64`.
+Unsupported targets, prereleases, and macOS are automatic no-ops. The
+`--require-newer-than` rejection happens before asset downloads or `current`
+activation. Manual `--allow-prerelease` and `--macos-preview` are explicit
+operator modes and do not broaden automatic discovery.
+
+Focused references:
+
+- `scripts/install/test_sedna_release_lower_bound.py`
+- `scripts/install/test_sedna_release_installer.py`
+- TUI update-version and prompt tests
+- `codex doctor` release diagnostics
+- hosted `sedna.update-installer-contract`
+
 Validation workflow reference:
 
 - `docs/validation_workflow.md`
