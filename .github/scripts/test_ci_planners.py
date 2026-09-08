@@ -9647,7 +9647,7 @@ fi
             },
             {
                 "default": "off",
-                "options": ["off", "preview", "notarized"],
+                "options": ["off", "preview", "unnotarized", "notarized"],
             },
         )
 
@@ -9679,7 +9679,7 @@ fi
                     },
                     {
                         "default": "off",
-                        "options": ["off", "preview", "notarized"],
+                        "options": ["off", "preview", "unnotarized", "notarized"],
                     },
                 )
 

@@ -8,12 +8,13 @@ allow_prerelease=false
 require_newer_than=""
 require_newer_than_set=false
 macos_preview=false
+macos_unnotarized=false
 verify_attestation=false
 verify_signatures=false
 allow_historical_x86=false
 
 usage() {
-  echo "usage: install_sedna_release_asset --repository sednalabs/codex --release-tag TAG|latest [--dry-run] [--allow-prerelease] [--require-newer-than VERSION] [--verify-signatures] [--verify-attestation] [--allow-historical-x86] [--macos-preview]" >&2
+  echo "usage: install_sedna_release_asset --repository sednalabs/codex --release-tag TAG|latest [--dry-run] [--allow-prerelease] [--require-newer-than VERSION] [--verify-signatures] [--verify-attestation] [--allow-historical-x86] [--macos-preview|--macos-unnotarized]" >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -47,6 +48,10 @@ while [[ $# -gt 0 ]]; do
       macos_preview=true
       shift
       ;;
+    --macos-unnotarized)
+      macos_unnotarized=true
+      shift
+      ;;
     --verify-attestation)
       verify_attestation=true
       shift
@@ -71,6 +76,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$macos_preview" == "true" && "$macos_unnotarized" == "true" ]]; then
+  echo "error: --macos-preview and --macos-unnotarized are mutually exclusive" >&2
+  exit 1
+fi
+
 if [[ "$(printf '%s' "$repository" | tr '[:upper:]' '[:lower:]')" != "sednalabs/codex" ]]; then
   printf 'error: repository must be sednalabs/codex, got %s\n' "$repository" >&2
   exit 1
@@ -94,6 +104,9 @@ case "${host_os}/${host_arch}" in
     if [[ "$macos_preview" == "true" ]]; then
       checksum_name="SHA256SUMS-${target}-UNNOTARIZED-PREVIEW.txt"
       metadata_name="RELEASE-METADATA-${target}-UNNOTARIZED-PREVIEW.json"
+    elif [[ "$macos_unnotarized" == "true" ]]; then
+      checksum_name="SHA256SUMS-${target}-UNNOTARIZED.txt"
+      metadata_name="RELEASE-METADATA-${target}-UNNOTARIZED.json"
     else
       checksum_name="SHA256SUMS-${target}.txt"
       metadata_name="RELEASE-METADATA-${target}.json"
@@ -449,6 +462,8 @@ release_version="${release_tag#v}"
 archive_name="codex-sedna-${release_version}-${target}.tar.gz"
 if [[ "$target" == "x86_64-apple-darwin" && "$macos_preview" == "true" ]]; then
   archive_name="codex-sedna-${release_version}-${target}-UNNOTARIZED-PREVIEW.tar.gz"
+elif [[ "$target" == "x86_64-apple-darwin" && "$macos_unnotarized" == "true" ]]; then
+  archive_name="codex-sedna-${release_version}-${target}-UNNOTARIZED.tar.gz"
 fi
 
 archive_base="${archive_name%.tar.gz}"
@@ -582,14 +597,14 @@ while IFS=$'\t' read -r name asset_id; do
   esac
 done < "$asset_manifest"
 
-python3 - "$work_dir" "$archive_name" "$checksum_name" "$metadata_name" "$release_tag" "$release_version" "$target" "$macos_preview" "$sbom_name" "$attestation_bundle_name" "$codex_sigstore_name" "$proxy_sigstore_name" "$require_linux_signatures" "$require_linux_provenance" <<'PY'
+python3 - "$work_dir" "$archive_name" "$checksum_name" "$metadata_name" "$release_tag" "$release_version" "$target" "$macos_preview" "$macos_unnotarized" "$sbom_name" "$attestation_bundle_name" "$codex_sigstore_name" "$proxy_sigstore_name" "$require_linux_signatures" "$require_linux_provenance" <<'PY'
 import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 
-work_dir, archive_name, checksum_name, metadata_name, release_tag, release_version, target, macos_preview, sbom_name, attestation_bundle_name, codex_sigstore_name, proxy_sigstore_name, require_linux_signatures, require_linux_provenance = sys.argv[1:15]
+work_dir, archive_name, checksum_name, metadata_name, release_tag, release_version, target, macos_preview, macos_unnotarized, sbom_name, attestation_bundle_name, codex_sigstore_name, proxy_sigstore_name, require_linux_signatures, require_linux_provenance = sys.argv[1:16]
 root = Path(work_dir)
 metadata = json.loads((root / metadata_name).read_text(encoding="utf-8"))
 expected = {
@@ -611,7 +626,11 @@ if target == "x86_64-apple-darwin":
             "gatekeeper_ready": False,
         }
         if macos_preview == "true"
-        else {"signing": "developer-id", "notarized": True}
+        else (
+            {"distribution": "unnotarized", "signing": "ad-hoc", "notarized": False, "gatekeeper_ready": False}
+            if macos_unnotarized == "true"
+            else {"signing": "developer-id", "notarized": True}
+        )
     )
     for key, value in expected_trust.items():
         if metadata.get(key) != value:
