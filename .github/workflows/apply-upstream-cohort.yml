@@ -353,7 +353,7 @@ jobs:
           path: ${{ runner.temp }}/w13825-sdk-build-candidate/diagnostics
           if-no-files-found: ignore
 
-  sdk-code-mode-preimage-diagnostic:
+  sdk-api-generation-preimage-diagnostic:
     if: github.ref_name == 'worker/w13825-sdk-network-proxy-diagnostic'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -455,22 +455,22 @@ jobs:
           path: ${{ runner.temp }}/w13825-sdk-input
           merge-multiple: true
 
-      - name: Probe exact SDK code-mode preimage
+      - name: Probe exact SDK API-generation preimage
         shell: bash
         run: |
           set -euo pipefail
           python3 "${GITHUB_WORKSPACE}/helper-checkout/.github/scripts/apply-upstream-cohort.py" \
-            --probe-sdk-code-mode-preimage-only \
+            --probe-sdk-api-generation-preimage-only \
             --repo-root "${GITHUB_WORKSPACE}/source-candidate" \
             --artifact-dir "${RUNNER_TEMP}/w13825-sdk-input" \
-            --output-dir "${RUNNER_TEMP}/w13825-sdk-code-mode-preimage-diagnostic" \
+            --output-dir "${RUNNER_TEMP}/w13825-sdk-api-generation-preimage-diagnostic" \
             --provider-receipt "${RUNNER_TEMP}/w13825-sdk-provider.json" \
             --expected-workflow-sha "${EXPECTED_WORKFLOW_SHA}" \
             --expected-workflow-tree "${EXPECTED_WORKFLOW_TREE}"
 
-      - name: Upload SDK code-mode preimage diagnostic
+      - name: Upload SDK API-generation preimage diagnostic
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: sdk-code-mode-preimage-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/w13825-sdk-code-mode-preimage-diagnostic
+          name: sdk-api-generation-preimage-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/w13825-sdk-api-generation-preimage-diagnostic
           if-no-files-found: error

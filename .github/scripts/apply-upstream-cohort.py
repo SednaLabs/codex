@@ -629,8 +629,25 @@ SDK_BUNDLE_PROBE_PATHS = [
     "codex-rs/websocket-client/src/lib_tests.rs",
 ]
 SDK_BUNDLE_PROBE_PATHS_SHA256 = "bafd2e6ed26638c260c5979c65db9a60ea5b085c69189439bdd7a9759c9e114d"
-CODE_MODE_PREIMAGE_PATHS = ["codex-rs/tools/src/code_mode.rs"]
-CODE_MODE_PREIMAGE_PATHS_SHA256 = "6b19655d8f34fc6786dcbae8f044c00c186c98e6c73f357823bcab962bcbf5b6"
+API_GENERATION_PREIMAGE_PATHS = [
+    "codex-rs/codex-mcp/src/binding.rs",
+    "codex-rs/codex-mcp/src/binding_clients.rs",
+    "codex-rs/codex-mcp/src/connection_manager.rs",
+    "codex-rs/codex-mcp/src/connection_manager/required.rs",
+    "codex-rs/codex-mcp/src/connection_manager/resources.rs",
+    "codex-rs/codex-mcp/src/connection_manager/startup.rs",
+    "codex-rs/codex-mcp/src/connection_manager/tool_catalog.rs",
+    "codex-rs/codex-mcp/src/elicitation.rs",
+    "codex-rs/codex-mcp/src/lib.rs",
+    "codex-rs/codex-mcp/src/mcp/auth.rs",
+    "codex-rs/codex-mcp/src/mcp/mod.rs",
+    "codex-rs/codex-mcp/src/resource_client.rs",
+    "codex-rs/codex-mcp/src/rmcp_client.rs",
+    "codex-rs/codex-mcp/src/server.rs",
+    "codex-rs/codex-mcp/src/tool_catalog_cache.rs",
+    "codex-rs/history/src/lib.rs",
+]
+API_GENERATION_PREIMAGE_PATHS_SHA256 = "bd8b5454a81418453b6eb73e251de3ecdc86eab06e29429ad1b3f546db562c2f"
 SDK_BUNDLE_ROUTE_WITNESS = ("100644", "blob", "29705e44eb66f235adee5a8932264ee778f98ced")
 ALLOWED_MUTABLE_PATHS = sorted(set(OVERLAY_CHANGED_PATHS) | set(GENERATED_PATHS))
 
@@ -1044,6 +1061,34 @@ def tuple_json(entry: tuple[str, str, str] | None) -> dict[str, str] | None:
         return None
     mode, object_type, oid = entry
     return {"mode": mode, "type": object_type, "oid": oid}
+
+
+def history_api_generation_transform(repo: pathlib.Path, entry: tuple[str, str, str] | None) -> dict[str, Any]:
+    require(entry is not None, "history API-generation preimage is missing")
+    mode, object_type, oid = entry
+    require(mode == "100644" and object_type == "blob", "history API-generation preimage is not a regular blob")
+    source = run_bytes("git", "cat-file", "blob", oid, cwd=repo)
+    replacements = (
+        (b"fn schema_name() -> String {", b"fn schema_name() -> std::borrow::Cow<'static, str> {", 2),
+        (b'"RolloutItem".to_string()', b'std::borrow::Cow::Borrowed("RolloutItem")', 1),
+        (b'"CompactedItem".to_string()', b'std::borrow::Cow::Borrowed("CompactedItem")', 1),
+        (b"-> schemars::schema::Schema {", b"-> schemars::Schema {", 2),
+    )
+    transformed = source
+    counts: dict[str, int] = {}
+    for old, new, expected in replacements:
+        count = transformed.count(old)
+        require(count == expected, f"history API-generation transform occurrence mismatch: {old!r}")
+        counts[old.decode()] = count
+        transformed = transformed.replace(old, new)
+    output_oid = hashlib.sha1(f"blob {len(transformed)}\0".encode() + transformed).hexdigest()
+    return {
+        "input": {"mode": mode, "type": object_type, "oid": oid},
+        "output": {"mode": mode, "type": object_type, "oid": output_oid},
+        "replacement_counts": counts,
+        "replacement_count": sum(counts.values()),
+        "output_sha256": hashlib.sha256(transformed).hexdigest(),
+    }
 
 
 def tree_entry(
@@ -2469,25 +2514,26 @@ def emit_sdk_bundle_path_receipt(repo: pathlib.Path, diagnostics: pathlib.Path) 
     return receipt
 
 
-def emit_sdk_code_mode_preimage_receipt(
+def emit_sdk_api_generation_preimage_receipt(
     repo: pathlib.Path,
     output: pathlib.Path,
     provider_receipt: pathlib.Path,
     workflow_sha: str,
     workflow_tree: str,
 ) -> dict[str, Any]:
-    require(CODE_MODE_PREIMAGE_PATHS == sorted(CODE_MODE_PREIMAGE_PATHS), "diagnostic paths are not sorted")
-    require(len(CODE_MODE_PREIMAGE_PATHS) == 1, "diagnostic path scope is not exactly one path")
-    require(path_digest(CODE_MODE_PREIMAGE_PATHS) == CODE_MODE_PREIMAGE_PATHS_SHA256, "diagnostic path-set digest mismatch")
+    require(API_GENERATION_PREIMAGE_PATHS == sorted(API_GENERATION_PREIMAGE_PATHS), "diagnostic paths are not sorted")
+    require(len(API_GENERATION_PREIMAGE_PATHS) == 16, "diagnostic path scope is not exactly 16 paths")
+    require(path_digest(API_GENERATION_PREIMAGE_PATHS) == API_GENERATION_PREIMAGE_PATHS_SHA256, "diagnostic path-set digest mismatch")
     entries = [
         {"path": path, "entry": tuple_json(tree_entry(repo, SDK_CANDIDATE_SHA, path))}
-        for path in CODE_MODE_PREIMAGE_PATHS
+        for path in API_GENERATION_PREIMAGE_PATHS
     ]
     missing_paths = sorted(item["path"] for item in entries if item["entry"] is None)
-    require(set(missing_paths).issubset(set(CODE_MODE_PREIMAGE_PATHS)), "diagnostic missing path escaped probe set")
+    require(set(missing_paths).issubset(set(API_GENERATION_PREIMAGE_PATHS)), "diagnostic missing path escaped probe set")
     provider = verify_probe_provider_receipt(provider_receipt)
+    history_entry = next(item["entry"] for item in entries if item["path"] == "codex-rs/history/src/lib.rs")
     receipt = {
-        "schema": "sdk-code-mode-preimage-diagnostic",
+        "schema": "sdk-api-generation-preimage-diagnostic",
         "version": 1,
         "repository": REPOSITORY,
         "diagnostic_workflow_sha": workflow_sha,
@@ -2503,10 +2549,16 @@ def emit_sdk_code_mode_preimage_receipt(
         "artifact_provider": provider,
         "candidate_sha": SDK_CANDIDATE_SHA,
         "candidate_tree": SDK_CANDIDATE_TREE,
-        "path_set_sha256": path_digest(CODE_MODE_PREIMAGE_PATHS),
+        "path_count": len(API_GENERATION_PREIMAGE_PATHS),
+        "paths": API_GENERATION_PREIMAGE_PATHS,
+        "path_set_sha256": path_digest(API_GENERATION_PREIMAGE_PATHS),
         "missing_paths": missing_paths,
         "missing_path_count": len(missing_paths),
         "entries": entries,
+        "history_api_generation_transform": history_api_generation_transform(
+            repo,
+            None if history_entry is None else (history_entry["mode"], history_entry["type"], history_entry["oid"]),
+        ),
     }
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "receipt.json", receipt)
@@ -3641,7 +3693,7 @@ def main() -> None:
     parser.add_argument("--validate-uv-identity")
     parser.add_argument("--prepare-inputs-only", action="store_true")
     parser.add_argument("--metadata-manifest-only", action="store_true")
-    parser.add_argument("--probe-sdk-code-mode-preimage-only", action="store_true")
+    parser.add_argument("--probe-sdk-api-generation-preimage-only", action="store_true")
     parser.add_argument("--provider-receipt", type=pathlib.Path)
     args = parser.parse_args()
 
@@ -3694,7 +3746,7 @@ def main() -> None:
     repo = absolute_argument(args.repo_root, "repo-root", must_exist=True)
     artifact = absolute_argument(args.artifact_dir, "artifact-dir", must_exist=True)
     require(repo.is_dir() and artifact.is_dir(), "repository and artifact inputs must be directories")
-    if args.probe_sdk_code_mode_preimage_only:
+    if args.probe_sdk_api_generation_preimage_only:
         require(args.output_dir is not None, "diagnostic output path is required")
         require(args.preflight_dir is None, "diagnostic mode does not accept a preflight path")
         require(args.provider_receipt is not None, "diagnostic provider receipt is required")
@@ -3711,7 +3763,7 @@ def main() -> None:
             isolated_repo = import_sdk_bundle_for_probe(files["bundle"], temp)
             verify_imported_sdk_objects(isolated_repo)
             output = absolute_argument(args.output_dir, "output-dir", must_exist=False)
-            emission = emit_sdk_code_mode_preimage_receipt(
+            emission = emit_sdk_api_generation_preimage_receipt(
                 isolated_repo,
                 output,
                 provider_receipt,
