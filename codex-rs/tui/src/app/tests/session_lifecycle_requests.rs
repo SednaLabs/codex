@@ -442,6 +442,10 @@ async fn replay_only_model_persistence_does_not_write_config() -> Result<()> {
         start_recording_app_server(&app.config, /*blocked_thread_read_id*/ None).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
 
+    // Observe only events produced by the actions below, not session setup.
+    while app_event_rx.try_recv().is_ok() {}
+    while op_rx.try_recv().is_ok() {}
+
     let live_target = ThreadId::new();
     app.thread_event_channels
         .insert(live_target, ThreadEventChannel::new(/*capacity*/ 1));
