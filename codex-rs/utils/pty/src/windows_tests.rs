@@ -194,13 +194,30 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
     let code = format!(
         "print('__CODEX_CHILD_'+'READY__', flush=True); value=input(); print('{VALUE_MARKER}'+value.encode('utf-8').hex(), flush=True)"
     );
+    // Keep the submitted foreground command short enough that PowerShell's
+    // line editor cannot leave it partially entered under ConPTY.  The
+    // command still starts the same foreground Python child, while the test
+    // script carries the input/output assertions above.
+    let script_path = std::env::temp_dir().join(format!(
+        "codex-conpty-foreground-{}-{}.py",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    std::fs::write(&script_path, &code)?;
+    let script_path = script_path.to_string_lossy().into_owned();
     let expected = "cafeé 漢字";
     let expected_marker = format!("{VALUE_MARKER}{}", utf8_hex(expected));
     let mut shells = vec![WindowsShell {
         name: "cmd",
         program: std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string()),
         args: vec!["/D".to_string(), "/Q".to_string()],
-        child_command: format!("\"{}\" -u -c \"{code}\"", python.replace('"', "\"\"")),
+        child_command: format!(
+            "\"{}\" -u \"{}\"",
+            python.replace('"', "\"\""),
+            script_path.replace('"', "\"\"")
+        ),
         ready_marker: None,
     }];
     if let Some(program) = find_powershell() {
@@ -214,7 +231,11 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
                 "-Command".to_string(),
                 format!("[Console]::WriteLine('{SHELL_READY_MARKER}')"),
             ],
-            child_command: format!("& '{}' -u -c \"{code}\"", python.replace('\'', "''")),
+            child_command: format!(
+                "& '{}' -u '{}'",
+                python.replace('\'', "''"),
+                script_path.replace('\'', "''")
+            ),
             ready_marker: Some(SHELL_READY_MARKER),
         });
     }
@@ -270,6 +291,8 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
             String::from_utf8_lossy(&output)
         );
     }
+
+    std::fs::remove_file(script_path)?;
 
     Ok(())
 }
