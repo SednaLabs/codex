@@ -19,6 +19,10 @@ use tokio::io::AsyncSeekExt;
 use tokio::process::Command;
 use tokio::time::sleep;
 
+use crate::managed_install::ExecutableIdentity;
+#[cfg(unix)]
+use crate::managed_install::executable_identity;
+
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(60);
 const STOP_TIMEOUT: Duration = Duration::from_secs(70);
@@ -39,6 +43,16 @@ pub(crate) struct PidBackend {
 struct PidRecord {
     pid: u32,
     process_start_time: String,
+    #[serde(default)]
+    executable: Option<PathBuf>,
+    #[serde(default)]
+    executable_identity: Option<ExecutableIdentity>,
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+pub(crate) struct PidRecordSnapshot {
+    record: PidRecord,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +130,78 @@ impl PidBackend {
     }
 
     #[cfg(unix)]
+    pub(crate) async fn is_running_from_executable(
+        &self,
+        executable: &Path,
+        executable_identity: &ExecutableIdentity,
+    ) -> Result<bool> {
+        loop {
+            match self.read_pid_file_state().await? {
+                PidFileState::Missing | PidFileState::Starting => return Ok(false),
+                PidFileState::Running(record) => {
+                    if !self.record_is_active(&record).await? {
+                        match self.refresh_after_stale_record(&record).await? {
+                            PidFileState::Missing => return Ok(false),
+                            PidFileState::Starting | PidFileState::Running(_) => continue,
+                        }
+                    }
+                    if record.executable.as_deref() != Some(executable)
+                        || record.executable_identity.as_ref() != Some(executable_identity)
+                    {
+                        return Ok(false);
+                    }
+                    return Ok(live_process_uses_executable(record.pid, executable).await);
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn update_running_executable_record(&self) -> Result<PidRecordSnapshot> {
+        let executable_identity = executable_identity(&self.codex_bin).await?;
+        let reservation_lock = self.acquire_reservation_lock().await?;
+        let mut record = match self.read_pid_file_state_with_lock_held().await? {
+            PidFileState::Running(record) if self.record_is_active(&record).await? => record,
+            PidFileState::Missing | PidFileState::Starting | PidFileState::Running(_) => {
+                bail!("cannot update executable record for inactive pid-managed process")
+            }
+        };
+        let snapshot = PidRecordSnapshot {
+            record: record.clone(),
+        };
+        record.executable = Some(self.codex_bin.clone());
+        record.executable_identity = Some(executable_identity);
+        self.write_pid_record(&record).await?;
+        drop(reservation_lock);
+        Ok(snapshot)
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn restore_running_executable_record(
+        &self,
+        snapshot: PidRecordSnapshot,
+    ) -> Result<()> {
+        let reservation_lock = self.acquire_reservation_lock().await?;
+        let record = match self.read_pid_file_state_with_lock_held().await? {
+            PidFileState::Running(record)
+                if record.pid == snapshot.record.pid
+                    && record.process_start_time == snapshot.record.process_start_time
+                    && self.record_is_active(&record).await? =>
+            {
+                snapshot.record
+            }
+            PidFileState::Missing | PidFileState::Starting | PidFileState::Running(_) => {
+                bail!("cannot restore executable record for inactive pid-managed process")
+            }
+        };
+        self.write_pid_record(&record).await?;
+        drop(reservation_lock);
+        Ok(())
+    }
+
+    #[cfg(unix)]
     pub(crate) async fn start(&self) -> Result<Option<u32>> {
+        let executable_identity = executable_identity(&self.codex_bin).await?;
         if let Some(parent) = self.pid_file.parent() {
             fs::create_dir_all(parent)
                 .await
@@ -201,6 +286,8 @@ impl PidBackend {
             Ok(process_start_time) => PidRecord {
                 pid,
                 process_start_time,
+                executable: Some(self.codex_bin.clone()),
+                executable_identity: Some(executable_identity),
             },
             Err(err) => {
                 let _ = self.terminate_process(pid);
@@ -211,22 +298,10 @@ impl PidBackend {
                 return Err(err).context(context);
             }
         };
-        let contents = serde_json::to_vec(&record).context("failed to serialize pid record")?;
-        let temp_pid_file = self.pid_file.with_extension("pid.tmp");
-        if let Err(err) = fs::write(&temp_pid_file, &contents).await {
+        if let Err(err) = self.write_pid_record(&record).await {
             let _ = self.terminate_process(pid);
             let _ = fs::remove_file(&self.pid_file).await;
-            return Err(err).with_context(|| {
-                format!("failed to write pid temp file {}", temp_pid_file.display())
-            });
-        }
-        if let Err(err) = fs::rename(&temp_pid_file, &self.pid_file).await {
-            let _ = self.terminate_process(pid);
-            let _ = fs::remove_file(&temp_pid_file).await;
-            let _ = fs::remove_file(&self.pid_file).await;
-            return Err(err).with_context(|| {
-                format!("failed to publish pid file {}", self.pid_file.display())
-            });
+            return Err(err);
         }
         drop(reservation_lock);
         Ok(Some(pid))
@@ -354,6 +429,24 @@ impl PidBackend {
         let record = serde_json::from_str(&contents)
             .with_context(|| format!("invalid pid file contents in {}", self.pid_file.display()))?;
         Ok(PidFileState::Running(record))
+    }
+
+    #[cfg(unix)]
+    async fn write_pid_record(&self, record: &PidRecord) -> Result<()> {
+        let contents = serde_json::to_vec(record).context("failed to serialize pid record")?;
+        let temp_pid_file = self.pid_file.with_extension("pid.tmp");
+        fs::write(&temp_pid_file, &contents)
+            .await
+            .with_context(|| {
+                format!("failed to write pid temp file {}", temp_pid_file.display())
+            })?;
+        if let Err(err) = fs::rename(&temp_pid_file, &self.pid_file).await {
+            let _ = fs::remove_file(&temp_pid_file).await;
+            return Err(err).with_context(|| {
+                format!("failed to publish pid file {}", self.pid_file.display())
+            });
+        }
+        Ok(())
     }
 
     async fn refresh_after_stale_record(&self, expected: &PidRecord) -> Result<PidFileState> {
@@ -584,6 +677,28 @@ async fn process_matches_record(record: &PidRecord) -> Result<bool> {
         Err(_err) if !process_exists(record.pid) => Ok(false),
         Err(err) => Err(err),
     }
+}
+
+#[cfg(unix)]
+async fn live_process_uses_executable(pid: u32, executable: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        live_executable_proof_matches(
+            fs::canonicalize(format!("/proc/{pid}/exe")).await.ok(),
+            executable,
+        )
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        live_executable_proof_matches(/*observed*/ None, executable)
+    }
+}
+
+#[cfg(unix)]
+fn live_executable_proof_matches(observed: Option<PathBuf>, executable: &Path) -> bool {
+    observed.as_deref() == Some(executable)
 }
 
 #[cfg(not(unix))]

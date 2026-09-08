@@ -18,9 +18,13 @@ use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_transport::app_server_control_socket_path;
 use codex_utils_home_dir::find_codex_home;
+#[cfg(unix)]
+use managed_install::executable_identity;
 use managed_install::managed_codex_bin;
 #[cfg(unix)]
 use managed_install::managed_codex_version;
+#[cfg(unix)]
+use managed_install::resolved_managed_standalone_release;
 use serde::Serialize;
 use settings::DaemonSettings;
 use tokio::time::sleep;
@@ -33,6 +37,10 @@ const UPDATE_PID_FILE_NAME: &str = "app-server-updater.pid";
 const OPERATION_LOCK_FILE_NAME: &str = "daemon.lock";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const STATE_DIR_NAME: &str = "app-server-daemon";
+const SEDNA_RELEASES_URL: &str = "https://github.com/sednalabs/codex/releases";
+const UPSTREAM_RELEASE_REPOSITORY: &str = "openai/codex";
+const UPSTREAM_RELEASE_TAG_PREFIX: &str = "rust-v";
+const UPSTREAM_INSTALL_COMMAND: &str = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LifecycleCommand {
@@ -188,6 +196,20 @@ enum RestartDecision {
     Restart,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdaterLifecycleAction {
+    Start,
+    Preserve,
+    Replace,
+    Stop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteControlStartAction {
+    Start,
+    Bootstrap,
+}
+
 pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
     ensure_supported_platform()?;
     Daemon::from_environment()?.run(command).await
@@ -320,7 +342,10 @@ impl Daemon {
         }
 
         self.ensure_managed_codex_bin()?;
-        let pid = self.start_managed_backend(&settings).await?;
+        let managed_release = self.resolved_managed_release().await?;
+        let pid = self
+            .start_managed_backend_with_bin(&settings, &managed_release.executable)
+            .await?;
         let info = self.wait_until_ready().await?;
         Ok(self
             .output(
@@ -343,11 +368,14 @@ impl Daemon {
         }
 
         self.ensure_managed_codex_bin()?;
+        let managed_release = self.resolved_managed_release().await?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
             backend.stop().await?;
         }
 
-        let pid = self.start_managed_backend(&settings).await?;
+        let pid = self
+            .start_managed_backend_with_bin(&settings, &managed_release.executable)
+            .await?;
         let info = self.wait_until_ready().await?;
         Ok(self
             .output(
@@ -399,7 +427,22 @@ impl Daemon {
         };
 
         if should_reexec_updater(updater_refresh_mode, outcome) {
-            crate::update_loop::reexec_managed_updater(managed_codex_bin)?;
+            let updater = backend::pid_update_loop_backend(
+                self.backend_paths_with_bin(&settings, managed_codex_bin),
+            );
+            let previous_record = updater.update_running_executable_record().await?;
+            if let Err(reexec_error) = crate::update_loop::reexec_managed_updater(managed_codex_bin)
+            {
+                if let Err(restore_error) = updater
+                    .restore_running_executable_record(previous_record)
+                    .await
+                {
+                    return Err(reexec_error.context(format!(
+                        "failed to restore updater executable record after re-exec failure: {restore_error:#}"
+                    )));
+                }
+                return Err(reexec_error);
+            }
         }
 
         Ok(outcome)
@@ -494,20 +537,31 @@ impl Daemon {
     async fn ensure_remote_control_started(&self) -> Result<RemoteControlStartOutput> {
         let _operation_lock = self.acquire_operation_lock().await?;
         let settings = self.load_settings().await?;
-        if self.is_bootstrapped(&settings).await? {
-            let _ = self
-                .set_remote_control_locked(RemoteControlMode::Enabled)
-                .await?;
-            let output = self.start().await?;
-            return Ok(RemoteControlStartOutput::Start(output));
+        match remote_control_start_action(self.is_bootstrapped(&settings).await?) {
+            RemoteControlStartAction::Start => {
+                let _ = self
+                    .set_remote_control_locked(RemoteControlMode::Enabled)
+                    .await?;
+                let mut reconciled_settings = self.load_settings().await?;
+                let managed_release = self.resolved_managed_release().await?;
+                self.reconcile_updater(&reconciled_settings, &managed_release)
+                    .await?;
+                if !reconciled_settings.bootstrapped {
+                    reconciled_settings.bootstrapped = true;
+                    reconciled_settings.save(&self.settings_file).await?;
+                }
+                let output = self.start().await?;
+                Ok(RemoteControlStartOutput::Start(output))
+            }
+            RemoteControlStartAction::Bootstrap => {
+                let output = self
+                    .bootstrap_locked(BootstrapOptions {
+                        remote_control_enabled: true,
+                    })
+                    .await?;
+                Ok(RemoteControlStartOutput::Bootstrap(output))
+            }
         }
-
-        let output = self
-            .bootstrap_locked(BootstrapOptions {
-                remote_control_enabled: true,
-            })
-            .await?;
-        Ok(RemoteControlStartOutput::Bootstrap(output))
     }
 
     async fn ensure_remote_control_ready(&self) -> Result<RemoteControlReadyOutput> {
@@ -569,8 +623,11 @@ impl Daemon {
 
         let app_server_version = if let Some(backend) = backend {
             self.ensure_managed_codex_bin()?;
+            let managed_release = self.resolved_managed_release().await?;
             backend.stop().await?;
-            let _ = self.start_managed_backend(&settings).await?;
+            let _ = self
+                .start_managed_backend_with_bin(&settings, &managed_release.executable)
+                .await?;
             Some(self.wait_until_ready().await?.app_server_version)
         } else {
             None
@@ -586,9 +643,11 @@ impl Daemon {
 
     async fn bootstrap_locked(&self, options: BootstrapOptions) -> Result<BootstrapOutput> {
         self.ensure_managed_codex_bin()?;
+        let managed_release = self.resolved_managed_release().await?;
 
-        let settings = DaemonSettings {
+        let mut settings = DaemonSettings {
             remote_control_enabled: options.remote_control_enabled,
+            bootstrapped: false,
         };
         if client::probe(&self.socket_path).await.is_ok()
             && self.running_backend(&settings).await?.is_none()
@@ -603,22 +662,34 @@ impl Daemon {
             backend.stop().await?;
         }
 
-        let backend = backend::pid_backend(self.backend_paths(&settings));
+        let backend = backend::pid_backend(
+            self.backend_paths_with_bin(&settings, &managed_release.executable),
+        );
         backend.start().await?;
-        let updater = backend::pid_update_loop_backend(self.backend_paths(&settings));
-        if updater.is_starting_or_running().await? {
-            updater.stop().await?;
-        }
-        updater.start().await?;
+        let auto_update_enabled = managed_release.sedna_auto_update.is_some();
+        self.reconcile_updater(&settings, &managed_release).await?;
 
         let info = self.wait_until_ready().await?;
-        let managed_codex_version = self.managed_codex_version_best_effort().await;
+        settings.bootstrapped = true;
+        settings.save(&self.settings_file).await?;
+        let managed_codex_version = {
+            #[cfg(unix)]
+            {
+                managed_codex_version(&managed_release.executable)
+                    .await
+                    .ok()
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        };
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,
-            auto_update_enabled: true,
+            auto_update_enabled,
             remote_control_enabled: settings.remote_control_enabled,
-            managed_codex_path: self.managed_codex_bin.clone(),
+            managed_codex_path: managed_release.executable,
             managed_codex_version,
             socket_path: self.socket_path.clone(),
             cli_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -644,11 +715,6 @@ impl Daemon {
         Ok(None)
     }
 
-    async fn start_managed_backend(&self, settings: &DaemonSettings) -> Result<Option<u32>> {
-        self.start_managed_backend_with_bin(settings, &self.managed_codex_bin)
-            .await
-    }
-
     async fn start_managed_backend_with_bin(
         &self,
         settings: &DaemonSettings,
@@ -660,8 +726,73 @@ impl Daemon {
     }
 
     async fn is_bootstrapped(&self, settings: &DaemonSettings) -> Result<bool> {
+        if settings.bootstrapped {
+            return Ok(remote_control_bootstrap_ready(
+                /*persisted_bootstrap*/ true, /*legacy_updater_running*/ false,
+            ));
+        }
         let updater = backend::pid_update_loop_backend(self.backend_paths(settings));
-        updater.is_starting_or_running().await
+        Ok(remote_control_bootstrap_ready(
+            /*persisted_bootstrap*/ false,
+            updater.is_starting_or_running().await?,
+        ))
+    }
+
+    async fn reconcile_updater(
+        &self,
+        settings: &DaemonSettings,
+        managed_release: &managed_install::ManagedStandaloneRelease,
+    ) -> Result<()> {
+        let updater = backend::pid_update_loop_backend(
+            self.backend_paths_with_bin(settings, &managed_release.executable),
+        );
+        let updater_is_running = updater.is_starting_or_running().await?;
+        let updater_matches_managed_release =
+            if managed_release.sedna_auto_update.is_some() && updater_is_running {
+                #[cfg(unix)]
+                {
+                    let managed_identity = executable_identity(&managed_release.executable).await?;
+                    updater
+                        .is_running_from_executable(&managed_release.executable, &managed_identity)
+                        .await?
+                }
+                #[cfg(not(unix))]
+                {
+                    false
+                }
+            } else {
+                false
+            };
+        match updater_lifecycle_action(
+            managed_release.sedna_auto_update.is_some(),
+            updater_is_running,
+            updater_matches_managed_release,
+        ) {
+            UpdaterLifecycleAction::Start => {
+                updater.start().await?;
+            }
+            UpdaterLifecycleAction::Preserve => {}
+            UpdaterLifecycleAction::Replace => {
+                updater.stop().await?;
+                updater.start().await?;
+            }
+            UpdaterLifecycleAction::Stop => {
+                updater.stop().await?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    async fn resolved_managed_release(&self) -> Result<managed_install::ManagedStandaloneRelease> {
+        resolved_managed_standalone_release(&self.managed_codex_bin).await
+    }
+
+    #[cfg(not(unix))]
+    async fn resolved_managed_release(&self) -> Result<managed_install::ManagedStandaloneRelease> {
+        Err(anyhow!(
+            "pid-managed standalone releases are unsupported on this platform"
+        ))
     }
 
     fn ensure_managed_codex_bin(&self) -> Result<()> {
@@ -669,19 +800,19 @@ impl Daemon {
             return Ok(());
         }
 
-        let managed_codex_path = self.managed_codex_bin.display();
-        Err(anyhow!(
-            "managed standalone Codex install not found at {managed_codex_path}\n\n\
-             This command requires the standalone install managed by the Codex installer, because \
-             the daemon starts and updates app-server from that fixed path.\n\n\
-             Install it with:\n  curl -fsSL https://chatgpt.com/codex/install.sh | sh\n\n\
-             Then rerun the command you just tried."
-        ))
+        Err(anyhow!(missing_managed_install_message(
+            &self.managed_codex_bin,
+            option_env!("CODEX_RELEASE_REPOSITORY"),
+            option_env!("CODEX_RELEASE_TAG_PREFIX"),
+        )))
     }
 
     #[cfg(unix)]
     async fn managed_codex_version_best_effort(&self) -> Option<String> {
-        managed_codex_version(&self.managed_codex_bin).await.ok()
+        let managed_release = self.resolved_managed_release().await.ok()?;
+        managed_codex_version(&managed_release.executable)
+            .await
+            .ok()
     }
 
     #[cfg(not(unix))]
@@ -786,6 +917,62 @@ impl Daemon {
     }
 }
 
+fn updater_lifecycle_action(
+    auto_update_enabled: bool,
+    updater_is_running: bool,
+    updater_matches_managed_release: bool,
+) -> UpdaterLifecycleAction {
+    match (
+        auto_update_enabled,
+        updater_is_running,
+        updater_matches_managed_release,
+    ) {
+        (true, false, _) => UpdaterLifecycleAction::Start,
+        (true, true, true) => UpdaterLifecycleAction::Preserve,
+        (true, true, false) => UpdaterLifecycleAction::Replace,
+        (false, true, _) => UpdaterLifecycleAction::Stop,
+        (false, false, _) => UpdaterLifecycleAction::Preserve,
+    }
+}
+
+fn remote_control_bootstrap_ready(persisted_bootstrap: bool, legacy_updater_running: bool) -> bool {
+    persisted_bootstrap || legacy_updater_running
+}
+
+fn remote_control_start_action(bootstrapped: bool) -> RemoteControlStartAction {
+    if bootstrapped {
+        RemoteControlStartAction::Start
+    } else {
+        RemoteControlStartAction::Bootstrap
+    }
+}
+
+fn missing_managed_install_message(
+    managed_codex_bin: &Path,
+    release_repository: Option<&str>,
+    release_tag_prefix: Option<&str>,
+) -> String {
+    let install_guidance =
+        if codex_utils_version::is_sedna_release_identity(release_repository, release_tag_prefix) {
+            format!("Install a compatible Sedna standalone release from:\n  {SEDNA_RELEASES_URL}")
+        } else if matches!(release_repository, Some(UPSTREAM_RELEASE_REPOSITORY))
+            && matches!(release_tag_prefix, Some(UPSTREAM_RELEASE_TAG_PREFIX))
+        {
+            format!("Install it with:\n  {UPSTREAM_INSTALL_COMMAND}")
+        } else {
+            "Install a compatible standalone release for this build before rerunning the command."
+                .to_string()
+        };
+    format!(
+        "managed standalone Codex install not found at {}\n\n\
+         This command requires the standalone install managed by the Codex installer, because \
+         the daemon starts and updates app-server from that fixed path.\n\n\
+         {install_guidance}\n\n\
+         Then rerun the command you just tried.",
+        managed_codex_bin.display(),
+    )
+}
+
 fn remote_control_status(mode: RemoteControlMode) -> RemoteControlStatus {
     match mode {
         RemoteControlMode::Enabled => RemoteControlStatus::Enabled,
@@ -818,12 +1005,15 @@ fn restart_decision(
 }
 
 #[cfg(unix)]
-fn should_reexec_updater(
+pub(crate) fn should_reexec_updater(
     updater_refresh_mode: UpdaterRefreshMode,
     outcome: RestartIfRunningOutcome,
 ) -> bool {
     updater_refresh_mode == UpdaterRefreshMode::ReexecIfManagedBinaryChanged
-        && outcome == RestartIfRunningOutcome::Restarted
+        && matches!(
+            outcome,
+            RestartIfRunningOutcome::NotRunning | RestartIfRunningOutcome::Restarted
+        )
 }
 
 #[cfg(unix)]
@@ -858,15 +1048,22 @@ mod tests {
     use super::Daemon;
     use super::LifecycleOutput;
     use super::LifecycleStatus;
+    use super::RemoteControlStartAction;
     use super::RemoteControlStartOutput;
     use super::RemoteControlStatus;
     use super::RestartDecision;
     use super::RestartIfRunningOutcome;
     use super::RestartMode;
+    use super::UpdaterLifecycleAction;
     use super::UpdaterRefreshMode;
+    use super::missing_managed_install_message;
+    use super::remote_control_bootstrap_ready;
+    use super::remote_control_start_action;
     use super::restart_decision;
     use super::should_reexec_updater;
+    use super::updater_lifecycle_action;
     use crate::client::ProbeInfo;
+    use std::path::Path;
 
     #[test]
     fn remote_control_status_uses_camel_case_json() {
@@ -877,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn updater_reexec_waits_for_validated_restart() {
+    fn changed_updater_reexecs_after_restart_or_when_app_server_is_stopped() {
         assert_eq!(
             [
                 RestartIfRunningOutcome::Busy,
@@ -889,7 +1086,7 @@ mod tests {
             .map(|outcome| {
                 should_reexec_updater(UpdaterRefreshMode::ReexecIfManagedBinaryChanged, outcome)
             }),
-            [false, false, false, false, true]
+            [false, false, false, true, true]
         );
     }
 
@@ -905,6 +1102,83 @@ mod tests {
             ]
             .map(|outcome| should_reexec_updater(UpdaterRefreshMode::None, outcome)),
             [false, false, false, false, false]
+        );
+    }
+
+    #[test]
+    fn bootstrap_replaces_updater_a_after_current_moves_to_b_but_preserves_b() {
+        let updater_b_matches_current_b = true;
+        let updater_a_matches_current_b = false;
+        assert_eq!(
+            [
+                updater_lifecycle_action(
+                    /*auto_update_enabled*/ true, /*updater_is_running*/ false,
+                    /*updater_matches_managed_release*/ false,
+                ),
+                updater_lifecycle_action(
+                    /*auto_update_enabled*/ true,
+                    /*updater_is_running*/ true,
+                    updater_b_matches_current_b,
+                ),
+                updater_lifecycle_action(
+                    /*auto_update_enabled*/ true,
+                    /*updater_is_running*/ true,
+                    updater_a_matches_current_b,
+                ),
+                updater_lifecycle_action(
+                    /*auto_update_enabled*/ false, /*updater_is_running*/ true,
+                    /*updater_matches_managed_release*/ false,
+                ),
+                updater_lifecycle_action(
+                    /*auto_update_enabled*/ false, /*updater_is_running*/ false,
+                    /*updater_matches_managed_release*/ false,
+                ),
+            ],
+            [
+                UpdaterLifecycleAction::Start,
+                UpdaterLifecycleAction::Preserve,
+                // Updater A is live, but current now resolves to B: replace it for bootstrap.
+                UpdaterLifecycleAction::Replace,
+                UpdaterLifecycleAction::Stop,
+                UpdaterLifecycleAction::Preserve,
+            ]
+        );
+    }
+
+    #[test]
+    fn manual_current_release_stops_a_running_automatic_updater() {
+        assert_eq!(
+            updater_lifecycle_action(
+                /*auto_update_enabled*/ false, /*updater_is_running*/ true,
+                /*updater_matches_managed_release*/ false,
+            ),
+            UpdaterLifecycleAction::Stop
+        );
+    }
+
+    #[test]
+    fn persisted_bootstrap_keeps_repeated_remote_control_start_on_the_lifecycle_path() {
+        assert_eq!(
+            [
+                remote_control_start_action(remote_control_bootstrap_ready(
+                    /*persisted_bootstrap*/ true, /*legacy_updater_running*/ false,
+                )),
+                remote_control_start_action(remote_control_bootstrap_ready(
+                    /*persisted_bootstrap*/ true, /*legacy_updater_running*/ true,
+                )),
+                remote_control_start_action(remote_control_bootstrap_ready(
+                    /*persisted_bootstrap*/ false, /*legacy_updater_running*/ true,
+                )),
+                remote_control_start_action(remote_control_bootstrap_ready(
+                    /*persisted_bootstrap*/ false, /*legacy_updater_running*/ false,
+                )),
+            ],
+            [
+                RemoteControlStartAction::Start,
+                RemoteControlStartAction::Start,
+                RemoteControlStartAction::Start,
+                RemoteControlStartAction::Bootstrap,
+            ]
         );
     }
 
@@ -1032,6 +1306,38 @@ mod tests {
                 daemon.managed_codex_bin.display(),
                 stderr_log.display()
             )
+        );
+    }
+
+    #[test]
+    fn missing_managed_install_message_uses_sedna_release_guidance() {
+        assert_eq!(
+            missing_managed_install_message(
+                Path::new("/tmp/missing-codex"),
+                Some("sednalabs/codex"),
+                Some("v"),
+            ),
+            "managed standalone Codex install not found at /tmp/missing-codex\n\n\
+             This command requires the standalone install managed by the Codex installer, because \
+             the daemon starts and updates app-server from that fixed path.\n\n\
+             Install a compatible Sedna standalone release from:\n  https://github.com/sednalabs/codex/releases\n\n\
+             Then rerun the command you just tried."
+        );
+    }
+
+    #[test]
+    fn missing_managed_install_message_preserves_upstream_guidance() {
+        assert_eq!(
+            missing_managed_install_message(
+                Path::new("/tmp/missing-codex"),
+                Some("openai/codex"),
+                Some("rust-v"),
+            ),
+            "managed standalone Codex install not found at /tmp/missing-codex\n\n\
+             This command requires the standalone install managed by the Codex installer, because \
+             the daemon starts and updates app-server from that fixed path.\n\n\
+             Install it with:\n  curl -fsSL https://chatgpt.com/codex/install.sh | sh\n\n\
+             Then rerun the command you just tried."
         );
     }
 }

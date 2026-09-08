@@ -45,7 +45,7 @@ use crate::managed_install::ExecutableIdentity;
 #[cfg(unix)]
 use crate::managed_install::executable_identity;
 #[cfg(unix)]
-use crate::managed_install::resolved_managed_codex_bin;
+use crate::managed_install::resolved_managed_standalone_release;
 
 #[cfg(unix)]
 const INITIAL_UPDATE_DELAY: Duration = Duration::from_secs(5 * 60);
@@ -53,8 +53,6 @@ const INITIAL_UPDATE_DELAY: Duration = Duration::from_secs(5 * 60);
 const RESTART_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(unix)]
 const UPDATE_INTERVAL: Duration = Duration::from_secs(60 * 60);
-#[cfg(unix)]
-const INSTALL_URL: &str = "https://chatgpt.com/codex/install.sh";
 #[cfg(unix)]
 const SEDNA_STANDALONE_INSTALLER_URL: &str =
     "https://raw.githubusercontent.com/sednalabs/codex/main/scripts/install_sedna_release_asset";
@@ -107,11 +105,79 @@ async fn update_once(
     running_updater_identity: &ExecutableIdentity,
     terminate: &mut Signal,
 ) -> Result<UpdateLoopControl> {
-    install_latest_standalone(http).await?;
-
     let daemon = Daemon::from_environment()?;
-    let managed_codex_bin = resolved_managed_codex_bin(&daemon.managed_codex_bin).await?;
-    let managed_identity = executable_identity(&managed_codex_bin).await?;
+    let managed_release = resolved_managed_standalone_release(&daemon.managed_codex_bin).await?;
+    let Some(managed_sedna_release) = managed_release.sedna_auto_update else {
+        // A manually selected or otherwise ineligible current release must not
+        // leave a previously eligible updater alive. Reconcile it against this
+        // validated release without attempting an automatic network update.
+        let settings = daemon.load_settings().await?;
+        daemon
+            .reconcile_updater(&settings, &managed_release)
+            .await?;
+        return Ok(UpdateLoopControl::Continue);
+    };
+    let installed_from_version = managed_sedna_release.version;
+
+    // Reconcile an already-activated release before asking the installer for a
+    // newer one. In particular, an equality/no-update installer result must
+    // not leave an A updater or app server running after current moved to B.
+    if let UpdateLoopControl::Stop = reconcile_running_processes_to_managed_release(
+        &daemon,
+        running_updater_identity,
+        &managed_release.executable,
+        terminate,
+    )
+    .await?
+    {
+        return Ok(UpdateLoopControl::Stop);
+    }
+
+    install_latest_standalone(http, &installed_from_version).await?;
+
+    let managed_release = resolved_managed_standalone_release(&daemon.managed_codex_bin).await?;
+    let Some(installed_release) = managed_release.sedna_auto_update else {
+        let settings = daemon.load_settings().await?;
+        daemon
+            .reconcile_updater(&settings, &managed_release)
+            .await?;
+        return Err(anyhow::anyhow!(
+            "managed release is no longer eligible for automatic updates after installation"
+        ));
+    };
+    if !post_install_release_is_strictly_newer(&installed_from_version, &installed_release.version)
+    {
+        if let UpdateLoopControl::Stop = reconcile_running_processes_to_managed_release(
+            &daemon,
+            running_updater_identity,
+            &managed_release.executable,
+            terminate,
+        )
+        .await?
+        {
+            return Ok(UpdateLoopControl::Stop);
+        }
+        return Err(anyhow::anyhow!(
+            "managed release after installation was not strictly newer than the release selected for update"
+        ));
+    }
+    reconcile_running_processes_to_managed_release(
+        &daemon,
+        running_updater_identity,
+        &managed_release.executable,
+        terminate,
+    )
+    .await
+}
+
+#[cfg(unix)]
+async fn reconcile_running_processes_to_managed_release(
+    daemon: &Daemon,
+    running_updater_identity: &ExecutableIdentity,
+    managed_codex_bin: &std::path::Path,
+    terminate: &mut Signal,
+) -> Result<UpdateLoopControl> {
+    let managed_identity = executable_identity(managed_codex_bin).await?;
     let (restart_mode, updater_refresh_mode) =
         update_modes_for_identities(running_updater_identity, &managed_identity);
 
@@ -120,7 +186,7 @@ async fn update_once(
             return Ok(UpdateLoopControl::Stop);
         }
         match daemon
-            .try_restart_if_running(restart_mode, updater_refresh_mode, &managed_codex_bin)
+            .try_restart_if_running(restart_mode, updater_refresh_mode, managed_codex_bin)
             .await?
         {
             RestartIfRunningOutcome::Busy => {
@@ -156,6 +222,15 @@ fn update_modes_for_identities(
 }
 
 #[cfg(unix)]
+fn post_install_release_is_strictly_newer(
+    installed_from_version: &str,
+    installed_release_version: &str,
+) -> bool {
+    codex_utils_version::is_newer_sedna_release(installed_release_version, installed_from_version)
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
 pub(crate) fn reexec_managed_updater(managed_codex_bin: &std::path::Path) -> Result<()> {
     let err = StdCommand::new(managed_codex_bin)
         .args(["app-server", "daemon", "pid-update-loop"])
@@ -169,56 +244,18 @@ pub(crate) fn reexec_managed_updater(managed_codex_bin: &std::path::Path) -> Res
 }
 
 #[cfg(unix)]
-async fn install_latest_standalone(http: &RouteAwareClientPool) -> Result<()> {
-    if release_repository().eq_ignore_ascii_case("sednalabs/codex") {
-        install_latest_sedna_standalone(http).await
-    } else {
-        install_latest_upstream_standalone(http).await
-    }
+async fn install_latest_standalone(
+    http: &RouteAwareClientPool,
+    managed_release_version: &str,
+) -> Result<()> {
+    install_latest_sedna_standalone(http, managed_release_version).await
 }
 
 #[cfg(unix)]
-fn release_repository() -> &'static str {
-    match option_env!("CODEX_RELEASE_REPOSITORY") {
-        Some(repository) => repository,
-        None => "sednalabs/codex",
-    }
-}
-
-#[cfg(unix)]
-async fn install_latest_upstream_standalone(http: &impl InstallerHttp) -> Result<()> {
-    let script = fetch_installer_script(http).await?;
-
-    let mut child = Command::new("/bin/sh")
-        .arg("-s")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to invoke standalone Codex updater")?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .context("standalone Codex updater stdin was unavailable")?;
-    stdin
-        .write_all(&script)
-        .await
-        .context("failed to pass standalone Codex updater to shell")?;
-    drop(stdin);
-    let status = child
-        .wait()
-        .await
-        .context("failed to wait for standalone Codex updater")?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        anyhow::bail!("standalone Codex updater exited with status {status}")
-    }
-}
-
-#[cfg(unix)]
-async fn install_latest_sedna_standalone(http: &impl InstallerHttp) -> Result<()> {
+async fn install_latest_sedna_standalone(
+    http: &impl InstallerHttp,
+    current_release_version: &str,
+) -> Result<()> {
     let script = fetch_installer_script_from_url(http, SEDNA_STANDALONE_INSTALLER_URL).await?;
 
     let mut child = Command::new("bash")
@@ -229,8 +266,8 @@ async fn install_latest_sedna_standalone(http: &impl InstallerHttp) -> Result<()
             "sednalabs/codex",
             "--release-tag",
             "latest",
-            "--allow-prerelease",
         ])
+        .args(["--require-newer-than", current_release_version])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -255,11 +292,6 @@ async fn install_latest_sedna_standalone(http: &impl InstallerHttp) -> Result<()
     } else {
         anyhow::bail!("Sedna standalone Codex updater exited with status {status}")
     }
-}
-
-#[cfg(unix)]
-async fn fetch_installer_script(http: &impl InstallerHttp) -> Result<Vec<u8>> {
-    fetch_installer_script_from_url(http, INSTALL_URL).await
 }
 
 #[cfg(unix)]

@@ -10,6 +10,8 @@ use tokio::fs;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DaemonSettings {
     pub(crate) remote_control_enabled: bool,
+    #[serde(default)]
+    pub(crate) bootstrapped: bool,
 }
 
 impl DaemonSettings {
@@ -55,9 +57,22 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&DaemonSettings {
                 remote_control_enabled: true,
+                bootstrapped: true,
             })
             .expect("serialize"),
-            r#"{"remoteControlEnabled":true}"#
+            r#"{"remoteControlEnabled":true,"bootstrapped":true}"#
+        );
+    }
+
+    #[test]
+    fn legacy_settings_without_bootstrap_marker_remain_readable() {
+        assert_eq!(
+            serde_json::from_str::<DaemonSettings>(r#"{"remoteControlEnabled":true}"#)
+                .expect("deserialize"),
+            DaemonSettings {
+                remote_control_enabled: true,
+                bootstrapped: false,
+            }
         );
     }
 }
