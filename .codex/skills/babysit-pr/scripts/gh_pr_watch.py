@@ -2015,6 +2015,23 @@ def snapshot_change_key(snapshot):
     checks = snapshot.get("checks") or {}
     review_state = snapshot.get("review_state") or {}
     review_items = snapshot.get("actionable_review_items") or []
+    merge_queue = snapshot.get("merge_blockers") or []
+
+    # Queue identity is part of the lifecycle, even when the check rollup is
+    # unchanged.  A queue entry can be replaced or removed while the PR head
+    # and all checks remain green; treating that as an unchanged idle snapshot
+    # would incorrectly retain a long green-state backoff.
+    queue_identity = tuple(
+        (
+            str(item.get("kind") or ""),
+            str(item.get("id") or item.get("entry_id") or ""),
+            str(item.get("state") or ""),
+            str(item.get("head_sha") or ""),
+        )
+        for item in merge_queue
+        if isinstance(item, dict)
+        and str(item.get("kind") or "") == "merge_queue_waiting"
+    )
     return (
         str(pr.get("head_sha") or ""),
         str(pr.get("state") or ""),
@@ -2030,12 +2047,34 @@ def snapshot_change_key(snapshot):
             for item in review_items
             if isinstance(item, dict)
         ),
+        queue_identity,
         tuple(snapshot.get("actions") or []),
     )
 
 
 def has_non_idle_actions(snapshot):
     return any(action != "idle" for action in (snapshot.get("actions") or []))
+
+
+def has_active_merge_queue_wait(snapshot):
+    """Return whether the snapshot is waiting on a live merge-queue entry.
+
+    Queue evidence is deliberately interpreted fail-closed for cadence: a
+    waiting entry with an unreadable/missing pending head still gets the base
+    cadence, while queue failures, removals, and unrelated blockers do not.
+    This prevents a stale green snapshot from sleeping for many minutes while
+    queue lifecycle evidence is incomplete or changing.
+    """
+    blockers = snapshot.get("merge_blockers") or []
+    for blocker in blockers:
+        if not isinstance(blocker, dict):
+            continue
+        if str(blocker.get("kind") or "") != "merge_queue_waiting":
+            continue
+        state = str(blocker.get("state") or "").upper()
+        if state in {"QUEUED", "AWAITING_CHECKS"}:
+            return True
+    return False
 
 
 def _compact_review_item(item):
@@ -2125,10 +2164,11 @@ def next_watch_poll_seconds(
     current_change_key = snapshot_change_key(snapshot)
     changed = current_change_key != last_change_key
     green = is_ci_green(snapshot)
+    queue_waiting = has_active_merge_queue_wait(snapshot)
 
     actions = set(snapshot.get("actions") or [])
     policy_blocked = ACTION_REQUIRED_MERGE_POLICY_BLOCKED in actions
-    if not green or policy_blocked:
+    if not green or policy_blocked or queue_waiting:
         next_poll_seconds = args.poll_seconds
     elif changed or last_change_key is None:
         next_poll_seconds = args.poll_seconds

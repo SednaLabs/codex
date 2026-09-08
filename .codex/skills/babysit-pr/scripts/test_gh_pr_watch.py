@@ -533,6 +533,90 @@ def test_policy_blocker_does_not_backoff_and_decision_is_exact_head(monkeypatch)
     assert decision["primary_action"] == gh_pr_watch.ACTION_REQUIRED_MERGE_POLICY_BLOCKED
 
 
+@pytest.mark.parametrize("queue_state", ["QUEUED", "AWAITING_CHECKS"])
+def test_active_merge_queue_wait_uses_base_cadence_when_checks_are_green(queue_state):
+    args = argparse.Namespace(poll_seconds=30)
+    snapshot = {
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123"},
+        "checks": sample_checks(),
+        "actions": ["idle"],
+        "merge_blockers": [
+            {
+                "kind": "merge_queue_waiting",
+                "id": "entry-1",
+                "state": queue_state,
+                "head_sha": "abc123",
+            }
+        ],
+    }
+
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(
+        args, snapshot, gh_pr_watch.snapshot_change_key(snapshot), 600, 3600
+    )
+    assert delay == 30
+
+
+def test_unreadable_pending_queue_head_stays_on_base_cadence():
+    args = argparse.Namespace(poll_seconds=30)
+    snapshot = {
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123"},
+        "checks": sample_checks(),
+        "actions": ["idle"],
+        "merge_blockers": [
+            {
+                "kind": "merge_queue_waiting",
+                "id": "entry-1",
+                "state": "QUEUED",
+                "head_sha": "",
+                "read_state": "unreadable",
+            }
+        ],
+    }
+
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(
+        args, snapshot, gh_pr_watch.snapshot_change_key(snapshot), 600, 3600
+    )
+    assert delay == 30
+
+
+def test_queue_identity_change_resets_cadence():
+    args = argparse.Namespace(poll_seconds=30)
+    old = {
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123"},
+        "checks": sample_checks(),
+        "actions": ["idle"],
+        "merge_blockers": [
+            {"kind": "merge_queue_waiting", "id": "entry-1", "state": "QUEUED"}
+        ],
+    }
+    current = {
+        **old,
+        "merge_blockers": [
+            {"kind": "merge_queue_waiting", "id": "entry-2", "state": "QUEUED"}
+        ],
+    }
+
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(
+        args, current, gh_pr_watch.snapshot_change_key(old), 600, 3600
+    )
+    assert delay == 30
+
+
+def test_nonqueued_green_idle_snapshot_keeps_backoff():
+    args = argparse.Namespace(poll_seconds=30)
+    snapshot = {
+        "pr": {"repo": "openai/codex", "number": 123, "head_sha": "abc123"},
+        "checks": sample_checks(),
+        "actions": ["idle"],
+        "merge_blockers": [],
+    }
+
+    delay, _ = gh_pr_watch.next_watch_poll_seconds(
+        args, snapshot, gh_pr_watch.snapshot_change_key(snapshot), 600, 3600
+    )
+    assert delay == 1200
+
+
 def test_schedule_persists_exact_head_and_fake_clock(monkeypatch, tmp_path):
     saved = {}
     monkeypatch.setattr(gh_pr_watch, "load_state", lambda _path: ({}, True))
