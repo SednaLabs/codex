@@ -746,7 +746,11 @@ async fn active_replay_only_selection_reports_unavailable_retry_and_keeps_draft(
             .count(),
         2
     );
-    assert!(recorded.iter().any(|request| request.method == "thread/resume"));
+    assert!(
+        recorded
+            .iter()
+            .any(|request| request.method == "thread/resume")
+    );
 
     app_server.shutdown().await?;
     proxy.await??;
