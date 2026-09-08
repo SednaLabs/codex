@@ -7,6 +7,10 @@
 use super::*;
 
 impl ChatWidget {
+    pub(crate) fn set_replay_only_thread(&mut self, replay_only: bool) {
+        self.bottom_pane.set_replay_only_thread(replay_only);
+    }
+
     pub(crate) fn set_parent_owned_thread(&mut self) {
         self.blocks_direct_input = true;
         self.bottom_pane.set_parent_owned_thread();
@@ -70,6 +74,11 @@ impl ChatWidget {
             }
             InputResult::ParentOwnedInputBlocked => {
                 self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
+            }
+            InputResult::ReplayOnlyInputBlocked => {
+                self.add_error_message(
+                    "Replay-only transcripts do not accept mutations.".to_string(),
+                );
             }
             InputResult::None => {}
         }

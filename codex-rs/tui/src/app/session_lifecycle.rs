@@ -773,7 +773,11 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<bool> {
-        if self.thread_event_channels.contains_key(&thread_id) {
+        if self
+            .thread_event_channels
+            .get(&thread_id)
+            .is_some_and(|channel| channel.attachment() == ThreadEventAttachment::Live)
+        {
             return Ok(true);
         }
 
@@ -814,11 +818,14 @@ impl App {
             self.agent_navigation.mark_parent_owned(thread_id);
         }
         let channel = self.ensure_thread_channel(thread_id);
-        if !live_attached {
-            channel.mark_replay_only();
-        }
         let mut store = channel.store.lock().await;
         store.set_session(session, turns);
+        drop(store);
+        if live_attached {
+            channel.mark_live();
+        } else {
+            channel.mark_replay_only();
+        }
         Ok(live_attached)
     }
 
@@ -895,7 +902,9 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> Result<()> {
-        if self.active_thread_id == Some(thread_id) {
+        if self.active_thread_id == Some(thread_id)
+            && !self.should_attach_live_thread_for_selection(thread_id)
+        {
             return Ok(());
         }
 
@@ -927,9 +936,7 @@ impl App {
                 Ok(live_attached) => {
                     let newly_replay_only = !live_attached;
                     attached_replay_only = newly_replay_only && !is_replay_only;
-                    if newly_replay_only {
-                        is_replay_only = true;
-                    }
+                    is_replay_only = newly_replay_only;
                 }
                 Err(err) => {
                     self.chat_widget.add_error_message(format!(
@@ -974,6 +981,7 @@ impl App {
             /*initial_user_message*/ None,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        self.chat_widget.set_replay_only_thread(is_replay_only);
         if blocks_direct_input {
             self.chat_widget.set_parent_owned_thread();
         }
@@ -997,7 +1005,9 @@ impl App {
     }
 
     pub(super) fn should_attach_live_thread_for_selection(&self, thread_id: ThreadId) -> bool {
-        !self.thread_event_channels.contains_key(&thread_id)
+        self.thread_event_channels
+            .get(&thread_id)
+            .is_none_or(|channel| channel.attachment() == ThreadEventAttachment::ReplayOnly)
     }
 
     pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {

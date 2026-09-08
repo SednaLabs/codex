@@ -266,6 +266,9 @@ impl ChatComposer {
                     if selected_command_dispatches_immediately_on_tab(&selected_cmd)
                         && let CommandItem::Builtin(cmd) = &selected_cmd
                     {
+                        if self.replay_only_thread {
+                            return (InputResult::ReplayOnlyInputBlocked, true);
+                        }
                         self.stage_selected_slash_command_history(&selected_cmd);
                         self.draft.textarea.set_text_clearing_elements("");
                         self.draft.is_bash_mode = false;
@@ -343,6 +346,9 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
+                    if self.replay_only_thread {
+                        return (InputResult::ReplayOnlyInputBlocked, true);
+                    }
                     if self.blocks_direct_input {
                         let command_is_allowed = match &sel {
                             CommandItem::Builtin(cmd) => {
@@ -663,5 +669,51 @@ mod tests {
             InputResult::Command(SlashCommand::Review)
         );
         assert!(composer.draft.textarea.is_empty());
+    }
+
+    #[test]
+    fn replay_only_popup_enter_preserves_draft_without_dispatch() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            AppEventSender::new(tx),
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_replay_only_thread(/*replay_only*/ true);
+        composer.set_text_content("/review".to_string(), Vec::new(), Vec::new());
+        composer.sync_popups();
+        assert!(composer.popup_active());
+
+        assert_eq!(
+            press(&mut composer, KeyCode::Enter),
+            InputResult::ReplayOnlyInputBlocked
+        );
+        assert_eq!(composer.draft.textarea.text(), "/review");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn replay_only_skills_tab_preserves_draft_without_dispatch() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let mut composer = ChatComposer::new(
+            /*has_input_focus*/ true,
+            AppEventSender::new(tx),
+            /*enhanced_keys_supported*/ false,
+            "Ask Codex to do anything".to_string(),
+            /*disable_paste_burst*/ false,
+        );
+        composer.set_replay_only_thread(/*replay_only*/ true);
+        composer.set_text_content("/skills".to_string(), Vec::new(), Vec::new());
+        composer.sync_popups();
+        assert!(composer.popup_active());
+
+        assert_eq!(
+            press(&mut composer, KeyCode::Tab),
+            InputResult::ReplayOnlyInputBlocked
+        );
+        assert_eq!(composer.draft.textarea.text(), "/skills");
+        assert!(rx.try_recv().is_err());
     }
 }
