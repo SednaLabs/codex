@@ -9638,7 +9638,7 @@ fi
                 "default": markerless_input.get("default"),
                 "type": markerless_input.get("type"),
             },
-            {"default": False, "type": "boolean"},
+            {"default": "false", "type": "boolean"},
         )
         self.assertEqual(
             {
