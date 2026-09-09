@@ -1,0 +1,37 @@
+name: generate-sedna-config-artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact branch or commit to generate from.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: Generate canonical lockfile and config schema
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7f9e10fa1a39b50d0c72d7f5e7eea0e9f314b1ba # stable
+      - name: Generate canonical outputs
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          cargo run --locked -p codex-core --bin codex-write-config-schema
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sedna-canonical-config-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            codex-rs/Cargo.lock
+            codex-rs/core/config.schema.json
