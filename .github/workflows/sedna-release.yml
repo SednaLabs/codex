@@ -944,7 +944,18 @@ jobs:
     needs:
       - resolve
       - release-macos-build
-    if: ${{ needs.resolve.outputs.macos_release_mode == 'preview' || needs.resolve.outputs.macos_release_mode == 'unnotarized' }}
+    if: >-
+      ${{
+        always() &&
+        needs.resolve.result == 'success' &&
+        needs.resolve.outputs.release_requested == 'true' &&
+        needs.resolve.outputs.release_build_required == 'true' &&
+        needs.release-macos-build.result == 'success' &&
+        (
+          needs.resolve.outputs.macos_release_mode == 'preview' ||
+          needs.resolve.outputs.macos_release_mode == 'unnotarized'
+        )
+      }}
     runs-on: macos-15-intel
     timeout-minutes: 30
     permissions:
