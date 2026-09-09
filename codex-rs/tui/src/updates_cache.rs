@@ -1,9 +1,11 @@
 use crate::legacy_core::config::Config;
 use crate::update_versions::is_actionable_sedna_update;
+use crate::version::CODEX_CLI_VERSION;
 use crate::version::CODEX_RELEASE_REPOSITORY;
 use crate::version::CODEX_RELEASE_TAG_PREFIX;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_utils_version::SednaReleaseChannel;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -21,6 +23,9 @@ pub(crate) struct VersionInfo {
     pub(crate) release_repository: Option<String>,
     #[serde(default)]
     pub(crate) release_tag_prefix: Option<String>,
+    /// Cache records without a channel are legacy and fail closed.
+    #[serde(default)]
+    pub(crate) release_channel: Option<SednaReleaseChannel>,
 }
 
 impl VersionInfo {
@@ -35,12 +40,14 @@ impl VersionInfo {
             dismissed_version,
             release_repository: Some(CODEX_RELEASE_REPOSITORY.to_string()),
             release_tag_prefix: Some(CODEX_RELEASE_TAG_PREFIX.to_string()),
+            release_channel: SednaReleaseChannel::for_version(CODEX_CLI_VERSION),
         }
     }
 
     pub(crate) fn matches_current_channel(&self) -> bool {
         self.release_repository.as_deref() == Some(CODEX_RELEASE_REPOSITORY)
             && self.release_tag_prefix.as_deref() == Some(CODEX_RELEASE_TAG_PREFIX)
+            && self.release_channel == SednaReleaseChannel::for_version(CODEX_CLI_VERSION)
     }
 
     pub(crate) fn dismissed_version_for_current_channel(&self) -> Option<String> {

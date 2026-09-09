@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
 /// The explicit repository identity for the Sedna release channel.
@@ -5,6 +6,34 @@ pub const SEDNA_RELEASE_REPOSITORY: &str = "sednalabs/codex";
 
 /// The required tag prefix for the Sedna release channel.
 pub const SEDNA_RELEASE_TAG_PREFIX: &str = "v";
+
+/// The user-selectable Sedna release stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SednaReleaseChannel {
+    Stable,
+    Prerelease,
+}
+
+impl SednaReleaseChannel {
+    pub fn for_version(version: &str) -> Option<Self> {
+        if !is_sedna_release_version(version) {
+            return None;
+        }
+        Some(if is_stable_sedna_release_version(version) {
+            Self::Stable
+        } else {
+            Self::Prerelease
+        })
+    }
+
+    pub fn allows(self, version: &str) -> bool {
+        match (self, Self::for_version(version)) {
+            (Self::Stable, Some(Self::Stable)) | (Self::Prerelease, Some(_)) => true,
+            _ => false,
+        }
+    }
+}
 
 /// The canonical Sedna release version used for updater comparisons, persistence, and telemetry.
 pub const RELEASE_VERSION: &str = env!("CODEX_RELEASE_VERSION_EFFECTIVE");
@@ -120,6 +149,23 @@ pub fn is_sedna_automatic_update_eligible(
     target_arch: &str,
 ) -> bool {
     is_stable_sedna_release_version(release_version)
+        && is_sedna_automatic_update_target_supported(target_os, target_arch)
+}
+
+pub fn is_sedna_automatic_update_eligible_for_channel(
+    release_version: &str,
+    target_os: &str,
+    target_arch: &str,
+    channel: SednaReleaseChannel,
+) -> bool {
+    channel.allows(release_version)
+        && is_sedna_automatic_update_target_supported(target_os, target_arch)
+}
+
+/// Whether a validated managed binary carries a Sedna release identity. The
+/// configured channel decides whether stable or prerelease updates are allowed.
+pub fn is_sedna_managed_release(version: &str, target_os: &str, target_arch: &str) -> bool {
+    SednaReleaseChannel::for_version(version).is_some()
         && is_sedna_automatic_update_target_supported(target_os, target_arch)
 }
 

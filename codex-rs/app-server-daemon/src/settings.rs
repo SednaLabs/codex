@@ -12,6 +12,9 @@ pub(crate) struct DaemonSettings {
     pub(crate) remote_control_enabled: bool,
     #[serde(default)]
     pub(crate) bootstrapped: bool,
+    /// Automatic Sedna installation is an explicit opt-in and remains off for legacy settings.
+    #[serde(default)]
+    pub(crate) sedna_auto_update_enabled: bool,
 }
 
 impl DaemonSettings {
@@ -58,9 +61,10 @@ mod tests {
             serde_json::to_string(&DaemonSettings {
                 remote_control_enabled: true,
                 bootstrapped: true,
+                sedna_auto_update_enabled: false,
             })
             .expect("serialize"),
-            r#"{"remoteControlEnabled":true,"bootstrapped":true}"#
+            r#"{"remoteControlEnabled":true,"bootstrapped":true,"sednaAutoUpdateEnabled":false}"#
         );
     }
 
@@ -72,6 +76,7 @@ mod tests {
             DaemonSettings {
                 remote_control_enabled: true,
                 bootstrapped: false,
+                sedna_auto_update_enabled: false,
             }
         );
     }

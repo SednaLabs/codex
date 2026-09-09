@@ -648,6 +648,7 @@ impl Daemon {
         let mut settings = DaemonSettings {
             remote_control_enabled: options.remote_control_enabled,
             bootstrapped: false,
+            sedna_auto_update_enabled: false,
         };
         if client::probe(&self.socket_path).await.is_ok()
             && self.running_backend(&settings).await?.is_none()
@@ -666,7 +667,8 @@ impl Daemon {
             self.backend_paths_with_bin(&settings, &managed_release.executable),
         );
         backend.start().await?;
-        let auto_update_enabled = managed_release.sedna_auto_update.is_some();
+        let auto_update_enabled =
+            settings.sedna_auto_update_enabled && managed_release.sedna_auto_update.is_some();
         self.reconcile_updater(&settings, &managed_release).await?;
 
         let info = self.wait_until_ready().await?;
@@ -747,24 +749,26 @@ impl Daemon {
             self.backend_paths_with_bin(settings, &managed_release.executable),
         );
         let updater_is_running = updater.is_starting_or_running().await?;
-        let updater_matches_managed_release =
-            if managed_release.sedna_auto_update.is_some() && updater_is_running {
-                #[cfg(unix)]
-                {
-                    let managed_identity = executable_identity(&managed_release.executable).await?;
-                    updater
-                        .is_running_from_executable(&managed_release.executable, &managed_identity)
-                        .await?
-                }
-                #[cfg(not(unix))]
-                {
-                    false
-                }
-            } else {
+        let updater_matches_managed_release = if settings.sedna_auto_update_enabled
+            && managed_release.sedna_auto_update.is_some()
+            && updater_is_running
+        {
+            #[cfg(unix)]
+            {
+                let managed_identity = executable_identity(&managed_release.executable).await?;
+                updater
+                    .is_running_from_executable(&managed_release.executable, &managed_identity)
+                    .await?
+            }
+            #[cfg(not(unix))]
+            {
                 false
-            };
+            }
+        } else {
+            false
+        };
         match updater_lifecycle_action(
-            managed_release.sedna_auto_update.is_some(),
+            settings.sedna_auto_update_enabled && managed_release.sedna_auto_update.is_some(),
             updater_is_running,
             updater_matches_managed_release,
         ) {

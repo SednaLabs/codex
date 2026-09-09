@@ -106,7 +106,14 @@ async fn update_once(
     terminate: &mut Signal,
 ) -> Result<UpdateLoopControl> {
     let daemon = Daemon::from_environment()?;
+    let settings = daemon.load_settings().await?;
     let managed_release = resolved_managed_standalone_release(&daemon.managed_codex_bin).await?;
+    if !settings.sedna_auto_update_enabled {
+        daemon
+            .reconcile_updater(&settings, &managed_release)
+            .await?;
+        return Ok(UpdateLoopControl::Continue);
+    }
     let Some(managed_sedna_release) = managed_release.sedna_auto_update else {
         // A manually selected or otherwise ineligible current release must not
         // leave a previously eligible updater alive. Reconcile it against this

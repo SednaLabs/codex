@@ -43,6 +43,7 @@ async fn dismiss_version_replaces_a_mismatched_cache() {
         dismissed_version: Some("999.0.0".to_string()),
         release_repository: Some("openai/codex".to_string()),
         release_tag_prefix: Some("rust-v".to_string()),
+        release_channel: None,
     };
     std::fs::write(
         &version_file,
@@ -85,6 +86,7 @@ fn mismatched_channel_cache_does_not_preserve_its_dismissal() {
         dismissed_version: Some("999.0.0".to_string()),
         release_repository: Some("openai/codex".to_string()),
         release_tag_prefix: Some("rust-v".to_string()),
+        release_channel: None,
     };
 
     assert_eq!(info.dismissed_version_for_current_channel(), None);
@@ -98,6 +100,7 @@ fn legacy_source_less_cache_does_not_preserve_its_dismissal() {
         dismissed_version: Some("999.0.0".to_string()),
         release_repository: None,
         release_tag_prefix: None,
+        release_channel: None,
     };
 
     assert_eq!(info.dismissed_version_for_current_channel(), None);

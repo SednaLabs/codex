@@ -16,6 +16,7 @@ use serde::Deserialize;
 use std::path::Path;
 
 use crate::version::CODEX_CLI_VERSION;
+use crate::version::CODEX_RELEASE_REPOSITORY;
 
 pub(crate) use crate::updates_cache::dismiss_version;
 
@@ -23,10 +24,12 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     if !config.check_for_update_on_startup
         || is_source_build_version(CODEX_CLI_VERSION)
         || !crate::version::is_sedna_release_channel()
-        || !codex_utils_version::is_sedna_automatic_update_eligible(
+        || !codex_utils_version::is_sedna_automatic_update_eligible_for_channel(
             CODEX_CLI_VERSION,
             std::env::consts::OS,
             std::env::consts::ARCH,
+            codex_utils_version::SednaReleaseChannel::for_version(CODEX_CLI_VERSION)
+                .unwrap_or(codex_utils_version::SednaReleaseChannel::Stable),
         )
     {
         return None;
@@ -63,14 +66,22 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
     tag_name: String,
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    release_channel: Option<codex_utils_version::SednaReleaseChannel>,
 }
 
 async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> anyhow::Result<()> {
     if !crate::version::is_sedna_release_channel()
-        || !codex_utils_version::is_sedna_automatic_update_eligible(
+        || !codex_utils_version::is_sedna_automatic_update_eligible_for_channel(
             CODEX_CLI_VERSION,
             std::env::consts::OS,
             std::env::consts::ARCH,
+            codex_utils_version::SednaReleaseChannel::for_version(CODEX_CLI_VERSION)
+                .unwrap_or(codex_utils_version::SednaReleaseChannel::Stable),
         )
         || action.is_none()
     {
@@ -95,16 +106,52 @@ async fn check_for_update(version_file: &Path, action: Option<UpdateAction>) -> 
 }
 
 async fn fetch_latest_github_release_version() -> anyhow::Result<String> {
-    let ReleaseInfo {
-        tag_name: latest_tag_name,
-    } = create_client()
-        .get(crate::version::latest_release_api_url())
+    let releases_url = format!(
+        "https://api.github.com/repos/{}/releases?per_page=100",
+        CODEX_RELEASE_REPOSITORY
+    );
+    let releases = create_client()
+        .get(releases_url)
         .send()
         .await?
         .error_for_status()?
-        .json::<ReleaseInfo>()
+        .await?
+        .json::<Vec<ReleaseInfo>>()
         .await?;
-    extract_version_from_latest_tag(&latest_tag_name)
+    let channel = codex_utils_version::SednaReleaseChannel::for_version(CODEX_CLI_VERSION)
+        .ok_or_else(|| anyhow::anyhow!("current version is not a Sedna release"))?;
+    releases
+        .into_iter()
+        .filter(|release| !release.draft)
+        .filter_map(|release| {
+            let version = extract_version_from_latest_tag(&release.tag_name).ok()?;
+            let derived = codex_utils_version::SednaReleaseChannel::for_version(&version)?;
+            (release.release_channel.is_none() || release.release_channel == Some(derived))
+                .then_some((version, release.prerelease, derived))
+        })
+        .filter(|(_, api_prerelease, derived)| {
+            // A contradictory API flag/metadata pair is rejected, never guessed.
+            *api_prerelease == (*derived == codex_utils_version::SednaReleaseChannel::Prerelease)
+        })
+        .filter(|(_, _, derived)| {
+            channel == codex_utils_version::SednaReleaseChannel::Prerelease
+                || *derived == codex_utils_version::SednaReleaseChannel::Stable
+        })
+        .max_by(|(left, _, _), (right, _, _)| {
+            codex_utils_version::is_newer_sedna_release(left, right)
+                .map(|newer| {
+                    if newer {
+                        std::cmp::Ordering::Greater
+                    } else {
+                        std::cmp::Ordering::Less
+                    }
+                })
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(version, _, _)| version)
+        .ok_or_else(|| {
+            anyhow::anyhow!("no valid published Sedna release matches the selected channel")
+        })
 }
 
 /// Returns the latest version to show in a popup, if it should be shown.
