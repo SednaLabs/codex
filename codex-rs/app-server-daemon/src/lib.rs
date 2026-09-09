@@ -81,6 +81,7 @@ pub struct LifecycleOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BootstrapOptions {
     pub remote_control_enabled: bool,
+    pub sedna_auto_update_enabled: bool,
 }
 
 /// Passively probes an existing app-server socket and returns its reported
@@ -557,6 +558,7 @@ impl Daemon {
                 let output = self
                     .bootstrap_locked(BootstrapOptions {
                         remote_control_enabled: true,
+                        sedna_auto_update_enabled: false,
                     })
                     .await?;
                 Ok(RemoteControlStartOutput::Bootstrap(output))
@@ -648,7 +650,7 @@ impl Daemon {
         let mut settings = DaemonSettings {
             remote_control_enabled: options.remote_control_enabled,
             bootstrapped: false,
-            sedna_auto_update_enabled: false,
+            sedna_auto_update_enabled: options.sedna_auto_update_enabled,
         };
         if client::probe(&self.socket_path).await.is_ok()
             && self.running_backend(&settings).await?.is_none()

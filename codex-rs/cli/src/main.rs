@@ -658,6 +658,10 @@ struct AppServerBootstrapCommand {
     /// Launch the managed app-server with remote control enabled.
     #[arg(long = "remote-control")]
     remote_control: bool,
+
+    /// Opt in to automatic installation of newer Sedna releases.
+    #[arg(long = "enable-auto-update")]
+    enable_auto_update: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1191,6 +1195,7 @@ async fn cli_main(
                         let output =
                             codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
                                 remote_control_enabled: bootstrap_cli.remote_control,
+                                sedna_auto_update_enabled: bootstrap_cli.enable_auto_update,
                             })
                             .await?;
                         println!("{}", serde_json::to_string(&output)?);
@@ -4035,7 +4040,8 @@ mod tests {
             .subcommand,
             Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
                 subcommand: AppServerDaemonSubcommand::Bootstrap(AppServerBootstrapCommand {
-                    remote_control: true
+                    remote_control: true,
+                    enable_auto_update: false,
                 })
             }))
         ));

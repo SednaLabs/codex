@@ -398,17 +398,28 @@ PY
 }
 
 if [[ "$release_tag" == "latest" ]]; then
-  latest_json="${work_dir}/latest-release.json"
-  fetch_json "${api_root}/releases/latest" "$latest_json"
-  release_tag="$(python3 - "$latest_json" <<'PY'
+  latest_json="${work_dir}/latest-releases.json"
+  fetch_json "${api_root}/releases?per_page=100" "$latest_json"
+  release_tag="$(python3 - "$latest_json" "$allow_prerelease" <<'PY'
 import json
 import sys
+import re
 
-release = json.loads(open(sys.argv[1], encoding="utf-8").read())
-tag = release.get("tag_name")
-if not isinstance(tag, str) or not tag:
-    raise SystemExit("error: latest release did not include tag_name")
-print(tag)
+releases = json.loads(open(sys.argv[1], encoding="utf-8").read())
+allow = sys.argv[2] == "true"
+pattern = re.compile(r"^v\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?-sedna\.\d+(?:\+upstream\.\d+)?$")
+valid = [r for r in releases if isinstance(r, dict) and not r.get("draft") and (allow or not r.get("prerelease")) and isinstance(r.get("tag_name"), str) and pattern.fullmatch(r["tag_name"])]
+if not valid:
+    raise SystemExit("error: no valid published Sedna release matched the selected channel")
+def key(r):
+    tag = r["tag_name"].removeprefix("v")
+    core, rest = tag.split("-sedna.", 1)
+    ordinal = int(rest.split("+", 1)[0])
+    track = core.split("-", 1)
+    nums = tuple(int(x) for x in track[0].split("."))
+    prerelease = tuple(track[1].split(".")) if len(track) > 1 else ()
+    return nums, tuple((0, int(x)) if x.isdigit() else (1, x) for x in prerelease), ordinal
+print(max(valid, key=key)["tag_name"])
 PY
 )"
 fi
