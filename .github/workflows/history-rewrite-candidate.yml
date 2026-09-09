@@ -12,7 +12,7 @@ on:
       source_sha:
         description: "Exact source candidate commit"
         required: true
-        default: 809473034cf7d89d013fa106ed43ec2748f05013
+        default: ""
         type: string
       workflow_harness_sha:
         description: "Exact commit containing this workflow and policy"
@@ -45,12 +45,10 @@ on:
       backup_refs_count:
         description: "Recorded backup ref-set entry count"
         required: true
-        default: "1052"
         type: string
       backup_refs_bytes:
         description: "Recorded backup ref-set UTF-8 byte length"
         required: true
-        default: "42899"
         type: string
       backup_snapshot_refreshed:
         description: "Set true only when a refreshed backup covers selected refs"
@@ -64,10 +62,6 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
-  push:
-    branches:
-      - chore/history-rewrite-candidate-w13828
-
 permissions:
   contents: read
 
@@ -80,9 +74,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      SOURCE_SHA: ${{ github.event_name == 'push' && '809473034cf7d89d013fa106ed43ec2748f05013' || inputs.source_sha }}
-      HARNESS_SHA: ${{ github.event_name == 'push' && github.sha || inputs.workflow_harness_sha }}
-      HARNESS_TREE: ${{ github.event_name == 'push' && '' || inputs.workflow_harness_tree }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      HARNESS_SHA: ${{ inputs.workflow_harness_sha }}
+      HARNESS_TREE: ${{ inputs.workflow_harness_tree }}
       SELECTED_REFS_GZIP_B64: ${{ inputs.selected_refs_gzip_b64 }}
       SELECTED_REFS_SHA256: ${{ inputs.selected_refs_sha256 }}
       SELECTED_REFS_COUNT: ${{ inputs.selected_refs_count }}
@@ -92,7 +86,7 @@ jobs:
       BACKUP_REFS_BYTES: ${{ inputs.backup_refs_bytes }}
       BACKUP_SNAPSHOT_REFRESHED: ${{ inputs.backup_snapshot_refreshed }}
       TAG_SIGNATURE_ACK: ${{ inputs.tag_signature_ack }}
-      MODE: ${{ github.event_name == 'push' && 'inventory' || inputs.mode }}
+      MODE: ${{ inputs.mode }}
       POLICY: scripts/history-rewrite/policy.json
       REPO_URL: https://github.com/${{ github.repository }}.git
     steps:
@@ -102,33 +96,11 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: Generate push inventory snapshot and checked-in boundaries
-        if: github.event_name == 'push'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import base64, gzip, hashlib, json, os, subprocess
-          lines = subprocess.check_output(["git", "ls-remote", "--heads", "--tags", "origin"], text=True).splitlines()
-          refs = {}
-          for line in lines:
-              sha, ref = line.split("\t", 1)
-              if not ref.endswith("^{}"): refs[ref] = sha
-          raw = json.dumps(refs, sort_keys=True, separators=(",", ":")).encode()
-          encoded = base64.b64encode(gzip.compress(raw, mtime=0)).decode()
-          policy = json.load(open("scripts/history-rewrite/policy.json", encoding="utf-8"))["backup_boundary"]
-          tree = subprocess.check_output(["git", "rev-parse", f"{os.environ['GITHUB_SHA']}^{{tree}}"], text=True).strip()
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              env.write(f"HARNESS_TREE={tree}\nSELECTED_REFS_GZIP_B64={encoded}\nSELECTED_REFS_SHA256={hashlib.sha256(raw).hexdigest()}\nSELECTED_REFS_COUNT={len(refs)}\nSELECTED_REFS_BYTES={len(raw)}\n")
-              env.write(f"BACKUP_REFS_SHA256={policy['sha256']}\nBACKUP_REFS_COUNT={policy['count']}\nBACKUP_REFS_BYTES={policy['bytes']}\nBACKUP_SNAPSHOT_REFRESHED=false\nTAG_SIGNATURE_ACK=false\n")
-          PY
-
       - name: Verify inputs and policy before fetching history
         shell: bash
         run: |
           set -euo pipefail
           [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha must be a full SHA' >&2; exit 1; }
-          [[ "${SOURCE_SHA}" == '809473034cf7d89d013fa106ed43ec2748f05013' ]] || { echo 'source SHA is not the frozen candidate' >&2; exit 1; }
           [[ "${GITHUB_REPOSITORY}" == 'sednalabs/codex' ]] || { echo "unexpected repository for ${GITHUB_EVENT_NAME}" >&2; exit 1; }
           [[ "${HARNESS_SHA}" =~ ^[0-9a-f]{40}$ && "${HARNESS_TREE}" =~ ^[0-9a-f]{40}$ ]] || { echo 'harness identity must be full SHA values' >&2; exit 1; }
           [[ "${GITHUB_SHA}" == "${HARNESS_SHA}" ]] || { echo 'workflow dispatch head differs from bound harness SHA' >&2; exit 1; }
@@ -166,6 +138,8 @@ jobs:
           boundary = policy.get("backup_boundary", {})
           boundary_tuple = (boundary.get("sha256"), boundary.get("count"), boundary.get("bytes"))
           selected_tuple = (os.environ["SELECTED_REFS_SHA256"], int(os.environ["SELECTED_REFS_COUNT"]), int(os.environ["SELECTED_REFS_BYTES"]))
+          if any(value in (None, "") for value in boundary_tuple):
+              raise SystemExit("checked-in backup boundary is not independently refreshed")
           if (os.environ["BACKUP_REFS_SHA256"], int(os.environ["BACKUP_REFS_COUNT"]), int(os.environ["BACKUP_REFS_BYTES"])) != boundary_tuple:
               raise SystemExit("caller backup boundary does not match checked-in boundary")
           if os.environ["MODE"] == "rewrite":
@@ -337,6 +311,35 @@ jobs:
           pathlib.Path("output/filter-repo-provenance.txt").write_text(f"version=2.47.0\\nfilename=git_filter_repo-2.47.0-py3-none-any.whl\\nsha256={expected}\\nurl={url}\\n", encoding="utf-8")
           PY
           python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps work/git_filter_repo.whl
+          python3 - "$repo" "$POLICY" > work/rule-context.json <<'PY'
+          import json, subprocess, sys
+          repo, policy_path = sys.argv[1:]
+          policy = json.load(open(policy_path, encoding="utf-8"))
+          commits = subprocess.check_output(["git", "-C", repo, "rev-list", "--all"], text=True).splitlines()
+          context = {"path_rules": [], "blob_rules": {}}
+          for rule in policy["rules"]:
+              targets = rule.get("target_paths")
+              if rule["scope"] in {"path", "blob"} and (not isinstance(targets, list) or not targets or not all(isinstance(p, str) and p for p in targets)):
+                  raise SystemExit(f"{rule['id']}: target_paths is required for scoped {rule['scope']} rules")
+              if rule["scope"] == "path":
+                  context["path_rules"].append({"old": rule["old"], "new": rule["new"], "targets": targets})
+              if rule["scope"] == "blob":
+                  target_set = set(targets)
+                  blobs = set(); locations = {}
+                  for commit in commits:
+                      for row in subprocess.check_output(["git", "-C", repo, "ls-tree", "-r", "-z", commit], text=False).split(b"\0"):
+                          if not row: continue
+                          meta, path = row.split(b"\t", 1)
+                          mode, typ, oid = meta.split()
+                          path_text = path.decode("utf-8", "surrogateescape")
+                          locations.setdefault(oid.decode(), set()).add(path_text)
+                          if path_text in target_set: blobs.add(oid.decode())
+                  for oid, paths in locations.items():
+                      if not paths.issubset(target_set) and not rule.get("global", False):
+                          raise SystemExit(f"{rule['id']}: shared blob reaches an unrelated path")
+                  context["blob_rules"][rule["id"]] = {"old": rule["old"], "new": rule["new"], "oids": sorted(blobs), "global": bool(rule.get("global", False))}
+          print(json.dumps(context, sort_keys=True))
+          PY
           cat > work/commit.py <<'PY'
           import json
           policy = json.load(open("scripts/history-rewrite/policy.json", encoding="utf-8"))
@@ -354,16 +357,19 @@ jobs:
           policy = json.load(open("scripts/history-rewrite/policy.json", encoding="utf-8"))
           for rule in policy["rules"]:
               if rule["scope"] == "path":
-                  filename = filename.replace(rule["old"].encode(), rule["new"].encode())
+                  targets = [p.encode() for p in rule["target_paths"]]
+                  if any(filename == p or filename.startswith(p + b"/") for p in targets):
+                      filename = filename.replace(rule["old"].encode(), rule["new"].encode())
           PY
           cat > work/blob.py <<'PY'
           import json
-          policy = json.load(open("scripts/history-rewrite/policy.json", encoding="utf-8"))
-          for rule in policy["rules"]:
-              if rule["scope"] == "blob":
+          context = json.load(open("work/rule-context.json", encoding="utf-8"))
+          original_id = blob.original_id.hex()
+          for rule in context["blob_rules"].values():
+              if rule["global"] or original_id in rule["oids"]:
                   blob.data = blob.data.replace(rule["old"].encode(), rule["new"].encode())
           PY
-          git -C "$repo" filter-repo --force --commit-callback-file work/commit.py --filename-callback-file work/filename.py --blob-callback-file work/blob.py
+          git -C "$repo" filter-repo --force --commit-callback work/commit.py --filename-callback work/filename.py --blob-callback work/blob.py
           after=$(git -C "$repo" show-ref | sort)
           printf '%s\n' "$before" > output/refs-before.txt
           printf '%s\n' "$after" > output/refs-after.txt
@@ -390,7 +396,7 @@ jobs:
           if set(mapping) != set(x.strip() for x in open(old_domain) if x.strip()): raise SystemExit("commit-map key domain mismatch")
           for old, new in mapping.items():
               old_parents = [x.split()[1] for x in cat(preimage, old).splitlines() if x.startswith("parent ")]
-              new_parents = [x.split()[1] for x in cat(new).splitlines() if x.startswith("parent ")]
+              new_parents = [x.split()[1] for x in cat(repo, new).splitlines() if x.startswith("parent ")]
               expected = [mapping.get(x, x) for x in old_parents]
               if expected != new_parents: raise SystemExit(f"topology mismatch for {old}")
               rows.append((old, new, ",".join(old_parents), ",".join(new_parents), "verified"))
@@ -441,9 +447,36 @@ jobs:
           if jq -e '[.rules[] | select(.scope == "path" or .scope == "blob")] | length == 0' "$POLICY" >/dev/null && test "$before_tree" != "$after_tree"; then
             echo 'tree changed without an explicit path/blob rule' >&2; exit 1
           fi
-          if jq -e '[.rules[] | select(.scope == "path" or .scope == "blob")] | length > 0' "$POLICY" >/dev/null; then
-            echo 'non-target path/blob equivalence is not proven for content/path rewrites' >&2; exit 1
-          fi
+          python3 - "$repo" work/preimage.git output/commit-map.txt "$POLICY" output/untouched-proof.tsv <<'PY'
+          import json, subprocess, sys
+          repo, preimage, cmap, policy_path, proof = sys.argv[1:]
+          rules = [r for r in json.load(open(policy_path, encoding="utf-8"))["rules"] if r["scope"] in {"path", "blob"}]
+          mapping = {x.split()[0]: x.split()[1] for x in open(cmap, encoding="utf-8") if len(x.split()) == 2}
+          def entries(path, commit):
+              out = {}
+              for row in subprocess.check_output(["git", "-C", path, "ls-tree", "-r", "-z", commit], text=False).split(b"\0"):
+                  if row:
+                      meta, name = row.split(b"\t", 1); mode, typ, oid = meta.split(); out[name] = (mode, typ, oid)
+              return out
+          def scoped(name, rule):
+              return any(name == p.encode() or name.startswith(p.encode() + b"/") for p in rule.get("target_paths", []))
+          with open(proof, "w", encoding="utf-8") as out:
+              out.write("old_commit\tnew_commit\tuntouched_entries\tstatus\n")
+              for old, new in mapping.items():
+                  before, after = entries(preimage, old), entries(repo, new); untouched = 0
+                  for name, value in before.items():
+                      candidates = [name]
+                      for rule in rules:
+                          if rule["scope"] == "path" and scoped(name, rule): candidates.append(name.replace(rule["old"].encode(), rule["new"].encode()))
+                      if any(scoped(name, rule) for rule in rules):
+                          present = [after.get(candidate) for candidate in candidates if candidate in after]
+                          if not present or any(item[:2] != value[:2] for item in present):
+                              raise SystemExit(f"target mode/type changed or entry disappeared: {old}:{name!r}")
+                          continue
+                      if not any(after.get(candidate) == value for candidate in candidates): raise SystemExit(f"untouched tree entry changed: {old}:{name!r}")
+                      untouched += 1
+                  out.write(f"{old}\t{new}\t{untouched}\tverified\n")
+          PY
           python3 scripts/history-rewrite/classify.py "$repo" "$POLICY" output/classification-after.tsv
           python3 - "$POLICY" output/classification.tsv output/classification-after.tsv <<'PY'
           import json, sys
