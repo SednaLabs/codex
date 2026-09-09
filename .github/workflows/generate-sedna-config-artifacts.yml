@@ -26,7 +26,6 @@ jobs:
         working-directory: codex-rs
         run: |
           set -euo pipefail
-          cargo generate-lockfile
           cargo run --locked -p codex-core --bin codex-write-config-schema
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
