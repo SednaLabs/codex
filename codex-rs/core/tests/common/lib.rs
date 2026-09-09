@@ -307,7 +307,7 @@ where
     wait_for_event_with_timeout(codex, predicate, Duration::from_secs(1)).await
 }
 
-fn default_event_wait_floor() -> tokio::time::Duration {
+pub fn default_event_wait_floor() -> tokio::time::Duration {
     if cfg!(any(windows, target_os = "macos")) {
         tokio::time::Duration::from_secs(30)
     } else {

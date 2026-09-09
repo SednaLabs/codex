@@ -6,6 +6,7 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::default_event_wait_floor;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -432,13 +433,27 @@ async fn restates_the_current_remainder_after_rollback() -> Result<()> {
         .await?;
 
     test.submit_turn("rolled-back turn").await?;
-    test.codex
+    let rollback_id = test
+        .codex
         .submit(Op::ThreadRollback { num_turns: 1 })
         .await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::ThreadRolledBack(_))
+    tokio::time::timeout(default_event_wait_floor(), async {
+        loop {
+            let event = test.codex.next_event().await?;
+            if event.id != rollback_id {
+                continue;
+            }
+            match event.msg {
+                EventMsg::ThreadRolledBack(_) => return Ok(()),
+                EventMsg::Error(error) => {
+                    anyhow::bail!("thread rollback failed: {}", error.message);
+                }
+                _ => {}
+            }
+        }
     })
-    .await;
+    .await
+    .expect("timed out waiting for thread rollback")?;
     test.submit_turn("turn after rollback").await?;
 
     let requests = responses.requests();
