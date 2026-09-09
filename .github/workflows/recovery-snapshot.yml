@@ -1,0 +1,188 @@
+name: Recovery snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        description: "Source repository (owner/name)"
+        required: true
+        default: "sednalabs/codex"
+        type: string
+      candidate_sha:
+        description: "Full commit SHA to bind into the package"
+        required: true
+        type: string
+      refs:
+        description: "One refs/heads/* or refs/tags/* name per line"
+        required: true
+        type: string
+      age_recipient:
+        description: "Operator-controlled age recipient"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Prepare exact inputs and fetch selected refs
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          WORKFLOW_CODE_SHA: ${{ github.sha }}
+          SELECTED_REFS: ${{ inputs.refs }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail; umask 077
+          [[ "$SOURCE_REPOSITORY" == "sednalabs/codex" && "$GITHUB_REPOSITORY" == "$SOURCE_REPOSITORY" ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$WORKFLOW_CODE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_CODE_SHA"
+          printf '%s\n' "$SELECTED_REFS" | sed '/^[[:space:]]*$/d' > refs.txt
+          test -s refs.txt
+          while IFS= read -r ref; do
+            [[ "$ref" =~ ^refs/(heads|tags)/ ]] || exit 1
+            git check-ref-format "$ref" >/dev/null
+          done < refs.txt
+          test "$(wc -l < refs.txt)" = "$(sort -u refs.txt | wc -l)"
+          sort -u refs.txt -o refs.txt
+          git init --bare source.git >/dev/null
+          git -C source.git remote add source "https://github.com/$SOURCE_REPOSITORY.git"
+          git -C source.git ls-remote --refs source 'refs/heads/*' 'refs/tags/*' | awk '{print $1" "$2}' | sort -k2 > remote-map.txt
+          awk '{print $2}' remote-map.txt > remote-refs.txt
+          cmp -s refs.txt remote-refs.txt || {
+            echo 'recovery snapshot: selected and remote ref names differ' >&2
+            printf 'selected_count=%s remote_count=%s\n' "$(wc -l < refs.txt)" "$(wc -l < remote-refs.txt)" >&2
+            sha256sum refs.txt remote-refs.txt >&2
+            exit 1
+          }
+          specs=()
+          while read -r object ref; do specs+=("+$object:$ref"); done < remote-map.txt
+          git -C source.git fetch --atomic --no-tags source "${specs[@]}"
+          git -C source.git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags | sort -k2 > fetched-map.txt
+          cmp -s remote-map.txt fetched-map.txt || { echo 'recovery snapshot: fetched and remote ref maps differ' >&2; exit 1; }
+          MAIN_OID=$(awk '$2 == "refs/heads/main" {print $1; found++} END {if (found != 1) exit 1}' remote-map.txt)
+          test "$CANDIDATE_SHA" = "$MAIN_OID"
+          git -C source.git cat-file -e "$CANDIDATE_SHA^{commit}"
+          mkdir metadata
+          gh api "repos/$SOURCE_REPOSITORY" > metadata/repository.json
+          gh api --paginate --slurp "repos/$SOURCE_REPOSITORY/pulls?state=all&per_page=100" > metadata/pull-requests.json
+          gh api --paginate --slurp "repos/$SOURCE_REPOSITORY/releases?per_page=100" > metadata/releases.json
+          gh api --paginate --slurp "repos/$SOURCE_REPOSITORY/rulesets?per_page=100" > metadata/rulesets.json
+          gh api "repos/$SOURCE_REPOSITORY" --jq '{default_branch}' > metadata/default-branch.json
+      - name: Build package and restore-test before encryption
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail; umask 077
+          python3 scripts/recovery-snapshot/snapshot.py package --repo-dir source.git --refs-file refs.txt --metadata-dir metadata --candidate-sha "$CANDIDATE_SHA" --output snapshot.tar.gz --selected-ref-map-output selected-ref-map.json > package-info.json
+          python3 scripts/recovery-snapshot/snapshot.py restore-test --archive snapshot.tar.gz --candidate-sha "$CANDIDATE_SHA" > restore-info.json
+          test "$(jq -r .inner_sha256 package-info.json)" = "$(jq -r .archive_sha256 restore-info.json)"
+          test "$(jq -r .selected_refs_sha256 package-info.json)" = "$(jq -r .selected_refs_sha256 restore-info.json)"
+      - name: Install pinned age tool
+        run: |
+          set -euo pipefail; umask 077
+          AGE_TOOL_DIR="$RUNNER_TEMP/recovery-snapshot-age-tool"
+          AGE_ARCHIVE="$AGE_TOOL_DIR/age-v1.3.2-linux-amd64.tar.gz"
+          rm -rf "$AGE_TOOL_DIR"
+          mkdir -p "$AGE_TOOL_DIR"
+          curl --fail --location --silent --show-error --retry 3 --output "$AGE_ARCHIVE" \
+            "https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz"
+          test "$(stat -c '%s' "$AGE_ARCHIVE")" = 19405817
+          test "$(sha256sum "$AGE_ARCHIVE" | cut -d' ' -f1)" = cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10
+          tar -xzf "$AGE_ARCHIVE" -C "$AGE_TOOL_DIR" age/age
+          test -x "$AGE_TOOL_DIR/age/age"
+          echo "$AGE_TOOL_DIR/age" >> "$GITHUB_PATH"
+      - name: Encrypt recovery package
+        id: encrypt
+        env:
+          AGE_RECIPIENT: ${{ inputs.age_recipient }}
+        run: |
+          set -euo pipefail; umask 077
+          command -v age >/dev/null
+          [[ "$AGE_RECIPIENT" =~ ^age1[0-9a-z]+$ ]]
+          test "$(sha256sum snapshot.tar.gz | cut -d' ' -f1)" = "$(jq -r .inner_sha256 package-info.json)"
+          jq -cn --arg age "$(age --version)" --arg git "$(git --version)" --arg tar "$(tar --version | head -n1)" \
+            --arg gh "$(gh --version | head -n1)" --arg jq "$(jq --version)" '{age:$age,git:$git,tar:$tar,gh:$gh,jq:$jq}' > tool-versions.json
+          age -r "$AGE_RECIPIENT" -o recovery-snapshot.age snapshot.tar.gz
+          {
+            echo "ciphertext_sha256=$(sha256sum recovery-snapshot.age | cut -d' ' -f1)"
+            echo "ciphertext_size=$(stat -c '%s' recovery-snapshot.age)"
+            echo "metadata_manifest_sha256=$(sha256sum metadata/*.json | sha256sum | cut -d' ' -f1)"
+            echo "recipient_sha256=$(printf '%s' "$AGE_RECIPIENT" | sha256sum | cut -d' ' -f1)"
+            echo "tool_versions=$(jq -c . tool-versions.json)"
+          } >> "$GITHUB_OUTPUT"
+          rm -f snapshot.tar.gz refs.txt remote-refs.txt remote-map.txt fetched-map.txt
+          rm -rf source.git metadata
+      - id: upload_ciphertext
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: recovery-snapshot-ciphertext
+          path: recovery-snapshot.age
+          retention-days: 3
+          if-no-files-found: error
+      - name: Build non-sensitive receipt from independent artifact API metadata
+        env:
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_SHA: ${{ inputs.candidate_sha }}
+          WORKFLOW_CODE_SHA: ${{ github.sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          CIPHERTEXT_SHA: ${{ steps.encrypt.outputs.ciphertext_sha256 }}
+          CIPHERTEXT_SIZE: ${{ steps.encrypt.outputs.ciphertext_size }}
+          METADATA_MANIFEST_SHA: ${{ steps.encrypt.outputs.metadata_manifest_sha256 }}
+          RECIPIENT_SHA: ${{ steps.encrypt.outputs.recipient_sha256 }}
+          ARTIFACT_ID: ${{ steps.upload_ciphertext.outputs.artifact-id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail; umask 077
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > run-api.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" > ciphertext-artifact-api.json
+          WORKFLOW_ID=$(jq -r .workflow_id run-api.json)
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID" > workflow-api.json
+          python3 scripts/recovery-snapshot/receipt.py build \
+            --repository "$GITHUB_REPOSITORY" --source-repository "$SOURCE_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --workflow-id "$WORKFLOW_ID" --workflow-path "$(jq -r .path workflow-api.json)" \
+            --workflow-ref "$WORKFLOW_REF" --workflow-code-sha "$WORKFLOW_CODE_SHA" --source-sha "$SOURCE_SHA" \
+            --package-info package-info.json --restore-info restore-info.json --artifact-json ciphertext-artifact-api.json \
+            --metadata-manifest-sha256 "$METADATA_MANIFEST_SHA" --ciphertext-sha256 "$CIPHERTEXT_SHA" \
+            --ciphertext-size "$CIPHERTEXT_SIZE" --recipient-sha256 "$RECIPIENT_SHA" --tool-versions-json tool-versions.json \
+            --output recovery-snapshot-receipt.json
+      - id: upload_receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: recovery-snapshot-receipt
+          path: |
+            recovery-snapshot-receipt.json
+            selected-ref-map.json
+          retention-days: 3
+          if-no-files-found: error
+      - name: Emit non-sensitive receipt identities
+        env:
+          CIPHERTEXT_ARTIFACT_ID: ${{ steps.upload_ciphertext.outputs.artifact-id }}
+          RECEIPT_ARTIFACT_ID: ${{ steps.upload_receipt.outputs.artifact-id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$CIPHERTEXT_ARTIFACT_ID" > ciphertext-api-final.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$RECEIPT_ARTIFACT_ID" > receipt-api-final.json
+          jq -n --slurpfile receipt recovery-snapshot-receipt.json --slurpfile ciphertext ciphertext-api-final.json \
+            --slurpfile receipt_artifact receipt-api-final.json \
+            '{receipt:$receipt[0],receipt_artifact_api:{id:$receipt_artifact[0].id,digest:$receipt_artifact[0].digest,size_in_bytes:$receipt_artifact[0].size_in_bytes,expires_at:$receipt_artifact[0].expires_at},ciphertext_artifact_api:{id:$ciphertext[0].id,digest:$ciphertext[0].digest,size_in_bytes:$ciphertext[0].size_in_bytes,expires_at:$ciphertext[0].expires_at}}' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove plaintext and tool staging
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          rm -f snapshot.tar.gz recovery-snapshot.age selected-ref-map.json refs.txt remote-refs.txt remote-map.txt fetched-map.txt package-info.json restore-info.json tool-versions.json run-api.json workflow-api.json ciphertext-artifact-api.json recovery-snapshot-receipt.json ciphertext-api-final.json receipt-api-final.json
+          rm -rf source.git metadata "$RUNNER_TEMP/recovery-snapshot-age-tool"

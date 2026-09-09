@@ -5,9 +5,9 @@ This is deliberately the only implementation of the filter-repo callbacks and
 their proof.  The hosted candidate workflow and its disposable synthetic suite
 both call this file; neither carries a second transformation.
 """
-from __future__ import annotations
-
 import argparse
+import base64
+import hashlib
 import json
 import os
 import re
@@ -74,23 +74,50 @@ def commit_parents(repo: Path, identity: str) -> list[str]:
     return [line[7:].decode() for line in raw.split(b"\n") if line.startswith(b"parent ")]
 
 
-def load_policy(path: Path) -> list[dict]:
+def load_policy(path: Path) -> dict:
     policy = json.loads(path.read_text(encoding="utf-8"))
+    if policy.get("schema") != 2 or policy.get("repository") != "sednalabs/codex":
+        fail("unsupported policy schema or repository")
+    review_packet = policy.get("review_packet")
+    if not isinstance(review_packet, dict) or review_packet.get("schema") != "review-packet-v1" or review_packet.get("executable") is not False:
+        fail("policy must identify its non-executable review packet")
+    canonical_source = policy.get("canonical_source_commit")
+    if not isinstance(canonical_source, str) or not HEX.fullmatch(canonical_source):
+        fail("policy requires a full canonical source commit")
     rules = policy.get("rules")
     if not isinstance(rules, list):
         fail("policy rules must be a list")
+    canonical_phase = True
     for rule in rules:
         if not isinstance(rule, dict) or rule.get("scope") not in {"commit_subject", "commit_body", "path", "blob"}:
             fail("unsupported rewrite rule")
-        if not isinstance(rule.get("id"), str) or not isinstance(rule.get("old"), str) or not isinstance(rule.get("new"), str):
-            fail("rewrite rule lacks a string id, old, or new value")
+        if not isinstance(rule.get("id"), str) or not rule["id"]:
+            fail("rewrite rule lacks a string id")
+        kind = rule.get("kind")
+        if kind == "exact_blob_replacement":
+            if not canonical_phase:
+                fail("canonical replacements must run before mechanical rules")
+            if rule["scope"] != "blob" or not HEX.fullmatch(str(rule.get("old_blob", ""))) or not HEX.fullmatch(str(rule.get("new_blob", ""))):
+                fail(f"{rule['id']}: invalid exact blob replacement")
+            if rule["old_blob"] == rule["new_blob"] or not isinstance(rule.get("source_path"), str) or not rule["source_path"]:
+                fail(f"{rule['id']}: invalid canonical source binding")
+        else:
+            canonical_phase = False
+            if kind not in {"path", "blob_literal", "literal"}:
+                fail(f"{rule['id']}: unsupported mechanical rule kind")
+            if not isinstance(rule.get("old"), str) or not isinstance(rule.get("new"), str) or not rule["old"] or not rule["new"] or rule["old"] == rule["new"]:
+                fail(f"{rule['id']}: rewrite rule lacks distinct old and new literals")
+            if (kind == "path") != (rule["scope"] == "path") or (kind == "blob_literal") != (rule["scope"] == "blob") or (kind == "literal") != (rule["scope"] in {"commit_subject", "commit_body"}):
+                fail(f"{rule['id']}: rule kind and scope disagree")
         if rule["scope"] in {"path", "blob"}:
             paths = rule.get("target_paths")
             if not isinstance(paths, list) or not paths or not all(isinstance(item, str) and item for item in paths):
                 fail(f"{rule['id']}: target_paths is required")
             if rule.get("global"):
                 fail(f"{rule['id']}: global blob rewrite is outside the scoped candidate")
-    return rules
+    if len({rule["id"] for rule in rules}) != len(rules):
+        fail("rewrite rule IDs must be unique")
+    return policy
 
 
 def changed_path(name: bytes, rules: list[dict]) -> bytes:
@@ -101,14 +128,33 @@ def changed_path(name: bytes, rules: list[dict]) -> bytes:
     return result
 
 
-def blob_rule_oids(repo: Path, rules: list[dict]) -> dict[str, set[bytes]]:
+def blob_rule_context(repo: Path, rules: list[dict], canonical_source: str) -> dict:
     all_entries = [entries(repo, commit) for commit in git(repo, "rev-list", "--all").splitlines()]
-    answer: dict[str, set[bytes]] = {}
+    source_entries = entries(repo, canonical_source)
+    selected_by_rule: dict[str, set[bytes]] = {}
+    replacement_by_rule: dict[str, bytes] = {}
+    residual_by_rule: dict[str, set[bytes]] = {}
     for rule in rules:
         if rule["scope"] != "blob":
             continue
         targets = {item.encode() for item in rule["target_paths"]}
-        selected = {value[2] for tree in all_entries for name, value in tree.items() if name in targets and value[1] == b"blob"}
+        if rule["kind"] == "exact_blob_replacement":
+            old_blob = rule["old_blob"].encode("ascii")
+            new_blob = rule["new_blob"].encode("ascii")
+            source_path = rule["source_path"].encode()
+            source_value = source_entries.get(source_path)
+            if source_value is None or source_value[1] != b"blob" or source_value[2] != new_blob:
+                fail(f"{rule['id']}: canonical source path does not resolve to the reviewed new blob")
+            replacement_by_rule[rule["id"]] = blob(repo, new_blob)
+            candidates = {value[2] for tree in all_entries for name, value in tree.items() if name in targets and value[1] == b"blob"}
+            selected = {identity for identity in candidates if identity == old_blob}
+            residual_by_rule[rule["id"]] = candidates - selected - {new_blob}
+            if not selected:
+                fail(f"{rule['id']}: guarded old blob is absent from its exact target path")
+        else:
+            old = rule["old"].encode()
+            candidates = {value[2] for tree in all_entries for name, value in tree.items() if name in targets and value[1] == b"blob"}
+            selected = {identity for identity in candidates if old in blob(repo, identity)}
         locations = {identity: set() for identity in selected}
         # Deliberately collect locations only for selected OIDs.  Unrelated
         # duplicated blobs are allowed; selected blobs may not escape scope.
@@ -119,11 +165,13 @@ def blob_rule_oids(repo: Path, rules: list[dict]) -> dict[str, set[bytes]]:
         for identity, paths in locations.items():
             if not paths.issubset(targets):
                 fail(f"{rule['id']}: selected shared blob reaches an unrelated exact path")
-        answer[rule["id"]] = selected
-    return answer
+        selected_by_rule[rule["id"]] = selected
+    return {"selected": selected_by_rule, "replacements": replacement_by_rule, "residuals": residual_by_rule}
 
 
-def preflight(repo: Path, rules: list[dict]) -> dict[str, set[bytes]]:
+def preflight(repo: Path, policy: dict) -> dict:
+    rules = policy["rules"]
+    git(repo, "cat-file", "-e", f"{policy['canonical_source_commit']}^{{commit}}")
     for rule in rules:
         if rule["scope"] != "path":
             continue
@@ -132,12 +180,21 @@ def preflight(repo: Path, rules: list[dict]) -> dict[str, set[bytes]]:
             after_names = [changed_path(name, rules) for name in before]
             if len(after_names) != len(set(after_names)):
                 fail(f"{rule['id']}: exact-path rename collision")
-    return blob_rule_oids(repo, rules)
+    return blob_rule_context(repo, rules, policy["canonical_source_commit"])
 
 
-def write_callbacks(work: Path, policy: Path, blob_oids: dict[str, set[bytes]]) -> tuple[Path, Path, Path]:
+def write_callbacks(work: Path, policy: Path, rule_context: dict) -> tuple[Path, Path, Path]:
     context = work / "rewrite-context.json"
-    context.write_text(json.dumps({key: sorted(value.decode() for value in values) for key, values in blob_oids.items()}, sort_keys=True), encoding="utf-8")
+    context.write_text(
+        json.dumps(
+            {
+                "selected": {key: sorted(value.decode() for value in values) for key, values in rule_context["selected"].items()},
+                "replacements": {key: base64.b64encode(value).decode("ascii") for key, value in rule_context["replacements"].items()},
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
     commit = work / "commit_callback.py"
     filename = work / "filename_callback.py"
     blob_cb = work / "blob_callback.py"
@@ -160,10 +217,12 @@ def write_callbacks(work: Path, policy: Path, blob_oids: dict[str, set[bytes]]) 
         encoding="utf-8",
     )
     blob_cb.write_text(
-        "import json\npolicy=json.load(open(" + policy_literal + ", encoding='utf-8'))\n"
-        "selected=json.load(open(" + context_literal + ", encoding='utf-8'))\n"
+        "import base64,json\npolicy=json.load(open(" + policy_literal + ", encoding='utf-8'))\n"
+        "context=json.load(open(" + context_literal + ", encoding='utf-8')); selected=context['selected']\n"
         "for rule in policy['rules']:\n"
-        "    if rule['scope']=='blob' and blob.original_id.decode('ascii') in selected[rule['id']]: blob.data=blob.data.replace(rule['old'].encode(),rule['new'].encode())\n",
+        "    if rule['scope']!='blob' or blob.original_id.decode('ascii') not in selected[rule['id']]: continue\n"
+        "    if rule['kind']=='exact_blob_replacement': blob.data=base64.b64decode(context['replacements'][rule['id']], validate=True)\n"
+        "    else: blob.data=blob.data.replace(rule['old'].encode(),rule['new'].encode())\n",
         encoding="utf-8",
     )
     return commit, filename, blob_cb
@@ -207,16 +266,21 @@ def parse_ref_map(path: Path, before: dict[str, str], after: dict[str, str]) -> 
     return rows
 
 
-def transformed_bytes(data: bytes, identity: bytes, rules: list[dict], selected: dict[str, set[bytes]]) -> bytes:
+def transformed_bytes(data: bytes, identity: bytes, rules: list[dict], context: dict) -> bytes:
     for rule in rules:
-        if rule["scope"] == "blob" and identity in selected[rule["id"]]:
+        if rule["scope"] != "blob" or identity not in context["selected"][rule["id"]]:
+            continue
+        if rule["kind"] == "exact_blob_replacement":
+            data = context["replacements"][rule["id"]]
+        else:
             data = data.replace(rule["old"].encode(), rule["new"].encode())
     return data
 
 
 def verify(repo: Path, preimage: Path, policy_path: Path, source_sha: str, work: Path, output: Path, commit_map: Path, ref_map: Path) -> None:
-    rules = load_policy(policy_path)
-    selected = preflight(preimage, rules)
+    policy = load_policy(policy_path)
+    rules = policy["rules"]
+    context = preflight(preimage, policy)
     before, after = refs(preimage), refs(repo)
     old_domain = set(git(preimage, "rev-list", "--all").splitlines())
     mapping = parse_commit_map(commit_map, old_domain)
@@ -262,10 +326,10 @@ def verify(repo: Path, preimage: Path, policy_path: Path, source_sha: str, work:
             got = rewritten.get(expected_name)
             if got is None or got[:2] != (mode, kind):
                 fail("path mode or type changed")
-            expected_data = transformed_bytes(blob(preimage, identity), identity, rules, selected) if kind == b"blob" else b""
+            expected_data = transformed_bytes(blob(preimage, identity), identity, rules, context) if kind == b"blob" else b""
             if kind == b"blob" and blob(repo, got[2]) != expected_data:
                 fail("target bytes do not equal the approved transformation or non-target bytes changed")
-            selected_blob = kind == b"blob" and any(identity in values for values in selected.values())
+            selected_blob = kind == b"blob" and any(identity in values for values in context["selected"].values())
             if name == expected_name and not selected_blob and got != (mode, kind, identity):
                 fail("non-target path, mode, type, or bytes changed")
             if name == expected_name and not selected_blob:
@@ -278,6 +342,15 @@ def verify(repo: Path, preimage: Path, policy_path: Path, source_sha: str, work:
         f"source_tree_before={git(preimage, 'rev-parse', source_sha + '^{tree}').strip()}\nsource_tree_after={git(repo, 'rev-parse', mapping[source_sha] + '^{tree}').strip()}\n",
         encoding="utf-8",
     )
+    residuals = {
+        rule_id: {
+            "count": len(values),
+            "oid_set_sha256": hashlib.sha256("\n".join(sorted(value.decode("ascii") for value in values)).encode()).hexdigest(),
+            "disposition": "review-required",
+        }
+        for rule_id, values in sorted(context["residuals"].items())
+    }
+    (output / "residual-review.json").write_text(json.dumps(residuals, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
     if not any(rule["scope"] in {"path", "blob"} for rule in rules):
         for old, new in mapping.items():
             if git(preimage, "rev-parse", old + "^{tree}") != git(repo, "rev-parse", new + "^{tree}"):
@@ -285,12 +358,12 @@ def verify(repo: Path, preimage: Path, policy_path: Path, source_sha: str, work:
 
 
 def apply(args: argparse.Namespace) -> None:
-    rules = load_policy(args.policy)
-    selected = preflight(args.repo, rules)
+    policy = load_policy(args.policy)
+    context = preflight(args.repo, policy)
     before = refs(args.repo)
     old_domain = set(git(args.repo, "rev-list", "--all").splitlines())
     args.work.mkdir(parents=True, exist_ok=True); args.output.mkdir(parents=True, exist_ok=True)
-    callbacks = write_callbacks(args.work, args.policy, selected)
+    callbacks = write_callbacks(args.work, args.policy, context)
     subprocess.run(["git", "-C", str(args.repo), "filter-repo", "--force", "--commit-callback", str(callbacks[0]), "--filename-callback", str(callbacks[1]), "--blob-callback", str(callbacks[2])], check=True)
     filter_repo_dir = git_path(args.repo, "filter-repo")
     commit_map = filter_repo_dir / "commit-map"; ref_map = filter_repo_dir / "ref-map"

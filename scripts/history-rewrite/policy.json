@@ -1,12 +1,107 @@
 {
-  "schema": 1,
-  "policy_id": "w13828-history-rewrite-v1",
-  "backup_boundary": {
-    "sha256": "a8fd17f5e166dc6d57b919f9a750273ef78fece25d0d91391b85f7493102cde2",
-    "count": 1052,
-    "bytes": 42899
+  "schema": 2,
+  "policy_id": "w13828-history-rewrite-reviewed-v2",
+  "repository": "sednalabs/codex",
+  "canonical_source_commit": "29babee8cb75962a2d0bf4848495d2bce28507b3",
+  "review_packet": {
+    "schema": "review-packet-v1",
+    "sha256": "8505add8c6d0c4964ac0102901196bbe6b122a527691b5006f60279faf6196c5",
+    "bytes": 2719,
+    "executable": false,
+    "ops_receipt": "w13828#60151"
   },
-  "rules": [],
+  "rules": [
+    {
+      "id": "canonical-contract-document",
+      "kind": "exact_blob_replacement",
+      "scope": "blob",
+      "target_paths": [
+        "docs/native-computer-use-cleanroom.md"
+      ],
+      "old_blob": "6db9aaa1cbafdd0e1868fbe53c4eabbced1b0691",
+      "new_blob": "c6b4021a7521ae4f77d46a4ce7d66923a57b6a54",
+      "source_path": "docs/native-computer-use-contracts.md",
+      "classification": "inaccurate_provenance",
+      "proof": "review-packet:8505add8c6d0c4964ac0102901196bbe6b122a527691b5006f60279faf6196c5#canonical-contract-document"
+    },
+    {
+      "id": "canonical-native-document",
+      "kind": "exact_blob_replacement",
+      "scope": "blob",
+      "target_paths": [
+        "docs/native-computer-use.md"
+      ],
+      "old_blob": "63991c53a9e6e8380ee7325769bb5ae68d180888",
+      "new_blob": "ac37f9e81d8030e78abae1cfb42750b0847e4f03",
+      "source_path": "docs/native-computer-use.md",
+      "classification": "inaccurate_provenance",
+      "proof": "review-packet:8505add8c6d0c4964ac0102901196bbe6b122a527691b5006f60279faf6196c5#canonical-native-document"
+    },
+    {
+      "id": "document-path",
+      "kind": "path",
+      "scope": "path",
+      "old": "docs/native-computer-use-cleanroom.md",
+      "new": "docs/native-computer-use-contracts.md",
+      "target_paths": [
+        "docs/native-computer-use-cleanroom.md"
+      ],
+      "classification": "mechanical_reference",
+      "proof": "review-packet:8505add8c6d0c4964ac0102901196bbe6b122a527691b5006f60279faf6196c5#document-path"
+    },
+    {
+      "id": "root-links",
+      "kind": "blob_literal",
+      "scope": "blob",
+      "old": "docs/native-computer-use-cleanroom.md",
+      "new": "docs/native-computer-use-contracts.md",
+      "target_paths": [
+        ".github/validation-lanes.json",
+        "docs/carry-divergence-ledger.md",
+        "docs/divergences/index.yaml",
+        "justfile"
+      ],
+      "classification": "mechanical_reference",
+      "proof": "review-packet:8505add8c6d0c4964ac0102901196bbe6b122a527691b5006f60279faf6196c5#root-links"
+    },
+    {
+      "id": "readme-link",
+      "kind": "blob_literal",
+      "scope": "blob",
+      "old": "./docs/native-computer-use-cleanroom.md",
+      "new": "./docs/native-computer-use-contracts.md",
+      "target_paths": [
+        "README.md"
+      ],
+      "classification": "mechanical_reference",
+      "proof": "review-packet:8505add8c6d0c4964ac0102901196bbe6b122a527691b5006f60279faf6196c5#readme-link"
+    },
+    {
+      "id": "relative-links",
+      "kind": "blob_literal",
+      "scope": "blob",
+      "old": "native-computer-use-cleanroom.md",
+      "new": "native-computer-use-contracts.md",
+      "target_paths": [
+        "docs/downstream.md",
+        "docs/native-computer-use.md"
+      ],
+      "classification": "mechanical_reference",
+      "proof": "review-packet:8505add8c6d0c4964ac0102901196bbe6b122a527691b5006f60279faf6196c5#relative-links"
+    },
+    {
+      "id": "test-name",
+      "kind": "blob_literal",
+      "scope": "blob",
+      "old": "canonical_desktop_step_schema_exposes_cleanroom_action_set",
+      "new": "canonical_desktop_step_schema_exposes_supported_action_set",
+      "target_paths": [
+        "codex-rs/tools/src/desktop_tool_tests.rs"
+      ],
+      "classification": "mechanical_reference",
+      "proof": "review-packet:8505add8c6d0c4964ac0102901196bbe6b122a527691b5006f60279faf6196c5#test-name"
+    }
+  ],
   "ambiguous": [],
   "patterns": [
     {
@@ -17,25 +112,12 @@
       "rationale": "Security and research references are unrelated provenance and must remain unchanged."
     },
     {
-      "id": "security-term-without-context",
-      "pattern": "(?i)\\b(vulnerabilit(y|ies)|exploit|circumvention)\\b",
-      "classification": "ambiguous",
-      "rationale": "Security-looking terms without an explicit research or disclosure context are not presumed accurate."
-    },
-    {
       "id": "cleanroom-legal-context",
       "pattern": "(?i)clean[- ]room|legal\\s+(review|context)|copyright\\s+(notice|holder)|licen[cs]e\\s+(review|text)",
       "classification": "preserve_accurate_unrelated_security_or_research",
       "priority": 100,
-      "rationale": "Clean-room and legal references are contextual and must remain unchanged."
-    },
-    {
-      "id": "provenance-reference",
-      "pattern": "(?i)upstream|downstream|fork|mirror|provenance|rename|brand",
-      "classification": "ambiguous",
-      "priority": 10,
-      "rationale": "Provenance language is retained until an exact inaccurate reference is proven."
+      "rationale": "Legal and implementation-method terms remain contextual outside exact reviewed rules."
     }
   ],
-  "notes": "Empty by design: inventory-only is safe before any provenance rule is reviewed. Add only exact, mechanically provable substitutions; leave uncertain references unchanged."
+  "notes": "Generated from a non-executable reviewed packet. Exact document bytes are retrieved by object ID; unmatched variants remain review-required."
 }

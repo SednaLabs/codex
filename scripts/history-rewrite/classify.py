@@ -23,11 +23,19 @@ base_patterns = [(p["id"], compile_pattern(p["pattern"], p["id"]), p["classifica
 rewrite_patterns = []
 for rule in policy.get("rules", []):
     if rule.get("scope") in {"commit_subject", "commit_body", "path", "blob"}:
+        if rule.get("kind") == "exact_blob_replacement":
+            # Canonical replacements are identified by exact path and object ID
+            # in rewrite_candidate.py; their private narrative bytes are not a
+            # literal classifier pattern.
+            continue
         if not rule.get("old") or not rule.get("new"):
             raise SystemExit("rewrite rules require non-empty old and new literals")
         scope = {rule["scope"]}
-        rewrite_patterns.append((rule["id"] + ":old", compile_pattern(re.escape(rule["old"]), rule["id"] + ":old"), "rewrite_rule_old", rule.get("proof", ""), rule.get("priority", 50), scope))
-        rewrite_patterns.append((rule["id"] + ":new", compile_pattern(re.escape(rule["new"]), rule["id"] + ":new"), "rewrite_rule_new", rule.get("proof", ""), rule.get("priority", 50), scope))
+        target_paths = set(rule.get("target_paths", []))
+        if rule["scope"] == "path":
+            target_paths.update(path.replace(rule["old"], rule["new"]) for path in target_paths)
+        rewrite_patterns.append((rule["id"] + ":old", compile_pattern(re.escape(rule["old"]), rule["id"] + ":old"), "rewrite_rule_old", rule.get("proof", ""), rule.get("priority", 50), scope, target_paths))
+        rewrite_patterns.append((rule["id"] + ":new", compile_pattern(re.escape(rule["new"]), rule["id"] + ":new"), "rewrite_rule_new", rule.get("proof", ""), rule.get("priority", 50), scope, target_paths))
 
 ACCEPTED_PATTERN_COUNT = len(base_patterns) + len(rewrite_patterns)
 if ACCEPTED_PATTERN_COUNT == 0:
@@ -219,10 +227,10 @@ def match_count(rx, value, label):
         count += 1
     return count
 
-def match_metadata(kind, value):
+def match_metadata(kind, value, path=""):
     metadata = []
-    for pid, rx, classification, rationale, _priority, scopes in rewrite_patterns:
-        if kind in scopes and rx.search(value):
+    for pid, rx, classification, rationale, _priority, scopes, target_paths in rewrite_patterns:
+        if kind in scopes and (not target_paths or path in target_paths) and rx.search(value):
             count = match_count(rx, value, pid)
             metadata.append((pid, classification, hashlib.sha256(rationale.encode()).hexdigest(), count))
     matches = [(pid, rx, classification, rationale, priority) for pid, rx, classification, rationale, priority, scopes in base_patterns if kind in scopes and rx.search(value)]
@@ -287,7 +295,7 @@ def scan(kind, identity, value, path=""):
     global scanned_fields, scanned_utf8_bytes
     encoded = value.encode("utf-8", "replace")
     account_scan(kind, len(encoded))
-    proof, metadata = match_metadata(kind, value)
+    proof, metadata = match_metadata(kind, value, path)
     emit(kind, identity, path, proof, metadata)
 
 def account_scan(kind, byte_count):
@@ -331,11 +339,11 @@ try:
                 if blob is None:
                     raise RuntimeError(f"git cat-file --batch missing blob {identity}")
                 normalized = blob.decode("utf-8", "replace")
-                proof, metadata = match_metadata("blob", normalized)
-                cached = (proof, metadata, len(normalized.encode("utf-8", "replace")))
+                cached = (normalized, len(normalized.encode("utf-8", "replace")))
                 blob_match_cache[identity] = cached
-            account_scan("blob", cached[2])
-            emit("blob", identity, path, cached[0], cached[1])
+            account_scan("blob", cached[1])
+            proof, metadata = match_metadata("blob", cached[0], path)
+            emit("blob", identity, path, proof, metadata)
 finally:
     batch.close()
 
