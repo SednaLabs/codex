@@ -448,11 +448,15 @@ def compare(left, right):
     if left[0] != right[0]:
         return (left[0] > right[0]) - (left[0] < right[0])
     if left[1] != right[1]:
-        if not left[1]:
-            return 1
-        if not right[1]:
-            return -1
-        return (left[1] > right[1]) - (left[1] < right[1])
+        if not left[1]: return 1
+        if not right[1]: return -1
+        for a, b in zip(left[1], right[1]):
+            if a == b: continue
+            a_num, b_num = a.isdigit(), b.isdigit()
+            if a_num and b_num: return (int(a) > int(b)) - (int(a) < int(b))
+            if a_num != b_num: return -1 if a_num else 1
+            return (a > b) - (a < b)
+        return (len(left[1]) > len(right[1])) - (len(left[1]) < len(right[1]))
     return (left[2] > right[2]) - (left[2] < right[2])
 
 candidate = parse(tag)
