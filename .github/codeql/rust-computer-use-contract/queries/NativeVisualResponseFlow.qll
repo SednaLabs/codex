@@ -71,6 +71,18 @@ predicate referenceAlias(Variable alias, Variable target) {
   )
 }
 
+/** A local alias initialized from the response's content-items field. */
+predicate contentItemsAlias(Variable alias, Variable responseVariable) {
+  exists(RefExpr reference, FieldExpr field |
+    alias.getInitializer() = reference and
+    reference.getExpr() = field and
+    field.hasContainer() and
+    field.hasIdentifier() and
+    field.getIdentifier().getText() = "content_items" and
+    responseVariableExpr(field.getContainer(), responseVariable)
+  )
+}
+
 /**
  * Local value flow covers aliases and ordinary borrow/reborrow edges without
  * claiming a universal interprocedural or collection model.
@@ -230,7 +242,11 @@ predicate responseContentItemsClear(MethodCallExpr clearCall, Variable variable)
     responseVariableExpr(field.getContainer(), variable) and
     (
       clearCall.getReceiver() = field or
-      localValueFlow(field, clearCall.getReceiver())
+      localValueFlow(field, clearCall.getReceiver()) or
+      exists(VariableAccess access |
+        clearCall.getReceiver() = access and
+        contentItemsAlias(access.getVariable(), variable)
+      )
     )
   )
 }
