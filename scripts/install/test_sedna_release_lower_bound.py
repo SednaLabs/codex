@@ -114,7 +114,9 @@ def main() -> None:
             "--allow-prerelease",
         )
         assert result.returncode == 97, result.stdout + result.stderr
-        assert curl_called, "numeric prerelease update did not reach mocked release fetch"
+        assert curl_called, (
+            "numeric prerelease update did not reach mocked release fetch"
+        )
 
 
 if __name__ == "__main__":

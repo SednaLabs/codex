@@ -160,8 +160,15 @@ async fn fetch_latest_github_release_version(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     for (release, version) in candidates.into_iter().rev() {
-        if release_metadata_is_valid(&release, &version).await? {
-            return Ok(version);
+        match release_metadata_is_valid(&release, &version).await {
+            Ok(true) => return Ok(version),
+            Ok(false) => {}
+            Err(err) => {
+                tracing::warn!(
+                    release_tag = %release.tag_name,
+                    "skipping Sedna release with unreadable metadata: {err}"
+                );
+            }
         }
     }
     anyhow::bail!("no valid published Sedna release matches the selected channel")

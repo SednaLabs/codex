@@ -39,7 +39,9 @@ class SednaReleaseInstallerTest(unittest.TestCase):
                 self.assertIn(expected_error, result.stderr)
                 self.assertEqual(
                     requests,
-                    ["https://api.github.com/repos/sednalabs/codex/releases?per_page=100"],
+                    [
+                        "https://api.github.com/repos/sednalabs/codex/releases?per_page=100"
+                    ],
                 )
                 self.assertEqual(current_target, "previous-managed-release")
 
