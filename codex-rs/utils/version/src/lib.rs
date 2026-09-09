@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use std::cmp::Ordering;
 
 /// The explicit repository identity for the Sedna release channel.
