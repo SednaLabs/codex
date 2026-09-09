@@ -138,14 +138,15 @@ jobs:
           boundary = policy.get("backup_boundary", {})
           boundary_tuple = (boundary.get("sha256"), boundary.get("count"), boundary.get("bytes"))
           selected_tuple = (os.environ["SELECTED_REFS_SHA256"], int(os.environ["SELECTED_REFS_COUNT"]), int(os.environ["SELECTED_REFS_BYTES"]))
-          if any(value in (None, "") for value in boundary_tuple):
-              raise SystemExit("checked-in backup boundary is not independently refreshed")
-          if (os.environ["BACKUP_REFS_SHA256"], int(os.environ["BACKUP_REFS_COUNT"]), int(os.environ["BACKUP_REFS_BYTES"])) != boundary_tuple:
+          backup_tuple = (os.environ["BACKUP_REFS_SHA256"], int(os.environ["BACKUP_REFS_COUNT"]), int(os.environ["BACKUP_REFS_BYTES"]))
+          if os.environ["MODE"] == "rewrite" and any(value in (None, "") for value in boundary_tuple):
+              raise SystemExit("rewrite requires an independently refreshed checked-in backup boundary")
+          if all(value not in (None, "") for value in boundary_tuple) and backup_tuple != boundary_tuple:
               raise SystemExit("caller backup boundary does not match checked-in boundary")
           if os.environ["MODE"] == "rewrite":
               if os.environ["BACKUP_SNAPSHOT_REFRESHED"] != "true":
                   raise SystemExit("rewrite requires a refreshed checked-in backup snapshot")
-              if selected_tuple != boundary_tuple:
+              if selected_tuple != backup_tuple:
                   raise SystemExit("rewrite requires selected refs to equal the checked-in backup boundary")
           elif os.environ["BACKUP_SNAPSHOT_REFRESHED"] != "false":
               raise SystemExit("inventory does not accept a refreshed backup snapshot override")
@@ -178,6 +179,10 @@ jobs:
           if os.environ["MODE"] == "rewrite" and not policy["rules"]:
               raise SystemExit("rewrite mode requires at least one reviewed rule")
           PY
+
+      - name: Exercise synthetic topology and content fixture
+        shell: bash
+        run: scripts/history-rewrite/fixtures/run_fixture.sh > fixture-evidence.txt
 
       - name: Fetch and bind exact source and selected refs
         shell: bash
