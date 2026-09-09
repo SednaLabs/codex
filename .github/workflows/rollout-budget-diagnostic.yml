@@ -1,0 +1,27 @@
+name: rollout-budget-diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "codex-rs/core/tests/common/lib.rs"
+      - "codex-rs/core/tests/suite/rollout_budget.rs"
+      - ".github/workflows/rollout-budget-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-test:
+    name: codex-core rollout budget rollback diagnostic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      RUST_MIN_STACK: "8388608"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Run targeted rollback-budget test
+        run: cargo test -p codex-core --test all suite::rollout_budget::restates_the_current_remainder_after_rollback -- --exact --test-threads=1
