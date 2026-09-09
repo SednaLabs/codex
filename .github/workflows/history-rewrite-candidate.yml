@@ -182,7 +182,7 @@ jobs:
 
       - name: Exercise synthetic topology and content fixture
         shell: bash
-        run: scripts/history-rewrite/fixtures/run_fixture.sh > fixture-evidence.txt
+        run: mkdir -p output && scripts/history-rewrite/fixtures/run_fixture.sh > output/fixture-evidence.txt
 
       - name: Fetch and bind exact source and selected refs
         shell: bash
@@ -253,6 +253,7 @@ jobs:
         run: |
           set -euo pipefail
           repo=work/repo.git
+          policy_abs="$GITHUB_WORKSPACE/$POLICY"
           git -C "$repo" for-each-ref --format='%(refname) %(objectname)' | sha256sum > output/refs.digest
           git -C "$repo" for-each-ref --format='%(refname)' | wc -l > output/ref-count
           git -C "$repo" rev-list --all --count > output/commit-count
@@ -316,7 +317,7 @@ jobs:
           pathlib.Path("output/filter-repo-provenance.txt").write_text(f"version=2.47.0\\nfilename=git_filter_repo-2.47.0-py3-none-any.whl\\nsha256={expected}\\nurl={url}\\n", encoding="utf-8")
           PY
           python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps work/git_filter_repo.whl
-          python3 - "$repo" "$POLICY" > work/rule-context.json <<'PY'
+          python3 - "$repo" "$policy_abs" > "$GITHUB_WORKSPACE/work/rule-context.json" <<'PY'
           import json, subprocess, sys
           repo, policy_path = sys.argv[1:]
           policy = json.load(open(policy_path, encoding="utf-8"))
@@ -345,9 +346,9 @@ jobs:
                   context["blob_rules"][rule["id"]] = {"old": rule["old"], "new": rule["new"], "oids": sorted(blobs), "global": bool(rule.get("global", False))}
           print(json.dumps(context, sort_keys=True))
           PY
-          cat > work/commit.py <<'PY'
-          import json
-          policy = json.load(open("scripts/history-rewrite/policy.json", encoding="utf-8"))
+          cat > "$GITHUB_WORKSPACE/work/commit.py" <<'PY'
+          import json, os
+          policy = json.load(open(os.path.join(os.environ["GITHUB_WORKSPACE"], "scripts/history-rewrite/policy.json"), encoding="utf-8"))
           for rule in policy["rules"]:
               if rule["scope"] not in {"commit_subject", "commit_body"}: continue
               message = commit.message.decode("utf-8", "replace")
@@ -357,24 +358,24 @@ jobs:
               else:
                   commit.message = (subject + ("\n" if sep else "") + body.replace(rule["old"], rule["new"])).encode("utf-8")
           PY
-          cat > work/filename.py <<'PY'
-          import json
-          policy = json.load(open("scripts/history-rewrite/policy.json", encoding="utf-8"))
+          cat > "$GITHUB_WORKSPACE/work/filename.py" <<'PY'
+          import json, os
+          policy = json.load(open(os.path.join(os.environ["GITHUB_WORKSPACE"], "scripts/history-rewrite/policy.json"), encoding="utf-8"))
           for rule in policy["rules"]:
               if rule["scope"] == "path":
                   targets = [p.encode() for p in rule["target_paths"]]
                   if any(filename == p or filename.startswith(p + b"/") for p in targets):
                       filename = filename.replace(rule["old"].encode(), rule["new"].encode())
           PY
-          cat > work/blob.py <<'PY'
-          import json
-          context = json.load(open("work/rule-context.json", encoding="utf-8"))
+          cat > "$GITHUB_WORKSPACE/work/blob.py" <<'PY'
+          import json, os
+          context = json.load(open(os.path.join(os.environ["GITHUB_WORKSPACE"], "work/rule-context.json"), encoding="utf-8"))
           original_id = blob.original_id.hex()
           for rule in context["blob_rules"].values():
               if rule["global"] or original_id in rule["oids"]:
                   blob.data = blob.data.replace(rule["old"].encode(), rule["new"].encode())
           PY
-          git -C "$repo" filter-repo --force --commit-callback work/commit.py --filename-callback work/filename.py --blob-callback work/blob.py
+          git -C "$repo" filter-repo --force --commit-callback "$GITHUB_WORKSPACE/work/commit.py" --filename-callback "$GITHUB_WORKSPACE/work/filename.py" --blob-callback "$GITHUB_WORKSPACE/work/blob.py"
           after=$(git -C "$repo" show-ref | sort)
           printf '%s\n' "$before" > output/refs-before.txt
           printf '%s\n' "$after" > output/refs-after.txt

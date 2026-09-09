@@ -10,11 +10,11 @@ git init -q "$repo"
 git -C "$repo" config user.name fixture
 git -C "$repo" config user.email fixture@example.invalid
 
-printf 'provenance\n' > "$fixture_dir/target.txt"
-printf 'shared\n' > "$fixture_dir/shared.txt"
-cp "$fixture_dir/shared.txt" "$fixture_dir/scoped-target.txt"
-cp "$fixture_dir/shared.txt" "$fixture_dir/scoped-unrelated.txt"
-printf '\377\000binary\n' > "$fixture_dir/binary.dat"
+printf 'provenance\n' > "$repo/target.txt"
+printf 'shared\n' > "$repo/shared.txt"
+cp "$repo/shared.txt" "$repo/scoped-target.txt"
+cp "$repo/shared.txt" "$repo/scoped-unrelated.txt"
+printf '\377\000binary\n' > "$repo/binary.dat"
 git -C "$repo" add .
 git -C "$repo" commit -qm linear
 base=$(git -C "$repo" rev-parse HEAD)
@@ -22,11 +22,11 @@ git -C "$repo" tag lightweight
 git -C "$repo" tag -a annotated -m annotated "$base"
 
 git -C "$repo" checkout -qb side
-printf 'side\n' > "$fixture_dir/side.txt"
+printf 'side\n' > "$repo/side.txt"
 git -C "$repo" add . && git -C "$repo" commit -qm side
 side=$(git -C "$repo" rev-parse HEAD)
 git -C "$repo" checkout -q master 2>/dev/null || git -C "$repo" checkout -q main
-printf 'main\n' >> "$fixture_dir/target.txt"
+printf 'main\n' >> "$repo/target.txt"
 git -C "$repo" add . && git -C "$repo" commit -qm main
 git -C "$repo" merge --no-ff -m merge "$side" >/dev/null
 
