@@ -129,10 +129,8 @@ async fn check_for_update(
 async fn fetch_latest_github_release_version(
     channel: codex_utils_version::SednaReleaseChannel,
 ) -> anyhow::Result<String> {
-    let releases_url = format!(
-        "https://api.github.com/repos/{}/releases?per_page=100",
-        CODEX_RELEASE_REPOSITORY
-    );
+    let releases_url =
+        format!("https://api.github.com/repos/{CODEX_RELEASE_REPOSITORY}/releases?per_page=100");
     let releases = create_client()
         .get(releases_url)
         .send()
