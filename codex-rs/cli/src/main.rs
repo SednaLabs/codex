@@ -2695,7 +2695,7 @@ mod tests {
             "x86_64",
             codex_utils_version::SednaReleaseChannel::Stable,
         ));
-        assert!(requires_manual_sedna_update(
+        assert!(!requires_manual_sedna_update(
             Some("sednalabs/codex"),
             Some("v"),
             "1.2.3-alpha.1-sedna.1",

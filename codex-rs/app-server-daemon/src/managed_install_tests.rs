@@ -94,26 +94,27 @@ fn managed_release_metadata_controls_sedna_automatic_update_authority() {
 }
 
 #[test]
-fn managed_release_metadata_rejects_prerelease_and_wrong_target() {
-    for metadata in [
-        ManagedReleaseMetadata {
-            release_tag: "v1.2.3-alpha.1-sedna.1".to_string(),
-            release_version: "1.2.3-alpha.1-sedna.1".to_string(),
-            repository: "sednalabs/codex".to_string(),
-            target: "x86_64-unknown-linux-gnu".to_string(),
-        },
-        ManagedReleaseMetadata {
-            release_tag: "v1.2.3-sedna.1".to_string(),
-            release_version: "1.2.3-sedna.1".to_string(),
-            repository: "sednalabs/codex".to_string(),
-            target: "x86_64-apple-darwin".to_string(),
-        },
-    ] {
-        assert_eq!(
-            managed_sedna_automatic_update_release_from_metadata(&metadata, "linux", "x86_64"),
-            None
-        );
-    }
+fn managed_release_metadata_accepts_valid_prerelease_identity_but_rejects_wrong_target() {
+    let prerelease = ManagedReleaseMetadata {
+        release_tag: "v1.2.3-alpha.1-sedna.1".to_string(),
+        release_version: "1.2.3-alpha.1-sedna.1".to_string(),
+        repository: "sednalabs/codex".to_string(),
+        target: "x86_64-unknown-linux-gnu".to_string(),
+    };
+    assert!(
+        managed_sedna_automatic_update_release_from_metadata(&prerelease, "linux", "x86_64",)
+            .is_some()
+    );
+    let wrong_target = ManagedReleaseMetadata {
+        release_tag: "v1.2.3-sedna.1".to_string(),
+        release_version: "1.2.3-sedna.1".to_string(),
+        repository: "sednalabs/codex".to_string(),
+        target: "x86_64-apple-darwin".to_string(),
+    };
+    assert_eq!(
+        managed_sedna_automatic_update_release_from_metadata(&wrong_target, "linux", "x86_64"),
+        None
+    );
 }
 
 #[tokio::test]

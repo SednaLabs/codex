@@ -508,7 +508,7 @@ mod tests {
             ),
             "no automatic update action"
         );
-        for release_version in ["1.2.3", "not-a-Sedna-release", "1.2.3-alpha.1-sedna.1"] {
+        for release_version in ["1.2.3", "not-a-Sedna-release"] {
             assert_eq!(
                 update_action_label_for_sedna_identity(
                     &unix,
@@ -520,6 +520,15 @@ mod tests {
                 "accepted {release_version}"
             );
         }
+        assert_eq!(
+            update_action_label_for_sedna_identity(
+                &unix,
+                /*has_sedna_identity*/ true,
+                "1.2.3-alpha.1-sedna.1",
+                SednaReleaseChannel::Stable,
+            ),
+            "Sedna standalone installer"
+        );
         for target in [
             ("macos", "x86_64"),
             ("macos", "aarch64"),

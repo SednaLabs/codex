@@ -343,7 +343,7 @@ mod tests {
                 "linux",
                 "x86_64",
             ),
-            None
+            Some(UpdateAction::StandaloneUnix(SednaReleaseChannel::Stable))
         );
     }
 

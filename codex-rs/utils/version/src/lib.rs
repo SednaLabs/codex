@@ -149,11 +149,12 @@ pub fn is_sedna_automatic_update_eligible_for_channel(
     target_arch: &str,
     channel: SednaReleaseChannel,
 ) -> bool {
-    let valid_version = match channel {
-        SednaReleaseChannel::Stable => is_stable_sedna_release_version(release_version),
-        SednaReleaseChannel::Prerelease => is_sedna_release_version(release_version),
-    };
-    valid_version && is_sedna_automatic_update_target_supported(target_os, target_arch)
+    // The selected channel filters remote candidates. A valid installed Sedna
+    // version may contain upstream prerelease provenance and can still move to
+    // a newer stable published release.
+    let _ = channel;
+    is_sedna_release_version(release_version)
+        && is_sedna_automatic_update_target_supported(target_os, target_arch)
 }
 
 /// Whether a validated managed binary carries a Sedna release identity. The
