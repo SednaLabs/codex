@@ -131,7 +131,7 @@ Use the `sedna-release` workflow for fork-owned GitHub releases.
 Current workflow characteristics:
 
 - Native GitHub-hosted Linux `x86_64` and Arm64 release builds, with Intel macOS `x86_64` assets selected
-  explicitly as `off`, `preview`, or `notarized`
+  explicitly as `off`, `preview`, `unnotarized`, or `notarized`
 - Release builds and GitHub Release publication are separate jobs: the build job keeps a read-only
   repository token while the small publication job owns the release environment and write-scoped
   publishing permissions.
@@ -164,7 +164,7 @@ The workflow checks that these are configured before starting the release build,
 short-lived installation token only after the assets are staged so the publication token is fresh
 for GitHub Release creation and verifier dispatch.
 
-Intel macOS publication has three explicit modes:
+Intel macOS publication has four explicit modes:
 
 - `off` is the default, including automatic tag and release-marker events. It publishes no macOS
   asset and never reads the `codesigning` environment.
@@ -172,12 +172,22 @@ Intel macOS publication has three explicit modes:
   metadata identify it as an unnotarized preview. The binaries are ad-hoc signed, architecture and
   signature checked, checksummed, and executed on an Intel macOS runner. They are not Developer ID
   signed, may be blocked by Gatekeeper, and are not an official supported macOS distribution.
+- `unnotarized` is an explicit ad-hoc assurance mode for stable or prerelease releases. It publishes
+  an Intel x64 tarball whose filename and metadata identify it as unnotarized. The binaries are
+  architecture and signature checked, checksummed, and executed on an Intel macOS runner, but carry
+  no Apple signing identity, are not Developer ID signed or notarized, and may be blocked by Gatekeeper.
+- Intel macOS release executables are built with `MACOSX_DEPLOYMENT_TARGET=12.0` and hosted artifact
+  checks require each shipped executable's Mach-O `LC_BUILD_VERSION` minimum version to be exactly
+  12.0 and require an x86_64 slice.
+  The hosted macOS runner is newer than Monterey; this metadata check does not claim a Monterey runtime
+  smoke test. No Monterey-hosted runner is currently part of this workflow, so Monterey runtime proof
+  remains an explicit validation gap.
 - `notarized` is fail-closed. It publishes Intel x64 binaries and a DMG only after Developer ID
   signing, Apple notarization, stapling, and a final Intel-runner verification pass.
 
 Apple provides Developer ID and notarization through the paid Apple Developer Program. This is a
 product prerequisite for the `notarized` mode, not merely a CI configuration detail. The free
-`preview` mode cannot provide the same Gatekeeper experience. See Apple's
+`preview` and `unnotarized` modes cannot provide the same Gatekeeper experience. See Apple's
 [membership comparison](https://developer.apple.com/support/compare-memberships/) and
 [notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
 
@@ -208,6 +218,14 @@ For a zero-credential Intel preview, dispatch a prerelease explicitly:
 python3 .github/scripts/dispatch_sedna_release.py \
   --channel prerelease \
   --macos-release-mode preview
+```
+
+For an explicitly labelled ad-hoc Intel asset on either a stable or prerelease release, use:
+
+```bash
+python3 .github/scripts/dispatch_sedna_release.py \
+  --channel stable \
+  --macos-release-mode unnotarized
 ```
 
 Omit `--macos-release-mode` to publish without macOS assets. Use `notarized` only after the

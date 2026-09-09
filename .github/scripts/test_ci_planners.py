@@ -712,6 +712,60 @@ class DispatchSednaReleaseTests(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_main_allows_unnotarized_macos_for_stable_release(self) -> None:
+        metadata = {
+            "release_tag": "v0.133.0-sedna.1",
+            "target_commit": "d4b356a4c23ff606556dac7232353c80d2ce8deb",
+            "github_prerelease": False,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                mock.patch.object(DISPATCH_SEDNA_RELEASE, "refresh_upstream_rust_tags"),
+                mock.patch.object(
+                    DISPATCH_SEDNA_RELEASE,
+                    "resolve_release_metadata",
+                    return_value=metadata,
+                ),
+                mock.patch.object(DISPATCH_SEDNA_RELEASE, "dispatch_release") as dispatch,
+            ):
+                result = DISPATCH_SEDNA_RELEASE.main(
+                    [
+                        "--repo",
+                        tmpdir,
+                        "--target-sha",
+                        metadata["target_commit"],
+                        "--channel",
+                        "stable",
+                        "--macos-release-mode",
+                        "unnotarized",
+                    ]
+                )
+
+        self.assertEqual(result, 0)
+        dispatch.assert_called_once()
+
+    def test_macos_minimum_validator_requires_monterey_exactly(self) -> None:
+        validator = REPO_ROOT / ".github/scripts/validate_macos_minimum.py"
+        for value in ("12.0", "12.0.0"):
+            with self.subTest(value=value):
+                proc = subprocess.run(
+                    [sys.executable, str(validator), value],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+        for value in ("12.1", "13.0", "", "12", "12.0.1", "twelve"):
+            with self.subTest(value=value):
+                proc = subprocess.run(
+                    [sys.executable, str(validator), value],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(proc.returncode, 0)
+
 
 class RouteSelectionTests(unittest.TestCase):
     maxDiff = None
@@ -9647,7 +9701,7 @@ fi
             },
             {
                 "default": "off",
-                "options": ["off", "preview", "notarized"],
+                "options": ["off", "preview", "unnotarized", "notarized"],
             },
         )
 
@@ -9679,7 +9733,7 @@ fi
                     },
                     {
                         "default": "off",
-                        "options": ["off", "preview", "notarized"],
+                        "options": ["off", "preview", "unnotarized", "notarized"],
                     },
                 )
 
@@ -9960,6 +10014,7 @@ fi
         self.assertEqual(build.get("runs-on"), "macos-15-intel")
         self.assertEqual(build.get("needs"), ["resolve", "release-macos-signing-preflight"])
         self.assertEqual((build.get("env") or {}).get("TARGET"), "x86_64-apple-darwin")
+        self.assertEqual((build.get("env") or {}).get("MACOSX_DEPLOYMENT_TARGET"), "12.0")
         self.assertEqual(sign.get("runs-on"), "ubuntu-24.04")
         self.assertIn(
             "macos_release_mode == 'notarized'",
@@ -9998,6 +10053,8 @@ fi
         for evidence in (
             "lipo",
             "codesign --verify --strict",
+            "validate_macos_minimum.py",
+            "missing LC_BUILD_VERSION minos load command",
             "diff -u",
             "hdiutil verify",
             "xcrun stapler validate",
@@ -10039,6 +10096,8 @@ fi
         for evidence in (
             "--identity -",
             "Signature=adhoc",
+            "LC_BUILD_VERSION",
+            "validate_macos_minimum.py",
             "UNNOTARIZED-PREVIEW",
             '"signing": "ad-hoc"',
             '"notarized": False',
@@ -10109,6 +10168,7 @@ fi
         self.assertEqual(resolve_matrix("off"), [linux, linux_arm])
         self.assertEqual(resolve_matrix("off", require_arm64=False), [linux])
         self.assertEqual(resolve_matrix("preview"), [linux, linux_arm, macos])
+        self.assertEqual(resolve_matrix("unnotarized"), [linux, linux_arm, macos])
         self.assertEqual(resolve_matrix("notarized"), [linux, linux_arm, macos])
         self.assertEqual(plan.get("runs-on"), "ubuntu-slim")
         compatibility_step = workflow_step_by_name(
@@ -10141,7 +10201,10 @@ fi
         self.assertIn("x86_64-apple-darwin", installer)
         self.assertIn("codesign --verify --strict", installer)
         self.assertIn("--macos-preview", installer)
+        self.assertIn("--macos-unnotarized", installer)
         self.assertIn("UNNOTARIZED-PREVIEW", installer)
+        self.assertIn("UNNOTARIZED.tar.gz", installer)
+        self.assertIn('"distribution": "unnotarized"', installer)
         self.assertIn("cosign verify-blob", installer)
         self.assertIn("gh attestation verify", installer)
         self.assertEqual(
@@ -10194,6 +10257,7 @@ fi
         self.assertIn("attestation_arg+=(--verify-signatures)", verify_script)
         self.assertIn("attestation_arg+=(--verify-attestation)", verify_script)
         self.assertIn("historical_x86_arg+=(--allow-historical-x86)", verify_script)
+        self.assertIn('macos_unnotarized_arg+=(--macos-unnotarized)', verify_script)
         self.assertIn('"${REQUIRE_LINUX_ARM64}" == "true"', verify_script)
         self.assertEqual(
             verify_script.count(
