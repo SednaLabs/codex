@@ -224,11 +224,14 @@ predicate responseFieldWrite(AssignmentExpr assignment, Variable variable) {
 predicate responseContentItemsClear(MethodCallExpr clearCall, Variable variable) {
   clearCall.getIdentifier().getText() = "clear" and
   exists(FieldExpr field |
-    clearCall.getReceiver() = field and
     field.hasContainer() and
     field.hasIdentifier() and
     field.getIdentifier().getText() = "content_items" and
-    responseVariableExpr(field.getContainer(), variable)
+    responseVariableExpr(field.getContainer(), variable) and
+    (
+      clearCall.getReceiver() = field or
+      localValueFlow(field, clearCall.getReceiver())
+    )
   )
 }
 
