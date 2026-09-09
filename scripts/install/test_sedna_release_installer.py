@@ -29,7 +29,7 @@ class SednaReleaseInstallerTest(unittest.TestCase):
         for candidate, expected_error in (
             ("v1.2.3-sedna.4", "is not newer than"),
             ("v1.2.3-sedna.3", "is not newer than"),
-            ("not-a-sedna-release", "release tag must look like"),
+            ("not-a-sedna-release", "no valid published Sedna release"),
         ):
             with self.subTest(candidate=candidate):
                 result, requests, current_target = run_installer(
