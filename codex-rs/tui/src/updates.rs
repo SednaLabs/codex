@@ -1,41 +1,26 @@
 #![cfg(any(not(debug_assertions), test))]
 
-#[cfg(not(test))]
 use crate::legacy_core::config::Config;
-#[cfg(not(test))]
 use crate::update_action;
-#[cfg(not(test))]
 use crate::update_action::UpdateAction;
 use crate::update_versions::extract_version_from_latest_tag;
-#[cfg(not(test))]
 use crate::update_versions::is_sedna_release_version;
-#[cfg(not(test))]
 use crate::update_versions::is_source_build_version;
-#[cfg(not(test))]
 use crate::updates_cache::VersionInfo;
-#[cfg(not(test))]
 use crate::updates_cache::read_version_info;
-#[cfg(not(test))]
 use crate::updates_cache::version_filepath;
-#[cfg(not(test))]
 use chrono::Duration;
-#[cfg(not(test))]
 use chrono::Utc;
-#[cfg(not(test))]
 use codex_login::default_client::create_client;
 use serde::Deserialize;
 use std::future::Future;
-#[cfg(not(test))]
 use std::path::Path;
 
-#[cfg(not(test))]
 use crate::version::CODEX_CLI_VERSION;
 use crate::version::CODEX_RELEASE_REPOSITORY;
 
-#[cfg(not(test))]
 pub(crate) use crate::updates_cache::dismiss_version;
 
-#[cfg(not(test))]
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
     if !config.check_for_update_on_startup
         || is_source_build_version(CODEX_CLI_VERSION)
@@ -106,7 +91,6 @@ struct ReleaseMetadata {
     release_channel: Option<codex_utils_version::SednaReleaseChannel>,
 }
 
-#[cfg(not(test))]
 async fn check_for_update(
     version_file: &Path,
     action: Option<UpdateAction>,
@@ -142,7 +126,6 @@ async fn check_for_update(
     Ok(())
 }
 
-#[cfg(not(test))]
 async fn fetch_latest_github_release_version(
     channel: codex_utils_version::SednaReleaseChannel,
 ) -> anyhow::Result<String> {
@@ -208,7 +191,6 @@ where
     anyhow::bail!("no valid published Sedna release matches the selected channel")
 }
 
-#[cfg(not(test))]
 async fn release_metadata_is_valid(release: &ReleaseInfo, version: &str) -> anyhow::Result<bool> {
     let target = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",

@@ -14,7 +14,7 @@ pub enum UpdateAction {
 }
 
 impl UpdateAction {
-    #[cfg(not(debug_assertions))]
+    #[cfg(any(not(debug_assertions), test))]
     pub(crate) fn from_install_context(
         context: &InstallContext,
         release_channel: SednaReleaseChannel,
@@ -143,7 +143,7 @@ impl UpdateAction {
     }
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(any(not(debug_assertions), test))]
 pub fn get_update_action(release_channel: SednaReleaseChannel) -> Option<UpdateAction> {
     UpdateAction::from_install_context(InstallContext::current(), release_channel)
 }
