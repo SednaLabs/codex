@@ -196,10 +196,10 @@ predicate nodeBefore(CfgNode earlier, CfgNode later) {
   )
 }
 
-predicate cfgNodeBetween(Call guard, AssignmentExpr assignment, Expr exitExpr) {
+predicate cfgNodeBetween(Call guard, Expr mutation, Expr exitExpr) {
   exists(CallCfgNode guardNode, CfgNode writeNode, CfgNode exitNode |
     guardNode.getCall() = guard and
-    cfgNodeForExpr(assignment, writeNode) and
+    cfgNodeForExpr(mutation, writeNode) and
     cfgNodeForExpr(exitExpr, exitNode) and
     nodeBefore(guardNode, writeNode) and
     nodeBefore(writeNode, exitNode)
@@ -220,6 +220,18 @@ predicate responseFieldWrite(AssignmentExpr assignment, Variable variable) {
   )
 }
 
+/** A destructive clear of the response's native-image content collection. */
+predicate responseContentItemsClear(MethodCallExpr clearCall, Variable variable) {
+  clearCall.getIdentifier().getText() = "clear" and
+  exists(FieldExpr field |
+    clearCall.getReceiver() = field and
+    field.hasContainer() and
+    field.hasIdentifier() and
+    field.getIdentifier().getText() = "content_items" and
+    responseVariableExpr(field.getContainer(), variable)
+  )
+}
+
 predicate responseWriteAfterGuard(
   Function function,
   Call guard,
@@ -237,6 +249,20 @@ predicate responseWriteAfterGuard(
       ) or
       responseFieldWrite(assignment, variable)
     )
+  )
+}
+
+predicate responseContentItemsClearAfterGuard(
+  Function function,
+  Call guard,
+  Expr exitExpr,
+  Expr responseExpr
+) {
+  exists(Variable variable, MethodCallExpr clearCall |
+    responseVariableExpr(responseExpr, variable) and
+    clearCall.getEnclosingCallable() = function and
+    cfgNodeBetween(guard, clearCall, exitExpr) and
+    responseContentItemsClear(clearCall, variable)
   )
 }
 
@@ -281,6 +307,7 @@ predicate responseVersionGuarded(
     guardUsesReturnedResponse(guard, responseExpr) and
     guardDominatesExit(guard, exitExpr) and
     not responseWriteAfterGuard(function, guard, exitExpr, responseExpr) and
+    not responseContentItemsClearAfterGuard(function, guard, exitExpr, responseExpr) and
     guardBodyDowngrades(guard)
   )
 }
