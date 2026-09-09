@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(dead_code))]
+
 #[cfg(any(not(debug_assertions), test))]
 use codex_install_context::InstallContext;
 #[cfg(any(not(debug_assertions), test))]

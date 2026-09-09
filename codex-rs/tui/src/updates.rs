@@ -1,4 +1,5 @@
 #![cfg(any(not(debug_assertions), test))]
+#![cfg_attr(test, allow(dead_code, unused_imports))]
 
 use crate::legacy_core::config::Config;
 use crate::update_action;
