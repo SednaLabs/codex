@@ -151,14 +151,15 @@ def write_callbacks(work: Path, policy: Path, blob_oids: dict[str, set[bytes]]) 
     filename.write_text(
         "import json\npolicy=json.load(open(" + policy_literal + ", encoding='utf-8'))\n"
         "for rule in policy['rules']:\n"
-        "    if rule['scope']=='path' and filename in {p.encode() for p in rule['target_paths']}: filename=filename.replace(rule['old'].encode(),rule['new'].encode())\n",
+        "    if rule['scope']=='path' and filename in {p.encode() for p in rule['target_paths']}: filename=filename.replace(rule['old'].encode(),rule['new'].encode())\n"
+        "return filename\n",
         encoding="utf-8",
     )
     blob_cb.write_text(
         "import json\npolicy=json.load(open(" + policy_literal + ", encoding='utf-8'))\n"
         "selected=json.load(open(" + context_literal + ", encoding='utf-8'))\n"
         "for rule in policy['rules']:\n"
-        "    if rule['scope']=='blob' and blob.original_id.hex() in selected[rule['id']]: blob.data=blob.data.replace(rule['old'].encode(),rule['new'].encode())\n",
+        "    if rule['scope']=='blob' and blob.original_id.decode('ascii') in selected[rule['id']]: blob.data=blob.data.replace(rule['old'].encode(),rule['new'].encode())\n",
         encoding="utf-8",
     )
     return commit, filename, blob_cb
