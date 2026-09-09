@@ -10095,7 +10095,7 @@ fi
             preview_if,
         )
         self.assertIn("needs.release-macos-build.result == 'success'", preview_if)
-        self.assertIn("macos_release_mode == 'preview'", preview.get("if") or "")
+        self.assertIn("macos_release_mode == 'preview'", preview_if)
         self.assertIn("macos_release_mode == 'unnotarized'", preview_if)
 
         preview_steps = {
