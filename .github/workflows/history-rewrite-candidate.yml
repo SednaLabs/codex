@@ -88,9 +88,9 @@ jobs:
           expected = "2cd04929b9024e83e65db571cbe36aec65ead0cb5f9ec5abe42158654af5ad83"
           data = urllib.request.urlopen(url).read()
           if hashlib.sha256(data).hexdigest() != expected: raise SystemExit("pinned git-filter-repo digest mismatch")
-          pathlib.Path("git_filter_repo.whl").write_bytes(data)
+          pathlib.Path("git_filter_repo-2.47.0-py3-none-any.whl").write_bytes(data)
           PY
-          python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps git_filter_repo.whl
+          python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps git_filter_repo-2.47.0-py3-none-any.whl
       - name: Exercise the production rewrite and verifier against synthetic fixtures
         shell: bash
         run: scripts/history-rewrite/fixtures/run_fixture.sh > fixture-evidence.txt
@@ -223,11 +223,11 @@ jobs:
           data = urllib.request.urlopen(url).read()
           if hashlib.sha256(data).hexdigest() != expected: raise SystemExit("pinned git-filter-repo digest mismatch")
           pathlib.Path("work").mkdir(exist_ok=True)
-          pathlib.Path("work/git_filter_repo.whl").write_bytes(data)
+          pathlib.Path("work/git_filter_repo-2.47.0-py3-none-any.whl").write_bytes(data)
           pathlib.Path("output").mkdir(exist_ok=True)
           pathlib.Path("output/filter-repo-provenance.txt").write_text(f"version=2.47.0\\nfilename=git_filter_repo-2.47.0-py3-none-any.whl\\nsha256={expected}\\nurl={url}\\n", encoding="utf-8")
           PY
-          python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps work/git_filter_repo.whl
+          python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps work/git_filter_repo-2.47.0-py3-none-any.whl
 
       - name: Exercise the production rewrite and verifier against synthetic fixtures
         shell: bash
