@@ -1,12 +1,9 @@
 name: generate-sedna-config-artifacts
 
 on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: Exact branch or commit to generate from.
-        required: true
-        type: string
+  push:
+    branches:
+      - feat/sedna-release-channel-updates
 
 permissions:
   contents: read
@@ -17,9 +14,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Bind the branch-only generation target
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/feat/sedna-release-channel-updates"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@7f9e10fa1a39b50d0c72d7f5e7eea0e9f314b1ba # stable
       - name: Generate canonical outputs
