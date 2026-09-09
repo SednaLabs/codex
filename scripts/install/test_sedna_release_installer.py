@@ -29,7 +29,6 @@ class SednaReleaseInstallerTest(unittest.TestCase):
         for candidate, expected_error in (
             ("v1.2.3-sedna.4", "is not newer than"),
             ("v1.2.3-sedna.3", "is not newer than"),
-            ("v1.2.4-alpha.1-sedna.1", "must be stable"),
             ("not-a-sedna-release", "release tag must look like"),
         ):
             with self.subTest(candidate=candidate):
@@ -40,7 +39,7 @@ class SednaReleaseInstallerTest(unittest.TestCase):
                 self.assertIn(expected_error, result.stderr)
                 self.assertEqual(
                     requests,
-                    ["https://api.github.com/repos/sednalabs/codex/releases/latest"],
+                    ["https://api.github.com/repos/sednalabs/codex/releases?per_page=100"],
                 )
                 self.assertEqual(current_target, "previous-managed-release")
 
@@ -55,7 +54,7 @@ class SednaReleaseInstallerTest(unittest.TestCase):
         self.assertEqual(
             requests,
             [
-                "https://api.github.com/repos/sednalabs/codex/releases/latest",
+                "https://api.github.com/repos/sednalabs/codex/releases?per_page=100",
                 "https://api.github.com/repos/sednalabs/codex/releases/tags/v1.2.4-sedna.1",
                 "https://api.github.com/repos/sednalabs/codex/releases/assets/101",
                 "https://api.github.com/repos/sednalabs/codex/releases/assets/102",
@@ -184,7 +183,18 @@ def run_installer(
         bin_dir = root / "bin"
         bin_dir.mkdir()
         latest_json = root / "latest-release.json"
-        latest_json.write_text(json.dumps({"tag_name": selected_tag}), encoding="utf-8")
+        latest_json.write_text(
+            json.dumps(
+                [
+                    {
+                        "tag_name": selected_tag,
+                        "draft": False,
+                        "prerelease": "-alpha." in selected_tag,
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
         request_log = root / "requests.log"
         release = (
             create_release(root, selected_tag) if successful or allow_prerelease else {}
@@ -209,7 +219,7 @@ def run_installer(
             "  shift\n"
             "done\n"
             'printf "%s\\n" "$url" >> "$SEDNA_TEST_REQUEST_LOG"\n'
-            'if [[ "$url" == */releases/latest ]]; then cp "$SEDNA_TEST_LATEST_JSON" "$output"; exit 0; fi\n'
+            'if [[ "$url" == *"/releases?per_page=100" ]]; then cp "$SEDNA_TEST_LATEST_JSON" "$output"; exit 0; fi\n'
             'if [[ "$url" == */releases/tags/* && -n "${SEDNA_TEST_RELEASE_JSON:-}" ]]; then cp "$SEDNA_TEST_RELEASE_JSON" "$output"; exit 0; fi\n'
             'case "$url" in\n'
             '  */releases/assets/101) cp "$SEDNA_TEST_ARCHIVE" "$output" ;;\n'

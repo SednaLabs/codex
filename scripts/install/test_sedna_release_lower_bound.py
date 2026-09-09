@@ -102,33 +102,19 @@ def main() -> None:
         assert_rejected(
             fake_curl,
             root,
-            "v1.2.3-sedna.4",
-            "1.2.3-alpha.1-sedna.3",
-            "bound",
-        )
-        assert_rejected(
-            fake_curl,
-            root,
             "v1.2.3-alpha.1-sedna.4",
             "1.2.3-sedna.3",
-            "must be stable",
+            "is not newer than",
         )
-        assert_rejected(
+        result, curl_called = run_case(
             fake_curl,
             root,
-            "v1.2.3-alpha.1-sedna.4",
-            "1.2.3-sedna.3",
-            "cannot be combined",
+            "v1.2.4-alpha.10-sedna.1",
+            "1.2.4-alpha.2-sedna.99",
             "--allow-prerelease",
         )
-        assert_rejected(
-            fake_curl,
-            root,
-            "v1.2.3-sedna.4",
-            "1.2.3-sedna.3",
-            "cannot be combined",
-            "--allow-prerelease",
-        )
+        assert result.returncode == 97, result.stdout + result.stderr
+        assert curl_called, "numeric prerelease update did not reach mocked release fetch"
 
 
 if __name__ == "__main__":

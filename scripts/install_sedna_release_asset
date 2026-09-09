@@ -128,11 +128,6 @@ if [[ "$require_newer_than_set" == "true" && "$target" != "x86_64-unknown-linux-
   echo "error: --require-newer-than is only valid for automatic Linux release targets" >&2
   exit 1
 fi
-if [[ "$require_newer_than_set" == "true" && "$allow_prerelease" == "true" ]]; then
-  echo "error: --require-newer-than cannot be combined with --allow-prerelease" >&2
-  exit 1
-fi
-
 api_root="https://api.github.com/repos/sednalabs/codex"
 install_root="${HOME}/.codex/packages/standalone"
 bin_dir="${HOME}/.local/bin"
