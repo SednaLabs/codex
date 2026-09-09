@@ -745,6 +745,27 @@ class DispatchSednaReleaseTests(unittest.TestCase):
         self.assertEqual(result, 0)
         dispatch.assert_called_once()
 
+    def test_macos_minimum_validator_requires_monterey_exactly(self) -> None:
+        validator = REPO_ROOT / ".github/scripts/validate_macos_minimum.py"
+        for value in ("12.0", "12.0.0"):
+            with self.subTest(value=value):
+                proc = subprocess.run(
+                    [sys.executable, str(validator), value],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+        for value in ("12.1", "13.0", "", "12", "12.0.1", "twelve"):
+            with self.subTest(value=value):
+                proc = subprocess.run(
+                    [sys.executable, str(validator), value],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(proc.returncode, 0)
+
 
 class RouteSelectionTests(unittest.TestCase):
     maxDiff = None
@@ -10075,7 +10096,7 @@ fi
             "Signature=adhoc",
             "LC_BUILD_VERSION",
             "Monterey 12.0",
-            "version != (12, 0)",
+            "validate_macos_minimum.py",
             "UNNOTARIZED-PREVIEW",
             '"signing": "ad-hoc"',
             '"notarized": False',

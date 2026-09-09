@@ -1004,19 +1004,11 @@ jobs:
               --entitlements "${entitlements}"
             lipo "${staged_path}" -verify_arch x86_64
             minos="$(otool -l "${staged_path}" | awk '/LC_BUILD_VERSION/{found=1; next} found && $1 == "minos" {print $2; exit}')"
-            python3 - "${minos}" <<'PY'
-          import sys
-
-          value = sys.argv[1]
-          if not value:
-              raise SystemExit("error: missing LC_BUILD_VERSION minos load command")
-          try:
-              version = tuple(int(part) for part in value.split(".")[:2])
-          except ValueError as exc:
-              raise SystemExit(f"error: invalid macOS minimum version {value!r}") from exc
-          if version != (12, 0):
-              raise SystemExit(f"error: macOS minimum version {value} is not exactly Monterey 12.0")
-          PY
+            if [[ -z "${minos}" ]]; then
+              echo "error: missing LC_BUILD_VERSION minos load command" >&2
+              exit 1
+            fi
+            python3 .github/scripts/validate_macos_minimum.py "${minos}"
             codesign --verify --strict --verbose=2 "${staged_path}"
             codesign -dvvv "${staged_path}" 2>&1 | grep -F "Signature=adhoc"
           done
@@ -1366,19 +1358,11 @@ jobs:
             chmod 0755 "${path}"
             lipo "${path}" -verify_arch x86_64
             minos="$(otool -l "${path}" | awk '/LC_BUILD_VERSION/{found=1; next} found && $1 == "minos" {print $2; exit}')"
-            python3 - "${minos}" <<'PY'
-          import sys
-
-          value = sys.argv[1]
-          if not value:
-              raise SystemExit("error: missing LC_BUILD_VERSION minos load command")
-          try:
-              version = tuple(int(part) for part in value.split(".")[:2])
-          except ValueError as exc:
-              raise SystemExit(f"error: invalid macOS minimum version {value!r}") from exc
-          if version != (12, 0):
-              raise SystemExit(f"error: macOS minimum version {value} is not exactly Monterey 12.0")
-          PY
+            if [[ -z "${minos}" ]]; then
+              echo "error: missing LC_BUILD_VERSION minos load command" >&2
+              exit 1
+            fi
+            python3 .github/scripts/validate_macos_minimum.py "${minos}"
             codesign --verify --strict --verbose=2 "${path}"
             expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
             test -f "${expected_entitlements}"
