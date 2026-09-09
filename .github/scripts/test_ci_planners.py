@@ -10097,7 +10097,6 @@ fi
             "--identity -",
             "Signature=adhoc",
             "LC_BUILD_VERSION",
-            "Monterey 12.0",
             "validate_macos_minimum.py",
             "UNNOTARIZED-PREVIEW",
             '"signing": "ad-hoc"',
