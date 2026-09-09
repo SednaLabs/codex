@@ -55,6 +55,7 @@ impl DaemonSettings {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use codex_utils_version::SednaReleaseChannel;
     use pretty_assertions::assert_eq;
 
     use super::DaemonSettings;

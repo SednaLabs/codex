@@ -833,6 +833,7 @@ fn run_update_command() -> anyhow::Result<()> {
     }
 }
 
+#[cfg(any(test, not(debug_assertions)))]
 fn requires_manual_sedna_update(
     repository: Option<&str>,
     tag_prefix: Option<&str>,
@@ -848,6 +849,7 @@ fn requires_manual_sedna_update(
         )
 }
 
+#[cfg(any(test, not(debug_assertions)))]
 fn update_manual_install_url_for_release_identity(
     repository: Option<&str>,
     tag_prefix: Option<&str>,
