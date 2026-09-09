@@ -1177,7 +1177,7 @@ See the Codex keymap documentation for supported actions and examples."
                 &mut app_server,
                 AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
                     latest_version,
-                    crate::update_action::get_update_action(),
+                    crate::update_action::get_update_action(config.sedna_release_channel),
                 ))),
             ))
             .await?;

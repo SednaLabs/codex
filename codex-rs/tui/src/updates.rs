@@ -34,7 +34,7 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
         return None;
     }
 
-    let action = update_action::get_update_action()?;
+    let action = update_action::get_update_action(config.sedna_release_channel)?;
     let version_file = version_filepath(config);
     let channel = config.sedna_release_channel;
     let info = read_version_info(&version_file).ok();

@@ -42,7 +42,8 @@ pub(crate) async fn run_update_prompt_if_needed(
     let Some(latest_version) = updates::get_upgrade_version_for_popup(config) else {
         return Ok(UpdatePromptOutcome::Continue);
     };
-    let Some(update_action) = crate::update_action::get_update_action() else {
+    let Some(update_action) = crate::update_action::get_update_action(config.sedna_release_channel)
+    else {
         return Ok(UpdatePromptOutcome::Continue);
     };
 
@@ -251,7 +252,7 @@ mod tests {
         UpdatePromptScreen::new(
             FrameRequester::test_dummy(),
             "9.9.9".into(),
-            UpdateAction::StandaloneUnix,
+            UpdateAction::StandaloneUnix(codex_utils_version::SednaReleaseChannel::Stable),
         )
     }
 

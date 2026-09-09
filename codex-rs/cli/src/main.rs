@@ -799,7 +799,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_update_command() -> anyhow::Result<()> {
+async fn run_update_command(root_config_overrides: CliConfigOverrides) -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     {
         anyhow::bail!(
@@ -809,16 +809,25 @@ fn run_update_command() -> anyhow::Result<()> {
 
     #[cfg(not(debug_assertions))]
     {
-        let Some(action) = codex_tui::get_update_action() else {
+        let config = ConfigBuilder::default()
+            .cli_overrides(
+                root_config_overrides
+                    .parse_overrides()
+                    .map_err(anyhow::Error::msg)?,
+            )
+            .build()
+            .await?;
+        let Some(action) = codex_tui::get_update_action(config.sedna_release_channel) else {
             if requires_manual_sedna_update(
                 option_env!("CODEX_RELEASE_REPOSITORY"),
                 option_env!("CODEX_RELEASE_TAG_PREFIX"),
                 codex_utils_version::RELEASE_VERSION,
                 std::env::consts::OS,
                 std::env::consts::ARCH,
+                config.sedna_release_channel,
             ) {
                 anyhow::bail!(
-                    "Automatic updates are available only for stable Sedna Linux releases. This build must be updated manually from https://github.com/sednalabs/codex/releases."
+                    "Automatic updates are available only for the selected Sedna release channel on Linux. This build must be updated manually from https://github.com/sednalabs/codex/releases."
                 );
             }
             anyhow::bail!(
@@ -840,12 +849,14 @@ fn requires_manual_sedna_update(
     release_version: &str,
     target_os: &str,
     target_arch: &str,
+    release_channel: codex_utils_version::SednaReleaseChannel,
 ) -> bool {
     codex_utils_version::is_sedna_release_identity(repository, tag_prefix)
-        && !codex_utils_version::is_sedna_automatic_update_eligible(
+        && !codex_utils_version::is_sedna_automatic_update_eligible_for_channel(
             release_version,
             target_os,
             target_arch,
+            release_channel,
         )
 }
 
@@ -1476,7 +1487,7 @@ async fn cli_main(
                 root_remote_auth_token_env.as_deref(),
                 "update",
             )?;
-            run_update_command()?;
+            run_update_command(root_config_overrides.clone()).await?;
         }
         Some(Subcommand::Doctor(doctor_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -2682,6 +2693,7 @@ mod tests {
             "1.2.3-sedna.1",
             "linux",
             "x86_64",
+            codex_utils_version::SednaReleaseChannel::Stable,
         ));
         assert!(requires_manual_sedna_update(
             Some("sednalabs/codex"),
@@ -2689,6 +2701,7 @@ mod tests {
             "1.2.3-alpha.1-sedna.1",
             "linux",
             "x86_64",
+            codex_utils_version::SednaReleaseChannel::Stable,
         ));
         assert!(requires_manual_sedna_update(
             Some("sednalabs/codex"),
@@ -2696,6 +2709,15 @@ mod tests {
             "1.2.3-sedna.1",
             "macos",
             "x86_64",
+            codex_utils_version::SednaReleaseChannel::Stable,
+        ));
+        assert!(!requires_manual_sedna_update(
+            Some("sednalabs/codex"),
+            Some("v"),
+            "1.2.3-alpha.1-sedna.1",
+            "linux",
+            "x86_64",
+            codex_utils_version::SednaReleaseChannel::Prerelease,
         ));
     }
 

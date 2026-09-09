@@ -11,8 +11,9 @@ use codex_install_context::InstallContext;
 use codex_install_context::InstallMethod;
 use codex_install_context::StandalonePlatform;
 use codex_utils_version::RELEASE_VERSION;
+use codex_utils_version::SednaReleaseChannel;
 use codex_utils_version::is_newer_sedna_release;
-use codex_utils_version::is_sedna_automatic_update_eligible;
+use codex_utils_version::is_sedna_automatic_update_eligible_for_channel;
 use codex_utils_version::is_sedna_release_identity;
 use codex_utils_version::parse_sedna_release_tag;
 use serde::Deserialize;
@@ -40,15 +41,29 @@ pub(super) fn updates_check(config: &Config) -> DoctorCheck {
             "check for update on startup: {}",
             config.check_for_update_on_startup
         ),
-        format!("update action: {}", update_action_label(&install_context)),
+        format!(
+            "selected release channel: {}",
+            serde_json::to_string(&config.sedna_release_channel)
+                .unwrap_or_else(|_| "\"stable\"".to_string())
+                .trim_matches('\"')
+        ),
+        format!(
+            "update action: {}",
+            update_action_label(&install_context, config.sedna_release_channel)
+        ),
     ];
     let version_file = config.codex_home.join(VERSION_FILE_NAME);
-    push_cached_version_details(&mut details, &version_file, &install_context);
+    push_cached_version_details(
+        &mut details,
+        &version_file,
+        &install_context,
+        config.sedna_release_channel,
+    );
 
     let mut status = CheckStatus::Ok;
     let mut summary = LOCALLY_CONSISTENT_SUMMARY.to_string();
-    if is_sedna_automatic_update_probe_available(&install_context) {
-        match fetch_latest_sedna_release_version(&install_context) {
+    if is_sedna_automatic_update_probe_available(&install_context, config.sedna_release_channel) {
+        match fetch_latest_sedna_release_version(&install_context, config.sedna_release_channel) {
             Ok(latest_version) => {
                 details.push(format!("latest Sedna release: {latest_version}"));
                 let comparison = is_newer_sedna_release(&latest_version, RELEASE_VERSION);
@@ -105,6 +120,7 @@ fn push_cached_version_details(
     details: &mut Vec<String>,
     version_file: &Path,
     install_context: &InstallContext,
+    release_channel: SednaReleaseChannel,
 ) {
     details.push(format!("version cache: {}", version_file.display()));
     match std::fs::read_to_string(version_file) {
@@ -113,7 +129,8 @@ fn push_cached_version_details(
                 push_cache_info_details(
                     details,
                     &info,
-                    is_sedna_automatic_update_probe_available(install_context),
+                    is_sedna_automatic_update_probe_available(install_context, release_channel),
+                    release_channel,
                 );
             }
             Err(err) => details.push(format!("version cache parse: {err}")),
@@ -129,12 +146,13 @@ fn push_cache_info_details(
     details: &mut Vec<String>,
     info: &VersionInfo,
     automatic_update_probe_available: bool,
+    release_channel: SednaReleaseChannel,
 ) {
     if !automatic_update_probe_available {
         return;
     }
-    if !info.matches_sedna_release_identity() {
-        details.push("version cache: ignored (untrusted release identity)".to_string());
+    if !info.matches_sedna_release_identity_and_channel(release_channel) {
+        details.push("version cache: ignored (untrusted release identity or channel)".to_string());
         return;
     }
 
@@ -147,7 +165,10 @@ fn push_cache_info_details(
     }
 }
 
-fn update_action_label(context: &InstallContext) -> &'static str {
+fn update_action_label(
+    context: &InstallContext,
+    release_channel: SednaReleaseChannel,
+) -> &'static str {
     update_action_label_for_sedna_identity(
         context,
         is_sedna_release_identity(
@@ -155,6 +176,7 @@ fn update_action_label(context: &InstallContext) -> &'static str {
             option_env!("CODEX_RELEASE_TAG_PREFIX"),
         ),
         RELEASE_VERSION,
+        release_channel,
     )
 }
 
@@ -162,6 +184,7 @@ fn update_action_label_for_sedna_identity(
     context: &InstallContext,
     has_sedna_identity: bool,
     release_version: &str,
+    release_channel: SednaReleaseChannel,
 ) -> &'static str {
     update_action_label_for_sedna_identity_on_target(
         context,
@@ -169,6 +192,7 @@ fn update_action_label_for_sedna_identity(
         release_version,
         std::env::consts::OS,
         std::env::consts::ARCH,
+        release_channel,
     )
 }
 
@@ -178,11 +202,17 @@ fn update_action_label_for_sedna_identity_on_target(
     release_version: &str,
     target_os: &str,
     target_arch: &str,
+    release_channel: SednaReleaseChannel,
 ) -> &'static str {
     if !has_sedna_identity {
         return "no automatic update action outside the Sedna release channel";
     }
-    if !is_sedna_automatic_update_eligible(release_version, target_os, target_arch) {
+    if !is_sedna_automatic_update_eligible_for_channel(
+        release_version,
+        target_os,
+        target_arch,
+        release_channel,
+    ) {
         return "no automatic update action";
     }
     match &context.method {
@@ -202,7 +232,10 @@ fn update_action_label_for_sedna_identity_on_target(
     }
 }
 
-fn is_sedna_automatic_update_probe_available(context: &InstallContext) -> bool {
+fn is_sedna_automatic_update_probe_available(
+    context: &InstallContext,
+    release_channel: SednaReleaseChannel,
+) -> bool {
     is_sedna_automatic_update_probe_available_on_target(
         context,
         is_sedna_release_identity(
@@ -212,6 +245,7 @@ fn is_sedna_automatic_update_probe_available(context: &InstallContext) -> bool {
         RELEASE_VERSION,
         std::env::consts::OS,
         std::env::consts::ARCH,
+        release_channel,
     )
 }
 
@@ -221,9 +255,15 @@ fn is_sedna_automatic_update_probe_available_on_target(
     release_version: &str,
     target_os: &str,
     target_arch: &str,
+    release_channel: SednaReleaseChannel,
 ) -> bool {
     has_sedna_identity
-        && is_sedna_automatic_update_eligible(release_version, target_os, target_arch)
+        && is_sedna_automatic_update_eligible_for_channel(
+            release_version,
+            target_os,
+            target_arch,
+            release_channel,
+        )
         && matches!(
             &context.method,
             InstallMethod::Standalone {
@@ -233,25 +273,120 @@ fn is_sedna_automatic_update_probe_available_on_target(
         )
 }
 
-fn fetch_latest_sedna_release_version(context: &InstallContext) -> Result<String, String> {
-    if !is_sedna_automatic_update_probe_available(context) {
+fn fetch_latest_sedna_release_version(
+    context: &InstallContext,
+    release_channel: SednaReleaseChannel,
+) -> Result<String, String> {
+    if !is_sedna_automatic_update_probe_available(context, release_channel) {
         return Err(
             "latest release probe is unavailable outside the Sedna standalone automatic-update policy"
                 .to_string(),
         );
     }
     let url = format!(
-        "https://api.github.com/repos/{}/releases/latest",
+        "https://api.github.com/repos/{}/releases?per_page=100",
         codex_utils_version::SEDNA_RELEASE_REPOSITORY
     );
-    let info = http_get_json::<ReleaseInfo>(&url)?;
-    parse_sedna_release_tag(&info.tag_name)
-        .ok_or_else(|| format!("failed to parse Sedna release tag {}", info.tag_name))
+    let releases = http_get_json::<Vec<ReleaseInfo>>(&url)?;
+    select_latest_sedna_release(releases, release_channel)
 }
 
 #[derive(Deserialize)]
 struct ReleaseInfo {
     tag_name: String,
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    assets: Vec<ReleaseAsset>,
+}
+
+#[derive(Deserialize)]
+struct ReleaseAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Deserialize)]
+struct ReleaseMetadata {
+    release_tag: String,
+    release_version: String,
+    repository: String,
+    target: String,
+    #[serde(default)]
+    release_channel: Option<SednaReleaseChannel>,
+}
+
+fn select_latest_sedna_release(
+    releases: Vec<ReleaseInfo>,
+    release_channel: SednaReleaseChannel,
+) -> Result<String, String> {
+    let target = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        _ => return Err("unsupported Sedna installer target".to_string()),
+    };
+    let metadata_name = if target == "x86_64-unknown-linux-gnu" {
+        "RELEASE-METADATA.json".to_string()
+    } else {
+        format!("RELEASE-METADATA-{target}.json")
+    };
+    let mut candidates = releases
+        .into_iter()
+        .filter(|release| {
+            !release.draft && release_channel.allows_api_prerelease(release.prerelease)
+        })
+        .filter_map(|release| {
+            parse_sedna_release_tag(&release.tag_name).map(|version| (release, version))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|(_, left), (_, right)| {
+        is_newer_sedna_release(left, right)
+            .map(|newer| {
+                if newer {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            })
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for (release, version) in candidates.into_iter().rev() {
+        let Some(asset) = release
+            .assets
+            .iter()
+            .find(|asset| asset.name == metadata_name)
+        else {
+            continue;
+        };
+        let metadata = http_get_json::<ReleaseMetadata>(&asset.browser_download_url)?;
+        let api_channel = if release.prerelease {
+            SednaReleaseChannel::Prerelease
+        } else {
+            SednaReleaseChannel::Stable
+        };
+        if release_metadata_matches(&metadata, &release.tag_name, &version, target, api_channel) {
+            return Ok(version);
+        }
+    }
+    Err("no valid published Sedna release matches the selected channel".to_string())
+}
+
+fn release_metadata_matches(
+    metadata: &ReleaseMetadata,
+    release_tag: &str,
+    release_version: &str,
+    target: &str,
+    api_channel: SednaReleaseChannel,
+) -> bool {
+    metadata.release_tag == release_tag
+        && metadata.release_version == release_version
+        && metadata.repository == codex_utils_version::SEDNA_RELEASE_REPOSITORY
+        && metadata.target == target
+        // The GitHub API is the release-channel authority. Metadata may omit
+        // the field for legacy releases, but it cannot contradict the API.
+        && metadata.release_channel.is_none_or(|channel| channel == api_channel)
 }
 
 fn http_get_json<T>(url: &str) -> Result<T, String>
@@ -273,14 +408,19 @@ struct VersionInfo {
     release_repository: Option<String>,
     #[serde(default)]
     release_tag_prefix: Option<String>,
+    #[serde(default)]
+    release_channel: Option<SednaReleaseChannel>,
 }
 
 impl VersionInfo {
-    fn matches_sedna_release_identity(&self) -> bool {
+    fn matches_sedna_release_identity_and_channel(
+        &self,
+        release_channel: SednaReleaseChannel,
+    ) -> bool {
         is_sedna_release_identity(
             self.release_repository.as_deref(),
             self.release_tag_prefix.as_deref(),
-        )
+        ) && self.release_channel == Some(release_channel)
     }
 }
 
@@ -314,10 +454,13 @@ mod tests {
             InstallMethod::Other,
         ] {
             assert!(
-                !update_action_label(&InstallContext {
-                    method,
-                    package_layout: None,
-                })
+                !update_action_label(
+                    &InstallContext {
+                        method,
+                        package_layout: None,
+                    },
+                    SednaReleaseChannel::Stable
+                )
                 .contains("openai")
             );
         }
@@ -352,6 +495,7 @@ mod tests {
                 "1.2.3-sedna.4",
                 "linux",
                 "x86_64",
+                SednaReleaseChannel::Stable,
             ),
             "Sedna standalone installer"
         );
@@ -360,6 +504,7 @@ mod tests {
                 &windows,
                 /*has_sedna_identity*/ true,
                 "1.2.3-sedna.4",
+                SednaReleaseChannel::Stable,
             ),
             "no automatic update action"
         );
@@ -369,6 +514,7 @@ mod tests {
                     &unix,
                     /*has_sedna_identity*/ true,
                     release_version,
+                    SednaReleaseChannel::Stable,
                 ),
                 "no automatic update action",
                 "accepted {release_version}"
@@ -386,6 +532,7 @@ mod tests {
                     "1.2.3-sedna.4",
                     target.0,
                     target.1,
+                    SednaReleaseChannel::Stable,
                 ),
                 "no automatic update action",
                 "accepted unsupported target {}-{}",
@@ -420,6 +567,7 @@ mod tests {
             "1.2.3-sedna.4",
             "linux",
             "x86_64",
+            SednaReleaseChannel::Stable,
         ));
         assert!(!is_sedna_automatic_update_probe_available_on_target(
             &npm,
@@ -427,6 +575,7 @@ mod tests {
             "1.2.3-sedna.4",
             "linux",
             "x86_64",
+            SednaReleaseChannel::Stable,
         ));
     }
 
@@ -500,6 +649,7 @@ mod tests {
             dismissed_version: Some("1.2.3-sedna.2".to_string()),
             release_repository: Some("sednalabs/codex".to_string()),
             release_tag_prefix: Some("v".to_string()),
+            release_channel: Some(SednaReleaseChannel::Stable),
         };
         let mut details = Vec::new();
 
@@ -507,6 +657,7 @@ mod tests {
             &mut details,
             &info,
             /*automatic_update_probe_available*/ true,
+            SednaReleaseChannel::Stable,
         );
 
         assert_eq!(
@@ -520,6 +671,42 @@ mod tests {
     }
 
     #[test]
+    fn prerelease_doctor_cache_and_metadata_must_match_the_selected_api_channel() {
+        let info = VersionInfo {
+            latest_version: "1.2.3-alpha.1-sedna.2".to_string(),
+            last_checked_at: None,
+            dismissed_version: None,
+            release_repository: Some("sednalabs/codex".to_string()),
+            release_tag_prefix: Some("v".to_string()),
+            release_channel: Some(SednaReleaseChannel::Prerelease),
+        };
+        assert!(info.matches_sedna_release_identity_and_channel(SednaReleaseChannel::Prerelease));
+        assert!(!info.matches_sedna_release_identity_and_channel(SednaReleaseChannel::Stable));
+
+        let metadata = ReleaseMetadata {
+            release_tag: "v1.2.3-alpha.1-sedna.2".to_string(),
+            release_version: "1.2.3-alpha.1-sedna.2".to_string(),
+            repository: "sednalabs/codex".to_string(),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            release_channel: Some(SednaReleaseChannel::Prerelease),
+        };
+        assert!(release_metadata_matches(
+            &metadata,
+            "v1.2.3-alpha.1-sedna.2",
+            "1.2.3-alpha.1-sedna.2",
+            "x86_64-unknown-linux-gnu",
+            SednaReleaseChannel::Prerelease,
+        ));
+        assert!(!release_metadata_matches(
+            &metadata,
+            "v1.2.3-alpha.1-sedna.2",
+            "1.2.3-alpha.1-sedna.2",
+            "x86_64-unknown-linux-gnu",
+            SednaReleaseChannel::Stable,
+        ));
+    }
+
+    #[test]
     fn cached_update_details_require_unix_standalone_install() {
         let info = VersionInfo {
             latest_version: "1.2.3-sedna.2".to_string(),
@@ -527,6 +714,7 @@ mod tests {
             dismissed_version: Some("1.2.3-sedna.2".to_string()),
             release_repository: Some("sednalabs/codex".to_string()),
             release_tag_prefix: Some("v".to_string()),
+            release_channel: Some(SednaReleaseChannel::Stable),
         };
         let native_release_dir = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
             std::env::temp_dir().join("native-release"),
@@ -552,9 +740,15 @@ mod tests {
             "1.2.3-sedna.4",
             "linux",
             "x86_64",
+            SednaReleaseChannel::Stable,
         );
         assert!(!npm_probe_available);
-        push_cache_info_details(&mut npm_details, &info, npm_probe_available);
+        push_cache_info_details(
+            &mut npm_details,
+            &info,
+            npm_probe_available,
+            SednaReleaseChannel::Stable,
+        );
         assert!(npm_details.is_empty());
 
         let mut unix_details = Vec::new();
@@ -564,9 +758,15 @@ mod tests {
             "1.2.3-sedna.4",
             "linux",
             "x86_64",
+            SednaReleaseChannel::Stable,
         );
         assert!(unix_probe_available);
-        push_cache_info_details(&mut unix_details, &info, unix_probe_available);
+        push_cache_info_details(
+            &mut unix_details,
+            &info,
+            unix_probe_available,
+            SednaReleaseChannel::Stable,
+        );
         assert_eq!(
             unix_details,
             vec![
@@ -585,6 +785,7 @@ mod tests {
             dismissed_version: Some("1.2.3-sedna.2".to_string()),
             release_repository: None,
             release_tag_prefix: None,
+            release_channel: None,
         };
         let mut details = Vec::new();
 
@@ -592,11 +793,12 @@ mod tests {
             &mut details,
             &info,
             /*automatic_update_probe_available*/ true,
+            SednaReleaseChannel::Stable,
         );
 
         assert_eq!(
             details,
-            vec!["version cache: ignored (untrusted release identity)"]
+            vec!["version cache: ignored (untrusted release identity or channel)"]
         );
     }
 
@@ -608,6 +810,7 @@ mod tests {
             dismissed_version: Some("999.0.0".to_string()),
             release_repository: Some("openai/codex".to_string()),
             release_tag_prefix: Some("rust-v".to_string()),
+            release_channel: Some(SednaReleaseChannel::Stable),
         };
         let mut details = Vec::new();
 
@@ -615,11 +818,12 @@ mod tests {
             &mut details,
             &info,
             /*automatic_update_probe_available*/ true,
+            SednaReleaseChannel::Stable,
         );
 
         assert_eq!(
             details,
-            vec!["version cache: ignored (untrusted release identity)"]
+            vec!["version cache: ignored (untrusted release identity or channel)"]
         );
     }
 }
