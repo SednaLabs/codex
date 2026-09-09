@@ -372,7 +372,6 @@ mod tests {
 
 /// Returns the latest version to show in a popup, if it should be shown.
 /// This respects the user's dismissal choice for the current latest version.
-#[cfg(not(test))]
 pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
     if !config.check_for_update_on_startup || is_source_build_version(CODEX_CLI_VERSION) {
         return None;
