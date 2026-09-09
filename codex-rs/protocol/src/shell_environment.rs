@@ -43,6 +43,15 @@ where
     env_map
 }
 
+/// Returns whether the policy explicitly opts into inheriting `RUST_LOG`.
+pub fn policy_explicitly_includes_inherited_rust_log(policy: &ShellEnvironmentPolicy) -> bool {
+    !policy.include_only.is_empty()
+        && policy
+            .include_only
+            .iter()
+            .any(|pattern| pattern.matches("RUST_LOG"))
+}
+
 pub fn populate_env<I>(
     vars: I,
     policy: &ShellEnvironmentPolicy,
@@ -71,6 +80,14 @@ where
                 .collect()
         }
     };
+
+    // Desktop and editor harnesses commonly set `RUST_LOG` for Codex itself.
+    // Do not leak that value into subprocesses unless the user explicitly
+    // includes it. Match the platform's environment-key semantics exactly so
+    // similarly named Unix variables remain untouched.
+    if !policy_explicitly_includes_inherited_rust_log(policy) {
+        env_map.retain(|key, _| !is_rust_log(key));
+    }
 
     let matches_any = |name: &str, patterns: &[EnvironmentVariablePattern]| -> bool {
         patterns.iter().any(|pattern| pattern.matches(name))
@@ -107,6 +124,50 @@ where
     }
 
     env_map
+}
+
+fn is_rust_log(name: &str) -> bool {
+    if cfg!(target_os = "windows") {
+        name.eq_ignore_ascii_case("RUST_LOG")
+    } else {
+        name == "RUST_LOG"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_rust_log_is_removed() {
+        let vars = vec![
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            ("RUST_LOG".to_string(), "warn".to_string()),
+        ];
+
+        assert_eq!(
+            populate_env(
+                vars,
+                &ShellEnvironmentPolicy::default(),
+                /*thread_id*/ None,
+            ),
+            HashMap::from([("PATH".to_string(), "/usr/bin".to_string())])
+        );
+    }
+
+    #[test]
+    fn explicitly_included_rust_log_is_preserved() {
+        let vars = vec![("RUST_LOG".to_string(), "codex_core=trace".to_string())];
+        let policy = ShellEnvironmentPolicy {
+            include_only: vec![EnvironmentVariablePattern::new_case_insensitive("RUST_LOG")],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            populate_env(vars.clone(), &policy, /*thread_id*/ None),
+            vars.into_iter().collect()
+        );
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -246,5 +307,18 @@ mod non_windows_tests {
         ]);
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn similarly_named_unix_env_vars_are_preserved() {
+        let vars = make_vars(&[("rust_log", "warn"), ("Rust_Log", "debug")]);
+
+        let result = populate_env(
+            vars.clone(),
+            &ShellEnvironmentPolicy::default(),
+            /*thread_id*/ None,
+        );
+
+        assert_eq!(result, vars.into_iter().collect());
     }
 }

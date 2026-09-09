@@ -34,7 +34,7 @@ struct WorkspaceFsmonitorProbeRunner<'a> {
 impl FsmonitorProbeRunner for WorkspaceFsmonitorProbeRunner<'_> {
     async fn run_probe(&mut self, args: &[&str]) -> Option<Vec<u8>> {
         let argv = ["git"].into_iter().chain(args.iter().copied());
-        let command = WorkspaceCommand::new(argv).cwd(self.cwd.to_path_buf());
+        let command = WorkspaceCommand::local_only_git(argv).cwd(self.cwd.to_path_buf());
         match self.runner.run(command).await {
             Ok(output) if output.success() => Some(output.stdout.into_bytes()),
             _ => None,
@@ -238,7 +238,7 @@ async fn run_git_command(
     ]
     .into_iter()
     .chain(args.iter().copied());
-    let mut command = WorkspaceCommand::new(argv)
+    let mut command = WorkspaceCommand::local_only_git(argv)
         .cwd(cwd.to_path_buf())
         .timeout(DIFF_COMMAND_TIMEOUT)
         .disable_output_cap();

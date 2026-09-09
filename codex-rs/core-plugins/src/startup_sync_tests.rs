@@ -106,6 +106,32 @@ fn git_command_sanitizes_ambient_repository_environment() {
     }
 }
 
+#[test]
+fn preserves_trusted_global_system_and_auth_environment() {
+    let trusted = [
+        ("GIT_CONFIG_GLOBAL", "/trusted/global.gitconfig"),
+        ("GIT_CONFIG_SYSTEM", "/trusted/system.gitconfig"),
+        ("GIT_SSH_COMMAND", "/trusted/ssh-wrapper"),
+        ("HOME", "/trusted/home"),
+        ("XDG_CONFIG_HOME", "/trusted/config"),
+    ];
+    let mut command = git_command(Path::new("git"));
+    for (name, value) in trusted {
+        command.env(name, value);
+    }
+
+    for (name, value) in trusted {
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(key, _)| *key == OsStr::new(name))
+                .and_then(|(_, value)| value),
+            Some(OsStr::new(value)),
+            "{name} should be preserved"
+        );
+    }
+}
+
 fn write_file(path: &Path, contents: &str) {
     std::fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
     std::fs::write(path, contents).unwrap();

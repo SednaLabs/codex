@@ -62,6 +62,16 @@ impl WorkspaceCommand {
         }
     }
 
+    /// Creates a Git command that cannot initiate transport or lazy-fetch promisor objects.
+    pub(crate) fn local_only_git(argv: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let mut command = Self::new(argv);
+        command.env.extend(
+            codex_git_utils::local_only_git_env()
+                .map(|(key, value)| (key.to_string(), Some(value.to_string()))),
+        );
+        command
+    }
+
     /// Sets the command working directory.
     pub(crate) fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
         self.cwd = Some(cwd.into());

@@ -23,6 +23,8 @@ use crate::telemetry::ConnectionTransport;
 use crate::telemetry::ExecServerTelemetry;
 use codex_http_client::HttpClientFactory;
 
+const UNKNOWN_REQUEST_METHOD_ERROR: &str = "method not found";
+
 #[derive(Clone)]
 pub(crate) struct ConnectionProcessor {
     session_registry: Arc<SessionRegistry>,
@@ -179,10 +181,7 @@ async fn run_connection(
                         if outgoing_tx
                             .send(RpcServerOutboundMessage::Error {
                                 request_id: request.id,
-                                error: method_not_found(format!(
-                                    "exec-server stub does not implement `{}` yet",
-                                    request.method
-                                )),
+                                error: method_not_found(UNKNOWN_REQUEST_METHOD_ERROR.to_string()),
                             })
                             .await
                             .is_err()
@@ -202,9 +201,11 @@ async fn run_connection(
                 codex_exec_server_protocol::JSONRPCMessage::Notification(notification) => {
                     let Some(route) = router.notification_route(notification.method.as_str())
                     else {
+                        // Keep the peer-controlled method out of logs. Unknown
+                        // notification names are unbounded wire input.
                         warn!(
-                            "closing exec-server connection after unexpected notification: {}",
-                            notification.method
+                            method = unknown_notification_method_label(&notification.method),
+                            "closing exec-server connection after unexpected notification"
                         );
                         break;
                     };
@@ -267,7 +268,11 @@ fn request_span(
     span_name: &str,
     request: &codex_exec_server_protocol::JSONRPCRequest,
 ) -> tracing::Span {
-    let method = request.method.as_str();
+    // `span_name` comes from the static route registry (or the fixed
+    // `unknown` label for an unrecognized request). Never attach the raw wire
+    // method to telemetry: it is controlled by the peer and can contain
+    // unbounded or sensitive data.
+    let method = span_name;
     let span = tracing::info_span!(
         "codex.exec_server.request",
         otel.kind = "server",
@@ -281,6 +286,10 @@ fn request_span(
         warn!(method, "ignoring invalid inbound exec-server trace carrier");
     }
     span
+}
+
+fn unknown_notification_method_label(_method: &str) -> &'static str {
+    "unknown"
 }
 
 fn request_result(message: &Option<RpcServerOutboundMessage>) -> &'static str {
@@ -326,8 +335,10 @@ mod tests {
     use tracing_subscriber::filter::filter_fn;
     use tracing_subscriber::prelude::*;
 
+    use super::UNKNOWN_REQUEST_METHOD_ERROR;
     use super::request_span;
     use super::run_connection;
+    use super::unknown_notification_method_label;
     use crate::ExecServerRuntimePaths;
     use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
@@ -351,7 +362,25 @@ mod tests {
     use crate::server::session_registry::SessionRegistry;
 
     #[test]
-    fn request_span_uses_bounded_name_wire_method_and_inbound_trace_parent() {
+    fn request_routes_return_bounded_protocol_method_names() {
+        let router = crate::server::registry::build_router();
+        assert_eq!(
+            router
+                .request_route(EXEC_TERMINATE_METHOD)
+                .map(|(method, _)| method),
+            Some(EXEC_TERMINATE_METHOD)
+        );
+        assert!(router.request_route("custom/method").is_none());
+    }
+
+    #[test]
+    fn unknown_notification_labels_do_not_include_peer_method_values() {
+        let method = format!("sensitive/{}", "x".repeat(16 * 1024));
+        assert_eq!(unknown_notification_method_label(&method), "unknown");
+    }
+
+    #[test]
+    fn request_span_uses_bounded_name_and_inbound_trace_parent() {
         let span_exporter = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()
             .with_simple_exporter(span_exporter.clone())
@@ -395,7 +424,7 @@ mod tests {
                 .iter()
                 .find(|attribute| attribute.key.as_str() == "method")
                 .map(|attribute| attribute.value.clone()),
-            Some(opentelemetry::Value::String(method.into()))
+            Some(opentelemetry::Value::String("unknown".into()))
         );
         assert_eq!(request_span.span_context.trace_id(), trace_id);
         assert_eq!(request_span.parent_span_id, parent_span_id);
@@ -431,6 +460,47 @@ mod tests {
                 status: EnvironmentStatusKind::Ready,
             }
         );
+
+        drop(writer);
+        drop(lines);
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("processor should exit")
+            .expect("processor should join");
+    }
+
+    #[tokio::test]
+    async fn unknown_request_error_does_not_echo_peer_method() {
+        let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
+        let (mut writer, mut lines, task) = spawn_test_connection(registry, "unknown-method");
+        send_request(
+            &mut writer,
+            /*id*/ 1,
+            INITIALIZE_METHOD,
+            &InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            },
+        )
+        .await;
+        let _: InitializeResponse = read_response(&mut lines, /*expected_id*/ 1).await;
+        send_notification(&mut writer, INITIALIZED_METHOD, &()).await;
+
+        let peer_method = format!("peer-controlled/{}", "x".repeat(16 * 1024));
+        send_request(&mut writer, /*id*/ 2, &peer_method, &()).await;
+        let line = lines
+            .next_line()
+            .await
+            .expect("read method-not-found response")
+            .expect("method-not-found response line");
+        let error = match serde_json::from_str::<JSONRPCMessage>(&line)
+            .expect("decode method-not-found response")
+        {
+            JSONRPCMessage::Error(error) => error,
+            other => panic!("expected JSON-RPC error, got {other:?}"),
+        };
+        assert_eq!(error.error.message, UNKNOWN_REQUEST_METHOD_ERROR);
+        assert!(!line.contains(&peer_method));
 
         drop(writer);
         drop(lines);

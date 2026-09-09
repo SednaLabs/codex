@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 use super::ClosedNoiseVirtualStream;
+use super::protocol_method_label;
 use super::spawn_noise_virtual_stream;
 use crate::ExecServerRuntimePaths;
 use crate::connection::CHANNEL_CAPACITY;
@@ -17,6 +18,17 @@ use crate::noise_channel::PendingResponderHandshake;
 use crate::noise_relay::message_framing::frame_jsonrpc_message;
 use crate::relay_proto::RelayData;
 use crate::server::ConnectionProcessor;
+
+#[test]
+fn outbound_span_method_labels_reject_unknown_peer_values() {
+    assert_eq!(
+        protocol_method_label(codex_exec_server_protocol::EXEC_METHOD),
+        codex_exec_server_protocol::EXEC_METHOD
+    );
+    let sensitive = format!("private/token/{}", "x".repeat(16 * 1024));
+    assert_eq!(protocol_method_label(&sensitive), "unknown");
+    assert_eq!(protocol_method_label("custom/dynamic-method"), "unknown");
+}
 
 #[tokio::test]
 async fn processor_exit_reports_closed_virtual_stream() -> Result<()> {

@@ -7,8 +7,39 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use codex_exec_server_protocol::CAPABILITY_ROOTS_DISCOVER_METHOD;
+use codex_exec_server_protocol::ENVIRONMENT_INFO_METHOD;
+use codex_exec_server_protocol::ENVIRONMENT_STATUS_METHOD;
+use codex_exec_server_protocol::EXEC_CLOSED_METHOD;
+use codex_exec_server_protocol::EXEC_EXITED_METHOD;
+use codex_exec_server_protocol::EXEC_METHOD;
+use codex_exec_server_protocol::EXEC_OUTPUT_DELTA_METHOD;
+use codex_exec_server_protocol::EXEC_READ_METHOD;
+use codex_exec_server_protocol::EXEC_SIGNAL_METHOD;
+use codex_exec_server_protocol::EXEC_TERMINATE_METHOD;
+use codex_exec_server_protocol::EXEC_WRITE_METHOD;
+use codex_exec_server_protocol::FS_CANONICALIZE_METHOD;
+use codex_exec_server_protocol::FS_CLOSE_METHOD;
+use codex_exec_server_protocol::FS_COPY_METHOD;
+use codex_exec_server_protocol::FS_CREATE_DIRECTORY_METHOD;
+use codex_exec_server_protocol::FS_GET_METADATA_METHOD;
+use codex_exec_server_protocol::FS_OPEN_METHOD;
+use codex_exec_server_protocol::FS_READ_BLOCK_METHOD;
+use codex_exec_server_protocol::FS_READ_DIRECTORY_METHOD;
+use codex_exec_server_protocol::FS_READ_FILE_METHOD;
+use codex_exec_server_protocol::FS_REMOVE_METHOD;
+use codex_exec_server_protocol::FS_WALK_METHOD;
+use codex_exec_server_protocol::FS_WRITE_FILE_METHOD;
+use codex_exec_server_protocol::HTTP_REQUEST_BODY_DELTA_METHOD;
+use codex_exec_server_protocol::HTTP_REQUEST_METHOD;
+use codex_exec_server_protocol::INITIALIZE_METHOD;
+use codex_exec_server_protocol::INITIALIZED_METHOD;
+use codex_exec_server_protocol::JSONRPCMessage;
+use codex_exec_server_protocol::NETWORK_POLICY_REQUEST_METHOD;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
+use tracing::Instrument;
+use tracing::Span;
 use tracing::warn;
 
 use crate::ExecServerError;
@@ -23,6 +54,7 @@ use crate::noise_relay::message_framing::NOISE_RECORD_PLAINTEXT_LEN;
 use crate::noise_relay::message_framing::frame_jsonrpc_message;
 use crate::noise_relay::ordered_ciphertext::OrderedCiphertextFrames;
 use crate::noise_relay::take_next_sequence;
+use crate::noise_relay::trace_context::NoiseTraceContext;
 use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
@@ -50,6 +82,7 @@ pub(crate) struct NoiseVirtualStream {
     transport: Arc<Mutex<NoiseTransport>>,
     inbound_ciphertexts: OrderedCiphertextFrames,
     inbound_decoder: JsonRpcMessageDecoder,
+    trace_context: Arc<Mutex<NoiseTraceContext>>,
     pub(crate) instance_id: u64,
 }
 
@@ -75,6 +108,10 @@ impl NoiseVirtualStream {
                 })?
             };
             for message in self.inbound_decoder.push(&plaintext)? {
+                self.trace_context
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .observe_request(&message);
                 self.incoming_tx
                     .try_send(JsonRpcConnectionEvent::Message(message))
                     .map_err(|_| {
@@ -105,49 +142,27 @@ pub(crate) fn spawn_noise_virtual_stream(
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
     let transport = Arc::new(Mutex::new(transport));
     let writer_transport = Arc::clone(&transport);
+    let trace_context = Arc::new(Mutex::new(NoiseTraceContext::default()));
+    let writer_trace_context = Arc::clone(&trace_context);
     let processor_stream_id = stream_id.clone();
     let processor_closed_stream_tx = closed_stream_tx.clone();
     let writer_stream_id = stream_id;
     let writer_task = tokio::spawn(async move {
         let mut next_seq = 0u32;
-        'writer: while let Some(message) = json_outgoing_rx.recv().await {
-            // Each chunk becomes one Noise record and consumes one nonce.
-            let framed = match frame_jsonrpc_message(&message) {
-                Ok(framed) => framed,
-                Err(error) => {
-                    warn!("failed to frame Noise virtual stream JSON-RPC payload: {error}");
-                    break;
-                }
-            };
-            for plaintext_record in framed.chunks(NOISE_RECORD_PLAINTEXT_LEN) {
-                let seq = match take_next_sequence(&mut next_seq) {
-                    Ok(seq) => seq,
-                    Err(error) => {
-                        warn!("Noise virtual stream sequence exhausted: {error}");
-                        break 'writer;
-                    }
-                };
-                let ciphertext = {
-                    let mut transport = writer_transport
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    transport.encrypt(plaintext_record)
-                };
-                let ciphertext = match ciphertext {
-                    Ok(ciphertext) => ciphertext,
-                    Err(error) => {
-                        warn!("failed to encrypt Noise virtual stream payload: {error}");
-                        break 'writer;
-                    }
-                };
-                let frame = RelayMessageFrame::data(writer_stream_id.clone(), seq, ciphertext);
-                if physical_outgoing_tx
-                    .send(encode_relay_message_frame(&frame))
-                    .await
-                    .is_err()
-                {
-                    break 'writer;
-                }
+        while let Some(message) = json_outgoing_rx.recv().await {
+            let span = outbound_message_span(&message, &writer_trace_context);
+            if let Err(error) = send_outbound_message(
+                &physical_outgoing_tx,
+                &writer_transport,
+                &writer_stream_id,
+                &mut next_seq,
+                &message,
+            )
+            .instrument(span)
+            .await
+            {
+                warn!("failed to send Noise virtual stream JSON-RPC payload: {error}");
+                break;
             }
         }
 
@@ -187,8 +202,94 @@ pub(crate) fn spawn_noise_virtual_stream(
         transport,
         inbound_ciphertexts: OrderedCiphertextFrames::default(),
         inbound_decoder: JsonRpcMessageDecoder::default(),
+        trace_context,
         instance_id,
     }
+}
+
+fn outbound_message_span(
+    message: &JSONRPCMessage,
+    trace_context: &Mutex<NoiseTraceContext>,
+) -> Span {
+    let (message_kind, method) = match message {
+        JSONRPCMessage::Request(request) => ("request", protocol_method_label(&request.method)),
+        JSONRPCMessage::Notification(notification) => {
+            ("notification", protocol_method_label(&notification.method))
+        }
+        JSONRPCMessage::Response(_) => ("response", ""),
+        JSONRPCMessage::Error(_) => ("error", ""),
+    };
+    let trace = trace_context
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .return_trace(message);
+    let span = tracing::info_span!("exec_server.noise.executor_outbound", message_kind, method,);
+    if let Some(trace) = trace.as_ref() {
+        let _ = codex_otel::set_parent_from_w3c_trace_context(&span, trace);
+    }
+    span
+}
+
+fn protocol_method_label(method: &str) -> &'static str {
+    match method {
+        INITIALIZE_METHOD => INITIALIZE_METHOD,
+        INITIALIZED_METHOD => INITIALIZED_METHOD,
+        EXEC_METHOD => EXEC_METHOD,
+        EXEC_READ_METHOD => EXEC_READ_METHOD,
+        EXEC_WRITE_METHOD => EXEC_WRITE_METHOD,
+        EXEC_SIGNAL_METHOD => EXEC_SIGNAL_METHOD,
+        EXEC_TERMINATE_METHOD => EXEC_TERMINATE_METHOD,
+        EXEC_OUTPUT_DELTA_METHOD => EXEC_OUTPUT_DELTA_METHOD,
+        EXEC_EXITED_METHOD => EXEC_EXITED_METHOD,
+        EXEC_CLOSED_METHOD => EXEC_CLOSED_METHOD,
+        ENVIRONMENT_INFO_METHOD => ENVIRONMENT_INFO_METHOD,
+        ENVIRONMENT_STATUS_METHOD => ENVIRONMENT_STATUS_METHOD,
+        FS_READ_FILE_METHOD => FS_READ_FILE_METHOD,
+        FS_OPEN_METHOD => FS_OPEN_METHOD,
+        FS_READ_BLOCK_METHOD => FS_READ_BLOCK_METHOD,
+        FS_CLOSE_METHOD => FS_CLOSE_METHOD,
+        FS_WRITE_FILE_METHOD => FS_WRITE_FILE_METHOD,
+        FS_CREATE_DIRECTORY_METHOD => FS_CREATE_DIRECTORY_METHOD,
+        FS_GET_METADATA_METHOD => FS_GET_METADATA_METHOD,
+        FS_CANONICALIZE_METHOD => FS_CANONICALIZE_METHOD,
+        FS_READ_DIRECTORY_METHOD => FS_READ_DIRECTORY_METHOD,
+        FS_WALK_METHOD => FS_WALK_METHOD,
+        FS_REMOVE_METHOD => FS_REMOVE_METHOD,
+        FS_COPY_METHOD => FS_COPY_METHOD,
+        CAPABILITY_ROOTS_DISCOVER_METHOD => CAPABILITY_ROOTS_DISCOVER_METHOD,
+        HTTP_REQUEST_METHOD => HTTP_REQUEST_METHOD,
+        HTTP_REQUEST_BODY_DELTA_METHOD => HTTP_REQUEST_BODY_DELTA_METHOD,
+        NETWORK_POLICY_REQUEST_METHOD => NETWORK_POLICY_REQUEST_METHOD,
+        _ => "unknown",
+    }
+}
+
+async fn send_outbound_message(
+    physical_outgoing_tx: &mpsc::Sender<Vec<u8>>,
+    transport: &Mutex<NoiseTransport>,
+    stream_id: &str,
+    next_seq: &mut u32,
+    message: &JSONRPCMessage,
+) -> Result<(), ExecServerError> {
+    let framed = frame_jsonrpc_message(message)?;
+    for plaintext_record in framed.chunks(NOISE_RECORD_PLAINTEXT_LEN) {
+        let seq = take_next_sequence(next_seq)?;
+        let ciphertext = transport
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .encrypt(plaintext_record)
+            .map_err(|error| {
+                ExecServerError::Protocol(format!(
+                    "failed to encrypt Noise virtual stream payload: {error}"
+                ))
+            })?;
+        let frame = RelayMessageFrame::data(stream_id.to_string(), seq, ciphertext);
+        physical_outgoing_tx
+            .send(encode_relay_message_frame(&frame))
+            .await
+            .map_err(|_| ExecServerError::Closed)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,9 +1,11 @@
 use super::*;
+use crate::SkillsService;
 use crate::config::ConfigBuilder;
 use crate::context::ContextualUserFragment;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::session::turn_context::TurnEnvironment;
+use crate::skills_load_input_from_config;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
@@ -1019,6 +1021,56 @@ async fn zero_byte_limit_disables_docs() {
     assert!(
         res.is_none(),
         "With limit 0 the function should return None"
+    );
+}
+
+#[tokio::test]
+async fn zero_byte_limit_preserves_ancestor_repo_skill_discovery() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    let cwd = repo.join("nested/crate");
+    let skill_dir = repo.join(".agents/skills/ancestor-skill");
+    fs::create_dir_all(repo.join(".git")).expect("create repo marker");
+    fs::create_dir_all(&cwd).expect("create nested cwd");
+    fs::create_dir_all(&skill_dir).expect("create repo skill");
+    fs::write(repo.join("AGENTS.md"), "must stay disabled").expect("write project doc");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: ancestor-skill\ndescription: ancestor repository skill\n---\n\n# Skill\n",
+    )
+    .expect("write repo skill");
+
+    let mut config = make_config(&tmp, /*limit*/ 0, /*instructions*/ None).await;
+    config.cwd = cwd.abs();
+    let cwd_uri = PathUri::from_abs_path(&config.cwd);
+    let outcome = read_agents_md_with_root(&config, LOCAL_FS.as_ref(), "local", &cwd_uri)
+        .await
+        .expect("project root discovery should succeed");
+
+    assert!(
+        outcome.loaded.is_none(),
+        "project docs must remain disabled"
+    );
+    assert_eq!(outcome.project_root.to_abs_path().unwrap(), repo.abs());
+
+    let skills = SkillsService::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ false,
+    );
+    let input = skills_load_input_from_config(&config, Vec::new()).with_project_root(
+        config.cwd.clone(),
+        outcome.project_root.to_abs_path().unwrap(),
+    );
+    let snapshot = skills
+        .snapshot_for_config(&input, Some(Arc::clone(&LOCAL_FS)))
+        .await;
+    assert!(
+        snapshot
+            .outcome()
+            .skills
+            .iter()
+            .any(|skill| skill.name == "ancestor-skill"),
+        "zero project-doc budget must not hide ancestor repository skills"
     );
 }
 
