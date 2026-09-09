@@ -18,6 +18,7 @@ from pathlib import Path
 
 HEX = re.compile(r"[0-9a-f]{40}\Z")
 ZERO = "0" * 40
+TAG_TRANSPORT_PREFIX = "refs/tags/history-rewrite-stage/"
 
 
 def fail(message: str) -> None:
@@ -49,6 +50,78 @@ def refs(repo: Path) -> dict[str, str]:
             fail("duplicate ref name")
         result[name] = value
     return result
+
+
+def write_refs(path: Path, values: dict[str, str], *, name_first: bool = False) -> None:
+    path.write_text(
+        "".join(
+            f"{name} {value}\n" if name_first else f"{value} {name}\n"
+            for name, value in sorted(values.items())
+        ),
+        encoding="utf-8",
+    )
+
+
+def ref_transaction(repo: Path, operations: list[tuple[str, str, str]]) -> None:
+    commands = ["start"]
+    commands.extend(f"{operation} {name} {value}" for operation, name, value in operations)
+    commands.extend(("prepare", "commit", ""))
+    result = subprocess.run(
+        ["git", "-C", str(repo), "update-ref", "--no-deref", "--stdin"],
+        input="\n".join(commands),
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        fail("atomic ref transport transaction failed")
+
+
+def annotated_tag_transports(repo: Path, before: dict[str, str]) -> dict[str, str]:
+    transports = {}
+    for name, value in sorted(before.items()):
+        if name.startswith("refs/tags/") or git(repo, "cat-file", "-t", value).strip() != "tag":
+            continue
+        staging = TAG_TRANSPORT_PREFIX + hashlib.sha256(name.encode("utf-8")).hexdigest()
+        if staging in before or staging in transports.values():
+            fail("annotated-tag transport ref collision")
+        transports[name] = staging
+    if transports and any(name.startswith(TAG_TRANSPORT_PREFIX) for name in before):
+        fail("annotated-tag transport namespace is not empty")
+    return transports
+
+
+def stage_annotated_tags(repo: Path, before: dict[str, str], transports: dict[str, str]) -> dict[str, str]:
+    if transports:
+        operations = []
+        for logical, staging in sorted(transports.items()):
+            operations.append(("create", staging, before[logical]))
+            operations.append(("delete", logical, before[logical]))
+        ref_transaction(repo, operations)
+    expected = dict(before)
+    for logical, staging in transports.items():
+        expected[staging] = expected.pop(logical)
+    staged = refs(repo)
+    if staged != expected:
+        fail("annotated-tag staging ref readback mismatch")
+    return staged
+
+
+def restore_annotated_tags(repo: Path, staged: dict[str, str], transports: dict[str, str]) -> dict[str, str]:
+    if transports:
+        operations = []
+        for logical, staging in sorted(transports.items()):
+            if logical in staged or staging not in staged:
+                fail("annotated-tag restoration domain mismatch")
+            operations.append(("create", logical, staged[staging]))
+            operations.append(("delete", staging, staged[staging]))
+        ref_transaction(repo, operations)
+    expected = dict(staged)
+    for logical, staging in transports.items():
+        expected[logical] = expected.pop(staging)
+    restored = refs(repo)
+    if restored != expected or any(name.startswith(TAG_TRANSPORT_PREFIX) for name in restored):
+        fail("annotated-tag restoration ref readback mismatch")
+    return restored
 
 
 def entries(repo: Path, commit: str) -> dict[bytes, tuple[bytes, bytes, bytes]]:
@@ -266,6 +339,28 @@ def parse_ref_map(path: Path, before: dict[str, str], after: dict[str, str]) -> 
     return rows
 
 
+def normalize_ref_rows(
+    rows: list[tuple[str, str, str]], transports: dict[str, str]
+) -> list[tuple[str, str, str]]:
+    staged_to_logical = {staged: logical for logical, staged in transports.items()}
+    if len(staged_to_logical) != len(transports):
+        fail("duplicate annotated-tag transport target")
+    normalized = [(old, new, staged_to_logical.get(name, name)) for old, new, name in rows]
+    if len({name for _, _, name in normalized}) != len(normalized):
+        fail("annotated-tag normalized ref-map collision")
+    if any((raw_old, raw_new) != (new_old, new_new) for (raw_old, raw_new, _), (new_old, new_new, _) in zip(rows, normalized)):
+        fail("annotated-tag normalization changed an object ID")
+    return normalized
+
+
+def write_ref_map(path: Path, rows: list[tuple[str, str, str]]) -> None:
+    path.write_text(
+        f"{'old':40} {'new':40} ref\n"
+        + "".join(f"{old} {new} {name}\n" for old, new, name in rows),
+        encoding="utf-8",
+    )
+
+
 def transformed_bytes(data: bytes, identity: bytes, rules: list[dict], context: dict) -> bytes:
     for rule in rules:
         if rule["scope"] != "blob" or identity not in context["selected"][rule["id"]]:
@@ -361,18 +456,43 @@ def apply(args: argparse.Namespace) -> None:
     policy = load_policy(args.policy)
     context = preflight(args.repo, policy)
     before = refs(args.repo)
-    old_domain = set(git(args.repo, "rev-list", "--all").splitlines())
+    if refs(args.preimage) != before:
+        fail("logical preimage ref domain or object mismatch")
     args.work.mkdir(parents=True, exist_ok=True); args.output.mkdir(parents=True, exist_ok=True)
     callbacks = write_callbacks(args.work, args.policy, context)
+    transports = annotated_tag_transports(args.repo, before)
+    (args.output / "annotated-tag-ref-transport.json").write_text(
+        json.dumps(
+            {
+                "schema": "annotated-tag-ref-transport-v1",
+                "logical_to_staged": transports,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    write_refs(args.output / "refs-before.txt", before)
+    staged_before = stage_annotated_tags(args.repo, before, transports)
+    write_refs(args.output / "refs-before-staged.txt", staged_before)
     subprocess.run(["git", "-C", str(args.repo), "filter-repo", "--force", "--commit-callback", str(callbacks[0]), "--filename-callback", str(callbacks[1]), "--blob-callback", str(callbacks[2])], check=True)
     filter_repo_dir = git_path(args.repo, "filter-repo")
     commit_map = filter_repo_dir / "commit-map"; ref_map = filter_repo_dir / "ref-map"
     if not commit_map.is_file() or not ref_map.is_file():
         fail("git-filter-repo did not create both exact maps")
-    shutil.copy2(commit_map, args.output / "commit-map.txt"); shutil.copy2(ref_map, args.output / "ref-map.txt")
-    (args.output / "refs-before.txt").write_text("".join(f"{value} {name}\n" for name, value in sorted(before.items())), encoding="utf-8")
-    (args.output / "refs-after.txt").write_text("".join(f"{value} {name}\n" for name, value in sorted(refs(args.repo).items())), encoding="utf-8")
-    (args.output / "refs-final.txt").write_text("".join(f"{name} {value}\n" for name, value in sorted(refs(args.repo).items())), encoding="utf-8")
+    shutil.copy2(commit_map, args.output / "commit-map.txt")
+    raw_ref_map = args.output / "filter-repo-ref-map.raw.txt"
+    shutil.copy2(ref_map, raw_ref_map)
+    staged_after = refs(args.repo)
+    write_refs(args.output / "refs-after-staged.txt", staged_after)
+    raw_rows = parse_ref_map(raw_ref_map, staged_before, staged_after)
+    normalized_rows = normalize_ref_rows(raw_rows, transports)
+    after = restore_annotated_tags(args.repo, staged_after, transports)
+    write_ref_map(args.output / "ref-map.txt", normalized_rows)
+    parse_ref_map(args.output / "ref-map.txt", before, after)
+    write_refs(args.output / "refs-after.txt", after)
+    write_refs(args.output / "refs-final.txt", after, name_first=True)
     git_run(args.repo, "fsck", "--full", "--no-reflogs")
     (args.output / "tag-signatures.txt").write_text("tag_signature_consequence=rewritten commits require annotated-tag signature reassessment; no tags are created or uploaded\n", encoding="utf-8")
     verify(args.repo, args.preimage, args.policy, args.source_sha, args.work, args.output, args.output / "commit-map.txt", args.output / "ref-map.txt")
