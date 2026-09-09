@@ -6,6 +6,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -76,6 +77,17 @@ def expect_failure(name: str, result: subprocess.CompletedProcess[str]) -> str:
     return hashlib.sha256((result.stdout + result.stderr).encode()).hexdigest()
 
 
+def require_driver_success(phase: str, result: subprocess.CompletedProcess[str]) -> None:
+    if result.returncode == 0:
+        return
+    # The synthetic route has no real-history input.  Preserve the production
+    # driver's own failure without emitting unbounded subprocess output.
+    diagnostic = (result.stderr or result.stdout or "driver produced no diagnostic").strip()
+    print(f"fixture_phase={phase} driver_exit={result.returncode}", file=sys.stderr)
+    print(diagnostic[-4096:], file=sys.stderr)
+    raise SystemExit(f"synthetic production driver failed during {phase}")
+
+
 def corrupt_map(path: Path, kind: str, source: str, branch: str, repo: Path) -> tuple[Path, Path]:
     cmap, rmap = path / "output/commit-map.txt", path / "output/ref-map.txt"
     cmap_copy, rmap_copy = path / f"{kind}.commit-map", path / f"{kind}.ref-map"
@@ -130,8 +142,7 @@ def main() -> None:
         root = Path(temporary) / "positive"; root.mkdir(); repo, source, branch = make_repo(root); policy = root / "policy.json"; write_policy(policy, base_rules())
         remote_before = command(root / "synthetic-source.git", "show-ref")
         positive = invoke(repo, source, policy, root)
-        if positive.returncode:
-            raise SystemExit("positive synthetic rewrite failed")
+        require_driver_success("positive_apply_and_verify", positive)
         if command(root / "synthetic-source.git", "show-ref") != remote_before:
             raise SystemExit("synthetic source remote changed during candidate execution")
         evidence.append(("positive_linear_merge_binary_nonutf8_repeated_target_unrelated_duplicate_tags", hashlib.sha256((root / "output/map-proof.tsv").read_bytes()).hexdigest()))
