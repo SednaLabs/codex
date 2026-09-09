@@ -6,6 +6,7 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::default_event_wait_floor;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -436,7 +437,7 @@ async fn restates_the_current_remainder_after_rollback() -> Result<()> {
         .codex
         .submit(Op::ThreadRollback { num_turns: 1 })
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(default_event_wait_floor(), async {
         loop {
             let event = test.codex.next_event().await?;
             if event.id != rollback_id {
