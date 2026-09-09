@@ -12,6 +12,8 @@ git -C "$repo" config user.email fixture@example.invalid
 
 printf 'provenance\n' > "$fixture_dir/target.txt"
 printf 'shared\n' > "$fixture_dir/shared.txt"
+cp "$fixture_dir/shared.txt" "$fixture_dir/scoped-target.txt"
+cp "$fixture_dir/shared.txt" "$fixture_dir/scoped-unrelated.txt"
 printf '\377\000binary\n' > "$fixture_dir/binary.dat"
 git -C "$repo" add .
 git -C "$repo" commit -qm linear
