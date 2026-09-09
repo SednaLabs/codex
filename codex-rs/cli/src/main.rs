@@ -799,7 +799,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_update_command(root_config_overrides: CliConfigOverrides) -> anyhow::Result<()> {
+async fn run_update_command(_root_config_overrides: CliConfigOverrides) -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     {
         anyhow::bail!(
@@ -811,7 +811,7 @@ async fn run_update_command(root_config_overrides: CliConfigOverrides) -> anyhow
     {
         let config = ConfigBuilder::default()
             .cli_overrides(
-                root_config_overrides
+                _root_config_overrides
                     .parse_overrides()
                     .map_err(anyhow::Error::msg)?,
             )
