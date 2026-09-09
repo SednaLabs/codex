@@ -21,7 +21,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@7f9e10fa1a39b50d0c72d7f5e7eea0e9f314b1ba # stable
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
       - name: Generate canonical outputs
         working-directory: codex-rs
         run: |
