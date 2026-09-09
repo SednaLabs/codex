@@ -100,6 +100,65 @@ mod image_removed {
     }
 }
 
+mod clear_after_guard {
+    use super::*;
+
+    pub fn observe() -> ProviderResult {
+        let mut response = build_response();
+        require_native_image_for_visual_response(&mut response, "missing image");
+        response.content_items.clear();
+        Ok(response)
+    }
+}
+
+mod clear_before_guard {
+    use super::*;
+
+    pub fn observe() -> ProviderResult {
+        let mut response = build_response();
+        response.content_items.clear();
+        require_native_image_for_visual_response(&mut response, "missing image");
+        Ok(response)
+    }
+}
+
+mod clear_unrelated_collection {
+    use super::*;
+
+    pub fn observe() -> ProviderResult {
+        let mut response = build_response();
+        let mut unrelated = vec!["metadata".to_string()];
+        require_native_image_for_visual_response(&mut response, "missing image");
+        unrelated.clear();
+        Ok(response)
+    }
+}
+
+mod clear_after_guard_via_alias {
+    use super::*;
+
+    pub fn observe() -> ProviderResult {
+        let mut response = build_response();
+        require_native_image_for_visual_response(&mut response, "missing image");
+        let items = &mut response.content_items;
+        items.clear();
+        Ok(response)
+    }
+}
+
+mod clear_unrelated_alias {
+    use super::*;
+
+    pub fn observe() -> ProviderResult {
+        let mut response = build_response();
+        let mut unrelated = vec!["metadata".to_string()];
+        require_native_image_for_visual_response(&mut response, "missing image");
+        let items = &mut unrelated;
+        items.clear();
+        Ok(response)
+    }
+}
+
 mod alias_field {
     use super::*;
 

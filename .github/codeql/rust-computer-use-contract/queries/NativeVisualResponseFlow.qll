@@ -71,6 +71,18 @@ predicate referenceAlias(Variable alias, Variable target) {
   )
 }
 
+/** A local alias initialized from the response's content-items field. */
+predicate contentItemsAlias(Variable alias, Variable responseVariable) {
+  exists(RefExpr reference, FieldExpr field |
+    alias.getInitializer() = reference and
+    reference.getExpr() = field and
+    field.hasContainer() and
+    field.hasIdentifier() and
+    field.getIdentifier().getText() = "content_items" and
+    responseVariableExpr(field.getContainer(), responseVariable)
+  )
+}
+
 /**
  * Local value flow covers aliases and ordinary borrow/reborrow edges without
  * claiming a universal interprocedural or collection model.
@@ -196,10 +208,10 @@ predicate nodeBefore(CfgNode earlier, CfgNode later) {
   )
 }
 
-predicate cfgNodeBetween(Call guard, AssignmentExpr assignment, Expr exitExpr) {
+predicate cfgNodeBetween(Call guard, Expr mutation, Expr exitExpr) {
   exists(CallCfgNode guardNode, CfgNode writeNode, CfgNode exitNode |
     guardNode.getCall() = guard and
-    cfgNodeForExpr(assignment, writeNode) and
+    cfgNodeForExpr(mutation, writeNode) and
     cfgNodeForExpr(exitExpr, exitNode) and
     nodeBefore(guardNode, writeNode) and
     nodeBefore(writeNode, exitNode)
@@ -216,6 +228,25 @@ predicate responseFieldWrite(AssignmentExpr assignment, Variable variable) {
       field.getIdentifier().getText() = "content_items" or
       field.getIdentifier().getText() = "success" or
       field.getIdentifier().getText() = "error"
+    )
+  )
+}
+
+/** A destructive clear of the response's native-image content collection. */
+predicate responseContentItemsClear(MethodCallExpr clearCall, Variable variable) {
+  clearCall.getIdentifier().getText() = "clear" and
+  exists(FieldExpr field |
+    field.hasContainer() and
+    field.hasIdentifier() and
+    field.getIdentifier().getText() = "content_items" and
+    responseVariableExpr(field.getContainer(), variable) and
+    (
+      clearCall.getReceiver() = field or
+      localValueFlow(field, clearCall.getReceiver()) or
+      exists(VariableAccess access |
+        clearCall.getReceiver() = access and
+        contentItemsAlias(access.getVariable(), variable)
+      )
     )
   )
 }
@@ -237,6 +268,20 @@ predicate responseWriteAfterGuard(
       ) or
       responseFieldWrite(assignment, variable)
     )
+  )
+}
+
+predicate responseContentItemsClearAfterGuard(
+  Function function,
+  Call guard,
+  Expr exitExpr,
+  Expr responseExpr
+) {
+  exists(Variable variable, MethodCallExpr clearCall |
+    responseVariableExpr(responseExpr, variable) and
+    clearCall.getEnclosingCallable() = function and
+    cfgNodeBetween(guard, clearCall, exitExpr) and
+    responseContentItemsClear(clearCall, variable)
   )
 }
 
@@ -281,6 +326,7 @@ predicate responseVersionGuarded(
     guardUsesReturnedResponse(guard, responseExpr) and
     guardDominatesExit(guard, exitExpr) and
     not responseWriteAfterGuard(function, guard, exitExpr, responseExpr) and
+    not responseContentItemsClearAfterGuard(function, guard, exitExpr, responseExpr) and
     guardBodyDowngrades(guard)
   )
 }
