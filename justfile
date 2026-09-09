@@ -147,6 +147,7 @@ core-carry-core-smoke:
 # Carry-only downstream behavior smoke checks (TUI/UI seam).
 core-carry-ui-smoke:
     RUST_MIN_STACK={{ rust_min_stack }} CODEX_JS_REPL_NODE_PATH="${CODEX_JS_REPL_NODE_PATH:-/tmp/codex-node22/bin/node}" cargo nextest run -p codex-tui --no-fail-fast -- chatwidget::tests::slash_commands::queued_popup_command_replay_waits_before_submitting_next_message chatwidget::tests::slash_commands::slash_quit_in_side_conversation_requests_side_exit chatwidget::tests::slash_commands::slash_exit_in_side_conversation_requests_side_exit chatwidget::tests::composer_submission::alt_up_restores_most_recent_queued_slash_command chatwidget::tests::composer_submission::alt_up_restored_state_with_missing_insert_order_preserves_front_back_recall_order app::tests::replayed_turn_complete_submits_restored_queued_follow_up app::agent_navigation::tests::active_agent_label_tracks_current_thread streaming::render::tests::visualization_context_without_directive_keeps_incremental_rendering --exact
+    cargo test -p codex-tui updates::tests:: --lib -- --test-threads=1
 
 # Compatibility wrapper while callers migrate to split core/UI smoke lanes.
 core-carry-smoke:
