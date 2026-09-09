@@ -1040,6 +1040,8 @@ See the Codex keymap documentation for supported actions and examples."
         );
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
+        #[cfg(not(debug_assertions))]
+        let sedna_release_channel = config.sedna_release_channel;
 
         let mut app = Self {
             model_catalog,
@@ -1177,7 +1179,7 @@ See the Codex keymap documentation for supported actions and examples."
                 &mut app_server,
                 AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
                     latest_version,
-                    crate::update_action::get_update_action(config.sedna_release_channel),
+                    crate::update_action::get_update_action(sedna_release_channel),
                 ))),
             ))
             .await?;
