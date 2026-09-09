@@ -10083,7 +10083,20 @@ fi
         self.assertIn("macos_release_mode == 'preview'", build.get("if") or "")
         self.assertEqual(preview.get("runs-on"), "macos-15-intel")
         self.assertEqual(preview.get("needs"), ["resolve", "release-macos-build"])
+        preview_if = preview.get("if") or ""
+        self.assertIn("always()", preview_if)
+        self.assertIn("needs.resolve.result == 'success'", preview_if)
+        self.assertIn(
+            "needs.resolve.outputs.release_requested == 'true'",
+            preview_if,
+        )
+        self.assertIn(
+            "needs.resolve.outputs.release_build_required == 'true'",
+            preview_if,
+        )
+        self.assertIn("needs.release-macos-build.result == 'success'", preview_if)
         self.assertIn("macos_release_mode == 'preview'", preview.get("if") or "")
+        self.assertIn("macos_release_mode == 'unnotarized'", preview_if)
 
         preview_steps = {
             step.get("name"): step
@@ -10113,6 +10126,21 @@ fi
         create_script = publish_steps["Create GitHub release"].get("run") or ""
         self.assertIn("not Developer ID signed or notarized", create_script)
         self.assertIn("not an official supported macOS distribution", create_script)
+
+        publish_if = publish.get("if") or ""
+        self.assertIn("needs.release-linux.result == 'success'", publish_if)
+        self.assertIn(
+            "needs.release-macos-preview-package.result == 'success'",
+            publish_if,
+        )
+        self.assertIn(
+            "needs.resolve.outputs.release_requested == 'true'",
+            publish_if,
+        )
+        self.assertIn(
+            "needs.resolve.outputs.release_build_required == 'true'",
+            publish_if,
+        )
 
     def test_sedna_release_installer_targets_native_linux_and_intel_macos(self) -> None:
         payload = load_workflow_payload(
