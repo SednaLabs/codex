@@ -40,7 +40,7 @@ def write_policy(path: Path, rules: list[dict], canonical_source: str) -> None:
     )
 
 
-def make_repo(root: Path, *, shared_target_unrelated: bool = False, collision: bool = False) -> tuple[Path, str, str, str, str, str]:
+def make_repo(root: Path, *, shared_target_unrelated: bool = False, collision: bool = False) -> tuple[Path, str, str, str, str, str, str]:
     repo = root / "repo"
     run("git", "init", "-q", "-b", "main", str(repo)); command(repo, "config", "user.name", "fixture"); command(repo, "config", "user.email", "fixture@example.invalid")
     (repo / "rename-old.txt").write_bytes(b"rename\n")
@@ -60,6 +60,7 @@ def make_repo(root: Path, *, shared_target_unrelated: bool = False, collision: b
     command(repo, "checkout", "-qb", "side"); (repo / "side.txt").write_bytes(b"side\n"); command(repo, "add", "."); command(repo, "commit", "-qm", "side")
     command(repo, "checkout", "-q", "main"); (repo / "target.txt").write_bytes(b"target old value main\n"); command(repo, "add", "target.txt"); command(repo, "commit", "-qm", "old main")
     command(repo, "merge", "--no-ff", "-m", "old merge", "side")
+    merge_source = command(repo, "rev-parse", "HEAD").strip()
     (repo / "canonical.txt").write_bytes(b"unmatched historical variant\n"); command(repo, "add", "canonical.txt"); command(repo, "commit", "-qm", "intermediate canonical variant")
     (repo / "canonical.txt").write_bytes(b"reviewed canonical replacement\n"); command(repo, "add", "canonical.txt"); command(repo, "commit", "-qm", "canonical source")
     canonical_source = command(repo, "rev-parse", "HEAD").strip()
@@ -68,7 +69,7 @@ def make_repo(root: Path, *, shared_target_unrelated: bool = False, collision: b
     run("git", "clone", "--bare", "--no-local", str(repo), str(remote))
     command(repo, "remote", "add", "synthetic-source", str(remote))
     source = command(repo, "rev-parse", "HEAD").strip()
-    return repo, source, "main", canonical_source, old_blob, new_blob
+    return repo, source, "main", canonical_source, old_blob, new_blob, merge_source
 
 
 def make_bare_mirror(root: Path, source: Path) -> tuple[Path, str, str]:
@@ -109,10 +110,13 @@ def invoke(repo: Path, source: str, policy: Path, root: Path, mode: str = "apply
     return subprocess.run(args, text=True, capture_output=True)
 
 
-def expect_failure(name: str, result: subprocess.CompletedProcess[str]) -> str:
+def expect_failure(name: str, result: subprocess.CompletedProcess[str], expected_diagnostic: str | None = None) -> str:
     if result.returncode == 0:
         raise SystemExit(f"negative fixture unexpectedly passed: {name}")
-    return hashlib.sha256((result.stdout + result.stderr).encode()).hexdigest()
+    diagnostic = result.stdout + result.stderr
+    if expected_diagnostic is not None and diagnostic.strip() != expected_diagnostic:
+        raise SystemExit(f"negative fixture produced the wrong diagnostic: {name}")
+    return hashlib.sha256(diagnostic.encode()).hexdigest()
 
 
 def require_driver_success(phase: str, result: subprocess.CompletedProcess[str]) -> None:
@@ -140,37 +144,154 @@ def corrupt_map(path: Path, kind: str, source: str, branch: str, repo: Path) -> 
     return cmap_copy, rmap_copy
 
 
+def commit_parents(repo: Path, commit: str) -> list[str]:
+    return command(repo, "show", "-s", "--format=%P", commit).split()
+
+
+def read_commit_map(path: Path) -> dict[str, str]:
+    mapping = {}
+    for line in path.read_text().splitlines():
+        fields = line.split()
+        if not fields or fields[0].lower() in {"old", "old_commit"}:
+            continue
+        if len(fields) != 2 or fields[0] in mapping:
+            raise SystemExit("synthetic commit map is malformed")
+        mapping[fields[0]] = fields[1]
+    if not mapping:
+        raise SystemExit("synthetic commit map is empty")
+    return mapping
+
+
+def replace_commit_map(path: Path, output: Path, replacements: dict[str, str]) -> None:
+    seen = set()
+    lines = []
+    for line in path.read_text().splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] in replacements:
+            if fields[0] in seen:
+                raise SystemExit("synthetic commit map replacement is duplicated")
+            seen.add(fields[0])
+            line = fields[0] + " " + replacements[fields[0]]
+        lines.append(line)
+    if seen != set(replacements):
+        raise SystemExit("synthetic commit map replacement domain mismatch")
+    output.write_text("\n".join(lines) + "\n")
+
+
+def replace_ref_map(path: Path, output: Path, ref: str, new: str) -> None:
+    matches = 0
+    lines = []
+    for line in path.read_text().splitlines():
+        fields = line.split()
+        if len(fields) == 3 and fields[2] == ref:
+            matches += 1
+            line = fields[0] + " " + new + " " + fields[2]
+        lines.append(line)
+    if matches != 1:
+        raise SystemExit("synthetic ref map replacement domain mismatch")
+    output.write_text("\n".join(lines) + "\n")
+
+
+def rewrite_commit(repo: Path, commit: str, *, tree: str | None = None, parents: list[str] | None = None) -> str:
+    raw = command_bytes(repo, "cat-file", "commit", commit)
+    header, separator, message = raw.partition(b"\n\n")
+    lines = header.split(b"\n")
+    if separator != b"\n\n" or not lines or not lines[0].startswith(b"tree "):
+        raise SystemExit("synthetic mapped commit is malformed")
+    current_tree = lines[0][5:].decode()
+    parent_end = 1
+    while parent_end < len(lines) and lines[parent_end].startswith(b"parent "):
+        parent_end += 1
+    if any(line.startswith((b"tree ", b"parent ")) for line in lines[parent_end:]):
+        raise SystemExit("synthetic mapped commit headers are malformed")
+    selected_tree = current_tree if tree is None else tree
+    selected_parents = [line[7:].decode() for line in lines[1:parent_end]] if parents is None else parents
+    rewritten = b"\n".join(
+        [b"tree " + selected_tree.encode()]
+        + [b"parent " + parent.encode() for parent in selected_parents]
+        + lines[parent_end:]
+    ) + separator + message
+    return run("git", "-C", str(repo), "hash-object", "-t", "commit", "-w", "--stdin", input=rewritten).strip()
+
+
+def command_bytes(repo: Path, *args: str) -> bytes:
+    return subprocess.check_output(["git", "-C", str(repo), *args])
+
+
 def tampered_tree(root: Path, source: str, branch: str, variant: str) -> tuple[Path, Path, Path]:
     repo = root / "repo"; tamper = root / f"tamper-{variant}"; shutil.copytree(repo, tamper)
-    command(tamper, "config", "user.name", "fixture"); command(tamper, "config", "user.email", "fixture@example.invalid")
+    cmap, rmap = root / "output/commit-map.txt", root / "output/ref-map.txt"
+    mapping = read_commit_map(cmap)
+    if source not in mapping:
+        raise SystemExit("synthetic source is absent from commit map")
+    mapped_source = mapping[source]
+    ref = f"refs/heads/{branch}"
+    if command(tamper, "rev-parse", ref).strip() != mapped_source:
+        raise SystemExit("synthetic source is not the mapped branch tip")
+    mapped_tree = command(tamper, "rev-parse", mapped_source + "^{tree}").strip()
+    if command(tamper, "write-tree").strip() != mapped_tree:
+        raise SystemExit("synthetic index is not the mapped source tree")
     target = tamper / "unrelated-a.txt"
     if variant == "bytes": target.write_bytes(b"tampered\n")
     elif variant == "mode": target.chmod(0o755)
     else:
         target.unlink(); target.symlink_to("unrelated-b.txt")
-    command(tamper, "add", "-A"); command(tamper, "commit", "-qm", f"tamper {variant}")
-    new = command(tamper, "rev-parse", "HEAD").strip()
-    cmap, rmap = root / "output/commit-map.txt", root / "output/ref-map.txt"
+    command(tamper, "add", "-A")
+    tree = command(tamper, "write-tree").strip()
+    if tree == mapped_tree:
+        raise SystemExit("synthetic tree tamper did not change the tree")
+    new = rewrite_commit(tamper, mapped_source, tree=tree)
+    if commit_parents(tamper, new) != commit_parents(tamper, mapped_source):
+        raise SystemExit("synthetic tree tamper changed mapped parents")
+    command(tamper, "update-ref", ref, new, mapped_source)
+    if command(tamper, "rev-parse", ref).strip() != new:
+        raise SystemExit("synthetic tree tamper branch readback mismatch")
     cm, rm = root / f"{variant}.commit-map", root / f"{variant}.ref-map"; shutil.copy2(cmap, cm); shutil.copy2(rmap, rm)
-    cm.write_text("\n".join((line.split()[0] + " " + new) if line.split() and line.split()[0] == source else line for line in cm.read_text().splitlines()) + "\n")
-    rm.write_text("\n".join((line.split()[0] + " " + new + " " + line.split()[2]) if len(line.split()) == 3 and line.split()[2] == f"refs/heads/{branch}" else line for line in rm.read_text().splitlines()) + "\n")
+    replace_commit_map(cmap, cm, {source: new})
+    replace_ref_map(rmap, rm, ref, new)
     return tamper, cm, rm
 
 
-def tampered_parent_order(root: Path, source: str, branch: str) -> tuple[Path, Path, Path]:
+def tampered_parent_order(root: Path, merge_source: str, source: str, branch: str) -> tuple[Path, Path, Path]:
     repo = root / "repo"; tamper = root / "tamper-parent-order"; shutil.copytree(repo, tamper)
-    command(tamper, "config", "user.name", "fixture"); command(tamper, "config", "user.email", "fixture@example.invalid")
-    old_new = next(line.split()[1] for line in (root / "output/commit-map.txt").read_text().splitlines() if line.split() and line.split()[0] == source)
-    parents = command(tamper, "show", "-s", "--format=%P", old_new).split()
+    preimage = root / "preimage.git"
+    cmap, rmap = root / "output/commit-map.txt", root / "output/ref-map.txt"
+    mapping = read_commit_map(cmap)
+    if merge_source not in mapping or source not in mapping:
+        raise SystemExit("synthetic merge or source is absent from commit map")
+    mapped_merge, mapped_source = mapping[merge_source], mapping[source]
+    parents = commit_parents(tamper, mapped_merge)
     if len(parents) != 2:
         raise SystemExit("synthetic merge unexpectedly lacks two ordered parents")
-    tree = command(tamper, "rev-parse", old_new + "^{tree}").strip()
-    new = subprocess.check_output(["git", "-C", str(tamper), "commit-tree", tree, "-p", parents[1], "-p", parents[0]], input=b"parent order tamper\n").decode().strip()
-    command(tamper, "update-ref", f"refs/heads/{branch}", new)
-    cmap, rmap = root / "output/commit-map.txt", root / "output/ref-map.txt"
+    descendants = command(preimage, "rev-list", "--reverse", "--ancestry-path", f"{merge_source}..{source}").splitlines()
+    if not descendants or descendants[-1] != source:
+        raise SystemExit("synthetic source descendant path is incomplete")
+    replacements = {merge_source: rewrite_commit(tamper, mapped_merge, parents=[parents[1], parents[0]])}
+    if command(tamper, "rev-parse", replacements[merge_source] + "^{tree}").strip() != command(tamper, "rev-parse", mapped_merge + "^{tree}").strip():
+        raise SystemExit("synthetic parent-order reconstruction changed the merge tree")
+    old_predecessor, new_predecessor = merge_source, replacements[merge_source]
+    for descendant in descendants:
+        if commit_parents(preimage, descendant) != [old_predecessor]:
+            raise SystemExit("synthetic source descendants are not a linear chain")
+        mapped_descendant = mapping.get(descendant)
+        if mapped_descendant is None or commit_parents(tamper, mapped_descendant) != [mapping[old_predecessor]]:
+            raise SystemExit("mapped synthetic source descendants are inconsistent")
+        replacement = rewrite_commit(tamper, mapped_descendant, parents=[new_predecessor])
+        if command(tamper, "rev-parse", replacement + "^{tree}").strip() != command(tamper, "rev-parse", mapped_descendant + "^{tree}").strip():
+            raise SystemExit("synthetic parent-order reconstruction changed a tree")
+        replacements[descendant] = replacement
+        old_predecessor, new_predecessor = descendant, replacement
+    if old_predecessor != source:
+        raise SystemExit("synthetic parent-order reconstruction did not reach source")
+    ref = f"refs/heads/{branch}"
+    if command(tamper, "rev-parse", ref).strip() != mapped_source:
+        raise SystemExit("synthetic source is not the mapped branch tip")
+    command(tamper, "update-ref", ref, new_predecessor, mapped_source)
+    if command(tamper, "rev-parse", ref).strip() != new_predecessor:
+        raise SystemExit("synthetic parent-order branch readback mismatch")
     cm, rm = root / "parent-order.commit-map", root / "parent-order.ref-map"; shutil.copy2(cmap, cm); shutil.copy2(rmap, rm)
-    cm.write_text("\n".join((line.split()[0] + " " + new) if line.split() and line.split()[0] == source else line for line in cm.read_text().splitlines()) + "\n")
-    rm.write_text("\n".join((line.split()[0] + " " + new + " " + line.split()[2]) if len(line.split()) == 3 and line.split()[2] == f"refs/heads/{branch}" else line for line in rm.read_text().splitlines()) + "\n")
+    replace_commit_map(cmap, cm, replacements)
+    replace_ref_map(rmap, rm, ref, new_predecessor)
     return tamper, cm, rm
 
 
@@ -295,7 +416,7 @@ def main() -> None:
         adapter_check = subprocess.run(["python3", str(ADAPTER), "check-policy", "--policy", str(ROOT / "policy.json")], text=True, capture_output=True)
         require_driver_success("review_packet_adapter_policy", adapter_check)
         evidence.append(("review_packet_non_executable_adapter", hashlib.sha256((ROOT / "policy.json").read_bytes()).hexdigest()))
-        root = Path(temporary) / "positive"; root.mkdir(); repo, source, branch, canonical_source, old_blob, new_blob = make_repo(root); policy = root / "policy.json"; write_policy(policy, base_rules(old_blob, new_blob), canonical_source)
+        root = Path(temporary) / "positive"; root.mkdir(); repo, source, branch, canonical_source, old_blob, new_blob, merge_source = make_repo(root); policy = root / "policy.json"; write_policy(policy, base_rules(old_blob, new_blob), canonical_source)
         remote_before = command(root / "synthetic-source.git", "show-ref")
         positive = invoke(repo, source, policy, root)
         require_driver_success("positive_apply_and_verify", positive)
@@ -322,16 +443,23 @@ def main() -> None:
         guarded_policy = json.loads(policy.read_text()); guarded_policy["rules"][0]["old_blob"] = "9" * 40; write_json(root / "guarded-policy.json", guarded_policy)
         guarded_root = root / "guarded-negative"; guarded_root.mkdir()
         evidence.append(("guarded_old_blob_mismatch", expect_failure("guarded-old-blob", invoke(root / "preimage.git", source, root / "guarded-policy.json", guarded_root))))
+        expected_tree_diagnostics = {
+            "bytes": "target bytes do not equal the approved transformation or non-target bytes changed",
+            "mode": "path mode or type changed",
+            "type": "path mode or type changed",
+        }
         for variant in ("bytes", "mode", "type"):
             tamper, cm, rm = tampered_tree(root, source, branch, variant)
-            evidence.append((f"modified_non_target_{variant}", expect_failure(variant, invoke(tamper, source, policy, root, "verify", cm, rm))))
-        tamper, cm, rm = tampered_parent_order(root, source, branch)
-        evidence.append(("ordered_parent_topology", expect_failure("parent-order", invoke(tamper, source, policy, root, "verify", cm, rm))))
+            result = invoke(tamper, source, policy, root, "verify", cm, rm)
+            evidence.append((f"modified_non_target_{variant}", expect_failure(variant, result, expected_tree_diagnostics[variant])))
+        tamper, cm, rm = tampered_parent_order(root, merge_source, source, branch)
+        result = invoke(tamper, source, policy, root, "verify", cm, rm)
+        evidence.append(("ordered_parent_topology", expect_failure("parent-order", result, "ordered parent topology mismatch")))
         for kind in ("domain", "zero", "refchange"):
             cm, rm = corrupt_map(root, kind, source, branch, repo)
             evidence.append((f"invalid_{kind}", expect_failure(kind, invoke(repo, source, policy, root, "verify", cm, rm))))
         for name, kwargs in (("targeted_shared_unrelated_path", {"shared_target_unrelated": True}), ("rename_collision", {"collision": True})):
-            negative_root = Path(temporary) / name; negative_root.mkdir(); neg_repo, neg_source, _, neg_canonical, neg_old, neg_new = make_repo(negative_root, **kwargs); neg_policy = negative_root / "policy.json"; write_policy(neg_policy, base_rules(neg_old, neg_new), neg_canonical)
+            negative_root = Path(temporary) / name; negative_root.mkdir(); neg_repo, neg_source, _, neg_canonical, neg_old, neg_new, _ = make_repo(negative_root, **kwargs); neg_policy = negative_root / "policy.json"; write_policy(neg_policy, base_rules(neg_old, neg_new), neg_canonical)
             evidence.append((name, expect_failure(name, invoke(neg_repo, neg_source, neg_policy, negative_root))))
         evidence.extend(receipt_fixture(Path(temporary) / "receipt"))
     for name, digest in evidence:
