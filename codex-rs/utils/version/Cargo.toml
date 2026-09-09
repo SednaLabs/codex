@@ -12,4 +12,5 @@ test = false
 doctest = false
 
 [dependencies]
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

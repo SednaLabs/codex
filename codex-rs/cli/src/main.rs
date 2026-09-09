@@ -659,9 +659,18 @@ struct AppServerBootstrapCommand {
     #[arg(long = "remote-control")]
     remote_control: bool,
 
-    /// Opt in to automatic installation of newer Sedna releases.
-    #[arg(long = "enable-auto-update")]
+    /// Opt in to automatic installation of newer Sedna releases. Omit this to
+    /// preserve an existing preference; a first bootstrap defaults to off.
+    #[arg(long = "enable-auto-update", conflicts_with = "disable_auto_update")]
     enable_auto_update: bool,
+
+    /// Disable automatic Sedna installation and stop a managed updater.
+    #[arg(long = "disable-auto-update", conflicts_with = "enable_auto_update")]
+    disable_auto_update: bool,
+
+    /// Persist the published Sedna release stream used by automatic updates.
+    #[arg(long = "release-channel", value_parser = ["stable", "prerelease"])]
+    release_channel: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1195,7 +1204,19 @@ async fn cli_main(
                         let output =
                             codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
                                 remote_control_enabled: bootstrap_cli.remote_control,
-                                sedna_auto_update_enabled: bootstrap_cli.enable_auto_update,
+                                sedna_auto_update_enabled: bootstrap_cli
+                                    .enable_auto_update
+                                    .then_some(true)
+                                    .or(bootstrap_cli.disable_auto_update.then_some(false)),
+                                sedna_release_channel: bootstrap_cli.release_channel.map(
+                                    |channel| {
+                                        if channel == "prerelease" {
+                                            codex_utils_version::SednaReleaseChannel::Prerelease
+                                        } else {
+                                            codex_utils_version::SednaReleaseChannel::Stable
+                                        }
+                                    },
+                                ),
                             })
                             .await?;
                         println!("{}", serde_json::to_string(&output)?);
@@ -4042,6 +4063,8 @@ mod tests {
                 subcommand: AppServerDaemonSubcommand::Bootstrap(AppServerBootstrapCommand {
                     remote_control: true,
                     enable_auto_update: false,
+                    disable_auto_update: false,
+                    release_channel: None,
                 })
             }))
         ));

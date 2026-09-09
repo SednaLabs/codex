@@ -15,6 +15,7 @@ use crate::RestartMode;
 use crate::UpdaterRefreshMode;
 use crate::managed_install::executable_identity_from_bytes;
 use crate::should_reexec_updater;
+use codex_utils_version::SednaReleaseChannel;
 
 #[test]
 fn unchanged_updater_uses_version_based_restart() {
@@ -156,7 +157,7 @@ printf 'fixture updater diagnostic\n' >&2
     .to_vec();
     let http = FakeInstallerHttp::new(InstallerResponse::Success(script));
 
-    install_latest_sedna_standalone(&http, "1.2.3-sedna.4")
+    install_latest_sedna_standalone(&http, "1.2.3-sedna.4", SednaReleaseChannel::Stable)
         .await
         .expect("Sedna updater should require a newer stable release");
     assert_eq!(

@@ -81,7 +81,11 @@ pub struct LifecycleOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BootstrapOptions {
     pub remote_control_enabled: bool,
-    pub sedna_auto_update_enabled: bool,
+    /// `None` preserves an existing persisted choice; an unbootstrapped daemon
+    /// still defaults to disabled.
+    pub sedna_auto_update_enabled: Option<bool>,
+    /// `None` preserves the persisted stable/prerelease selection.
+    pub sedna_release_channel: Option<codex_utils_version::SednaReleaseChannel>,
 }
 
 /// Passively probes an existing app-server socket and returns its reported
@@ -558,7 +562,8 @@ impl Daemon {
                 let output = self
                     .bootstrap_locked(BootstrapOptions {
                         remote_control_enabled: true,
-                        sedna_auto_update_enabled: false,
+                        sedna_auto_update_enabled: None,
+                        sedna_release_channel: None,
                     })
                     .await?;
                 Ok(RemoteControlStartOutput::Bootstrap(output))
@@ -647,10 +652,16 @@ impl Daemon {
         self.ensure_managed_codex_bin()?;
         let managed_release = self.resolved_managed_release().await?;
 
+        let existing_settings = self.load_settings().await?;
         let mut settings = DaemonSettings {
             remote_control_enabled: options.remote_control_enabled,
             bootstrapped: false,
-            sedna_auto_update_enabled: options.sedna_auto_update_enabled,
+            sedna_auto_update_enabled: options
+                .sedna_auto_update_enabled
+                .unwrap_or(existing_settings.sedna_auto_update_enabled),
+            sedna_release_channel: options
+                .sedna_release_channel
+                .unwrap_or(existing_settings.sedna_release_channel),
         };
         if client::probe(&self.socket_path).await.is_ok()
             && self.running_backend(&settings).await?.is_none()

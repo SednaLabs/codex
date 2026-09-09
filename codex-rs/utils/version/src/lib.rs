@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
@@ -8,30 +9,19 @@ pub const SEDNA_RELEASE_REPOSITORY: &str = "sednalabs/codex";
 pub const SEDNA_RELEASE_TAG_PREFIX: &str = "v";
 
 /// The user-selectable Sedna release stream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SednaReleaseChannel {
+    #[default]
     Stable,
     Prerelease,
 }
 
 impl SednaReleaseChannel {
-    pub fn for_version(version: &str) -> Option<Self> {
-        if !is_sedna_release_version(version) {
-            return None;
-        }
-        Some(if is_stable_sedna_release_version(version) {
-            Self::Stable
-        } else {
-            Self::Prerelease
-        })
-    }
-
-    pub fn allows(self, version: &str) -> bool {
-        match (self, Self::for_version(version)) {
-            (Self::Stable, Some(Self::Stable)) | (Self::Prerelease, Some(_)) => true,
-            _ => false,
-        }
+    /// The GitHub API is authoritative for a published release's channel.
+    /// An upstream alpha suffix in a fork version is provenance, not a channel.
+    pub const fn allows_api_prerelease(self, prerelease: bool) -> bool {
+        matches!(self, Self::Prerelease) || !prerelease
     }
 }
 
@@ -158,14 +148,17 @@ pub fn is_sedna_automatic_update_eligible_for_channel(
     target_arch: &str,
     channel: SednaReleaseChannel,
 ) -> bool {
-    channel.allows(release_version)
+    is_sedna_release_version(release_version)
         && is_sedna_automatic_update_target_supported(target_os, target_arch)
+        // The selected channel governs remote candidates. A local version only
+        // establishes the strict Sedna identity required for comparisons.
+        && matches!(channel, SednaReleaseChannel::Stable | SednaReleaseChannel::Prerelease)
 }
 
 /// Whether a validated managed binary carries a Sedna release identity. The
 /// configured channel decides whether stable or prerelease updates are allowed.
 pub fn is_sedna_managed_release(version: &str, target_os: &str, target_arch: &str) -> bool {
-    SednaReleaseChannel::for_version(version).is_some()
+    is_sedna_release_version(version)
         && is_sedna_automatic_update_target_supported(target_os, target_arch)
 }
 

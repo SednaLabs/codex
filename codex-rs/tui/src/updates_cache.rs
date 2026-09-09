@@ -33,6 +33,7 @@ impl VersionInfo {
         latest_version: String,
         last_checked_at: DateTime<Utc>,
         dismissed_version: Option<String>,
+        release_channel: SednaReleaseChannel,
     ) -> Self {
         Self {
             latest_version,
@@ -40,24 +41,31 @@ impl VersionInfo {
             dismissed_version,
             release_repository: Some(CODEX_RELEASE_REPOSITORY.to_string()),
             release_tag_prefix: Some(CODEX_RELEASE_TAG_PREFIX.to_string()),
-            release_channel: SednaReleaseChannel::for_version(CODEX_CLI_VERSION),
+            release_channel: Some(release_channel),
         }
     }
 
-    pub(crate) fn matches_current_channel(&self) -> bool {
+    pub(crate) fn matches_current_channel(&self, release_channel: SednaReleaseChannel) -> bool {
         self.release_repository.as_deref() == Some(CODEX_RELEASE_REPOSITORY)
             && self.release_tag_prefix.as_deref() == Some(CODEX_RELEASE_TAG_PREFIX)
-            && self.release_channel == SednaReleaseChannel::for_version(CODEX_CLI_VERSION)
+            && self.release_channel == Some(release_channel)
     }
 
-    pub(crate) fn dismissed_version_for_current_channel(&self) -> Option<String> {
-        self.matches_current_channel()
+    pub(crate) fn dismissed_version_for_current_channel(
+        &self,
+        release_channel: SednaReleaseChannel,
+    ) -> Option<String> {
+        self.matches_current_channel(release_channel)
             .then(|| self.dismissed_version.clone())
             .flatten()
     }
 
-    pub(crate) fn actionable_latest_version(&self, current_version: &str) -> Option<&str> {
-        (self.matches_current_channel()
+    pub(crate) fn actionable_latest_version(
+        &self,
+        current_version: &str,
+        release_channel: SednaReleaseChannel,
+    ) -> Option<&str> {
+        (self.matches_current_channel(release_channel)
             && is_actionable_sedna_update(&self.latest_version, current_version))
         .then_some(self.latest_version.as_str())
     }
@@ -79,12 +87,13 @@ pub(crate) fn read_version_info(version_file: &Path) -> anyhow::Result<VersionIn
 pub(crate) async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<()> {
     let version_file = version_filepath(config);
     let mut info = match read_version_info(&version_file) {
-        Ok(info) if info.matches_current_channel() => info,
+        Ok(info) if info.matches_current_channel(config.sedna_release_channel) => info,
         Err(_) => {
             VersionInfo::for_current_channel(
                 version.to_string(),
                 DateTime::<Utc>::UNIX_EPOCH,
                 /*dismissed_version*/ None,
+                config.sedna_release_channel,
             )
         }
         Ok(_) => {
@@ -92,6 +101,7 @@ pub(crate) async fn dismiss_version(config: &Config, version: &str) -> anyhow::R
                 version.to_string(),
                 DateTime::<Utc>::UNIX_EPOCH,
                 /*dismissed_version*/ None,
+                config.sedna_release_channel,
             )
         }
     };

@@ -1,5 +1,6 @@
 use super::*;
 use crate::legacy_core::config::ConfigBuilder;
+use codex_utils_version::SednaReleaseChannel;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
@@ -59,7 +60,7 @@ async fn dismiss_version_replaces_a_mismatched_cache() {
         .expect("dismiss version");
 
     let info = read_version_info(&version_file).expect("read version info");
-    assert!(info.matches_current_channel());
+    assert!(info.matches_current_channel(SednaReleaseChannel::Stable));
     assert_eq!(info.latest_version, "999.0.0-sedna.2");
     assert_eq!(info.dismissed_version.as_deref(), Some("999.0.0-sedna.2"));
 }
@@ -70,10 +71,12 @@ fn matching_channel_cache_preserves_its_dismissal() {
         "999.0.0-sedna.2".to_string(),
         DateTime::<Utc>::UNIX_EPOCH,
         Some("999.0.0-sedna.2".to_string()),
+        SednaReleaseChannel::Stable,
     );
 
     assert_eq!(
-        info.dismissed_version_for_current_channel().as_deref(),
+        info.dismissed_version_for_current_channel(SednaReleaseChannel::Stable)
+            .as_deref(),
         Some("999.0.0-sedna.2")
     );
 }
@@ -89,7 +92,10 @@ fn mismatched_channel_cache_does_not_preserve_its_dismissal() {
         release_channel: None,
     };
 
-    assert_eq!(info.dismissed_version_for_current_channel(), None);
+    assert_eq!(
+        info.dismissed_version_for_current_channel(SednaReleaseChannel::Stable),
+        None
+    );
 }
 
 #[test]
@@ -103,7 +109,10 @@ fn legacy_source_less_cache_does_not_preserve_its_dismissal() {
         release_channel: None,
     };
 
-    assert_eq!(info.dismissed_version_for_current_channel(), None);
+    assert_eq!(
+        info.dismissed_version_for_current_channel(SednaReleaseChannel::Stable),
+        None
+    );
 }
 
 #[test]
@@ -113,10 +122,11 @@ fn current_identity_cache_rejects_non_sedna_latest_versions() {
             cached_version.to_string(),
             DateTime::<Utc>::UNIX_EPOCH,
             /*dismissed_version*/ None,
+            SednaReleaseChannel::Stable,
         );
 
         assert_eq!(
-            info.actionable_latest_version("998.0.0-sedna.1"),
+            info.actionable_latest_version("998.0.0-sedna.1", SednaReleaseChannel::Stable,),
             None,
             "accepted cached version {cached_version}"
         );

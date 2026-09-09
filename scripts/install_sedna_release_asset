@@ -411,14 +411,18 @@ pattern = re.compile(r"^v\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?-sedn
 valid = [r for r in releases if isinstance(r, dict) and not r.get("draft") and (allow or not r.get("prerelease")) and isinstance(r.get("tag_name"), str) and pattern.fullmatch(r["tag_name"])]
 if not valid:
     raise SystemExit("error: no valid published Sedna release matched the selected channel")
+def prerelease_key(value):
+    if not value:
+        return (1, ())
+    return (0, tuple((0, int(x)) if x.isdigit() else (1, x) for x in value.split(".")))
 def key(r):
     tag = r["tag_name"].removeprefix("v")
     core, rest = tag.split("-sedna.", 1)
     ordinal = int(rest.split("+", 1)[0])
     track = core.split("-", 1)
     nums = tuple(int(x) for x in track[0].split("."))
-    prerelease = tuple(track[1].split(".")) if len(track) > 1 else ()
-    return nums, tuple((0, int(x)) if x.isdigit() else (1, x) for x in prerelease), ordinal
+    prerelease = track[1] if len(track) > 1 else ""
+    return nums, prerelease_key(prerelease), ordinal
 print(max(valid, key=key)["tag_name"])
 PY
 )"
@@ -460,10 +464,6 @@ candidate = parse(tag)
 bound = parse(current)
 if candidate is None or bound is None:
     raise SystemExit("error: --require-newer-than requires a strict Sedna release version")
-if candidate[1]:
-    raise SystemExit(f"error: automatic update candidate {tag} must be stable")
-if bound[1]:
-    raise SystemExit(f"error: --require-newer-than bound {current} must be stable")
 if compare(candidate, bound) <= 0:
     raise SystemExit(f"error: automatic update candidate {tag} is not newer than {current}")
 PY
@@ -608,16 +608,17 @@ while IFS=$'\t' read -r name asset_id; do
   esac
 done < "$asset_manifest"
 
-python3 - "$work_dir" "$archive_name" "$checksum_name" "$metadata_name" "$release_tag" "$release_version" "$target" "$macos_preview" "$macos_unnotarized" "$sbom_name" "$attestation_bundle_name" "$codex_sigstore_name" "$proxy_sigstore_name" "$require_linux_signatures" "$require_linux_provenance" <<'PY'
+python3 - "$work_dir" "$release_json" "$archive_name" "$checksum_name" "$metadata_name" "$release_tag" "$release_version" "$target" "$macos_preview" "$macos_unnotarized" "$sbom_name" "$attestation_bundle_name" "$codex_sigstore_name" "$proxy_sigstore_name" "$require_linux_signatures" "$require_linux_provenance" <<'PY'
 import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 
-work_dir, archive_name, checksum_name, metadata_name, release_tag, release_version, target, macos_preview, macos_unnotarized, sbom_name, attestation_bundle_name, codex_sigstore_name, proxy_sigstore_name, require_linux_signatures, require_linux_provenance = sys.argv[1:16]
+work_dir, release_json, archive_name, checksum_name, metadata_name, release_tag, release_version, target, macos_preview, macos_unnotarized, sbom_name, attestation_bundle_name, codex_sigstore_name, proxy_sigstore_name, require_linux_signatures, require_linux_provenance = sys.argv[1:17]
 root = Path(work_dir)
 metadata = json.loads((root / metadata_name).read_text(encoding="utf-8"))
+release = json.loads(Path(release_json).read_text(encoding="utf-8"))
 expected = {
     "release_tag": release_tag,
     "release_version": release_version,
@@ -628,6 +629,16 @@ for key, value in expected.items():
         raise SystemExit(f"error: metadata {key}={metadata.get(key)!r}, expected {value!r}")
 if str(metadata.get("repository", "")).lower() != "sednalabs/codex":
     raise SystemExit(f"error: metadata repository={metadata.get('repository')!r}, expected 'sednalabs/codex'")
+api_prerelease = release.get("prerelease")
+if not isinstance(api_prerelease, bool):
+    raise SystemExit("error: release API prerelease flag is not a boolean")
+metadata_channel = metadata.get("release_channel")
+if metadata_channel is not None:
+    expected_channel = "prerelease" if api_prerelease else "stable"
+    if metadata_channel != expected_channel:
+        raise SystemExit(
+            f"error: metadata release_channel={metadata_channel!r} disagrees with release API {expected_channel!r}"
+        )
 if target == "x86_64-apple-darwin":
     expected_trust = (
         {

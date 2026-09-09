@@ -116,6 +116,7 @@ pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use codex_utils_path_uri::PathUri;
+use codex_utils_version::SednaReleaseChannel;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
 use rmcp::model::UrlElicitationCapability;
@@ -1097,6 +1098,9 @@ pub struct Config {
     /// Set to `false` only if your Codex updates are centrally managed.
     /// Defaults to `true`.
     pub check_for_update_on_startup: bool,
+
+    /// The explicitly selected published Sedna release stream.
+    pub sedna_release_channel: SednaReleaseChannel,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
@@ -3872,6 +3876,7 @@ impl Config {
         let review_model = override_review_model.or(cfg.review_model);
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
+        let sedna_release_channel = cfg.sedna_release_channel.unwrap_or_default();
         let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
 
         let log_dir = cfg
@@ -4182,6 +4187,7 @@ impl Config {
             active_project,
             notices,
             check_for_update_on_startup,
+            sedna_release_channel,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             analytics_enabled: cfg.analytics.as_ref().and_then(|a| a.enabled),
             feedback_enabled: cfg
