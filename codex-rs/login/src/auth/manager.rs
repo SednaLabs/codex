@@ -622,10 +622,11 @@ impl CodexAuth {
 
     fn persist_managed_chatgpt_agent_identity_record(
         &self,
+        expected_auth: &AuthDotJson,
         record: AgentIdentityAuthRecord,
     ) -> std::io::Result<()> {
         if let Self::Chatgpt(chatgpt_auth) = self {
-            chatgpt_auth.persist_agent_identity_record(record)?;
+            chatgpt_auth.persist_agent_identity_record(expected_auth, record)?;
         }
         Ok(())
     }
@@ -668,9 +669,12 @@ impl CodexAuth {
         auth_route_config: &AuthRouteConfig,
         session_source: SessionSource,
     ) -> std::io::Result<AgentIdentityAuth> {
-        let binding =
-            ManagedChatGptAgentIdentityBinding::from_auth(self, forced_chatgpt_workspace_id)
-                .ok_or_else(|| std::io::Error::other("ChatGPT auth is unavailable"))?;
+        // Capture the binding and durable auth value under one state lock. Reading
+        // them separately lets an async login transition pair account A's binding
+        // with account B's auth record.
+        let (binding, expected_auth) = self
+            .managed_chatgpt_agent_identity_snapshot(forced_chatgpt_workspace_id)
+            .ok_or_else(|| std::io::Error::other("ChatGPT auth is unavailable"))?;
 
         // JWT auth is loaded as CodexAuth::AgentIdentity; this path only reuses
         // records created by the managed ChatGPT Agent Identity bootstrap.
@@ -685,8 +689,16 @@ impl CodexAuth {
             )
             .await
             .map_err(|err| classify_bootstrap_error("agent task registration", err))?;
+            if !record_matches_managed_chatgpt_binding(auth.record(), &binding) {
+                return Err(std::io::Error::other(
+                    REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE,
+                ));
+            }
             if should_persist {
-                self.persist_managed_chatgpt_agent_identity_record(auth.record().clone())?;
+                self.persist_managed_chatgpt_agent_identity_record(
+                    &expected_auth,
+                    auth.record().clone(),
+                )?;
             }
             return Ok(auth);
         }
@@ -698,8 +710,35 @@ impl CodexAuth {
             auth_route_config,
         )
         .await?;
-        self.persist_managed_chatgpt_agent_identity_record(auth.record().clone())?;
+        if !record_matches_managed_chatgpt_binding(auth.record(), &binding) {
+            return Err(std::io::Error::other(
+                REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE,
+            ));
+        }
+        self.persist_managed_chatgpt_agent_identity_record(&expected_auth, auth.record().clone())?;
         Ok(auth)
+    }
+
+    fn managed_chatgpt_agent_identity_snapshot(
+        &self,
+        forced_chatgpt_workspace_id: Option<Vec<String>>,
+    ) -> Option<(ManagedChatGptAgentIdentityBinding, AuthDotJson)> {
+        let state = match self {
+            Self::Chatgpt(auth) => &auth.state,
+            Self::ChatgptAuthTokens(_)
+            | Self::ApiKey(_)
+            | Self::Headers(_)
+            | Self::AgentIdentity(_)
+            | Self::PersonalAccessToken(_)
+            | Self::BedrockApiKey(_) => return None,
+        };
+        #[expect(clippy::unwrap_used)]
+        let expected_auth = state.auth_dot_json.lock().unwrap().clone()?;
+        let binding = ManagedChatGptAgentIdentityBinding::from_auth_dot_json(
+            &expected_auth,
+            forced_chatgpt_workspace_id,
+        )?;
+        Some((binding, expected_auth))
     }
 
     /// Consider this private to integration tests.
@@ -763,7 +802,16 @@ impl ManagedChatGptAgentIdentityBinding {
             return None;
         }
 
-        let token_data = auth.get_token_data().ok()?;
+        let auth_dot_json = auth.get_current_auth_json()?;
+        Self::from_auth_dot_json(&auth_dot_json, forced_workspace_id)
+    }
+
+    fn from_auth_dot_json(
+        auth_dot_json: &AuthDotJson,
+        forced_workspace_id: Option<Vec<String>>,
+    ) -> Option<Self> {
+        let token_data = auth_dot_json.tokens.as_ref()?;
+
         let forced_workspace_id =
             forced_workspace_id
                 .as_deref()
@@ -787,9 +835,15 @@ impl ManagedChatGptAgentIdentityBinding {
             account_id,
             chatgpt_user_id,
             email: token_data.id_token.email.clone(),
-            plan_type: auth.account_plan_type().unwrap_or(AccountPlanType::Unknown),
-            chatgpt_account_is_fedramp: auth.is_fedramp_account(),
-            access_token: token_data.access_token,
+            plan_type: token_data
+                .id_token
+                .chatgpt_plan_type
+                .as_ref()
+                .cloned()
+                .map(AccountPlanType::from)
+                .unwrap_or(AccountPlanType::Unknown),
+            chatgpt_account_is_fedramp: token_data.id_token.chatgpt_account_is_fedramp,
+            access_token: token_data.access_token.clone(),
         })
     }
 }
@@ -814,26 +868,38 @@ impl ChatgptAuth {
 
     fn persist_agent_identity_record(
         &self,
+        expected_auth: &AuthDotJson,
         record: AgentIdentityAuthRecord,
     ) -> std::io::Result<()> {
-        persist_agent_identity_record(&self.state.auth_dot_json, &self.storage, record)
+        persist_agent_identity_record(
+            &self.state.auth_dot_json,
+            &self.storage,
+            expected_auth,
+            record,
+        )
     }
 }
 
 fn persist_agent_identity_record(
     auth_dot_json: &Arc<Mutex<Option<AuthDotJson>>>,
     storage: &Arc<dyn AuthStorageBackend>,
+    expected_auth: &AuthDotJson,
     record: AgentIdentityAuthRecord,
 ) -> std::io::Result<()> {
     let mut guard = auth_dot_json
         .lock()
         .map_err(|_| std::io::Error::other("failed to lock auth state"))?;
-    let mut auth = storage
-        .load()?
-        .or_else(|| guard.clone())
-        .ok_or_else(|| std::io::Error::other("auth data is not available"))?;
+    let mut transaction = storage.begin_transaction()?;
+    if guard.as_ref() != Some(expected_auth)
+        || transaction.snapshot().auth.as_ref() != Some(expected_auth)
+    {
+        return Err(std::io::Error::other(
+            REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE,
+        ));
+    }
+    let mut auth = expected_auth.clone();
     auth.agent_identity = Some(AgentIdentityStorage::Record(record));
-    storage.save(&auth)?;
+    transaction.save(&auth)?;
     *guard = Some(auth);
     Ok(())
 }
@@ -1119,6 +1185,7 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
                 message,
                 config.auth_credentials_store_mode,
                 config.keyring_backend_kind,
+                &auth,
             );
         }
     }
@@ -1142,6 +1209,7 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
                             ),
                             config.auth_credentials_store_mode,
                             config.keyring_backend_kind,
+                            &auth,
                         );
                     }
                 };
@@ -1170,6 +1238,7 @@ async fn enforce_login_restrictions_with_agent_identity_authapi_base_url(
                 message,
                 config.auth_credentials_store_mode,
                 config.keyring_backend_kind,
+                &auth,
             );
         }
     }
@@ -1182,19 +1251,73 @@ fn logout_with_message(
     message: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
+    rejected_auth: &CodexAuth,
 ) -> std::io::Result<()> {
-    // External auth tokens live in the ephemeral store, but persistent auth may still exist
-    // from earlier logins. Clear both so a forced logout truly removes all active auth.
-    let removal_result = logout_all_stores(
+    let removal_result = logout_stores_matching_rejected_auth(
         codex_home,
         auth_credentials_store_mode,
         keyring_backend_kind,
+        rejected_auth,
     );
     let error_message = match removal_result {
         Ok(_) => message,
         Err(err) => format!("{message}. Failed to remove auth.json: {err}"),
     };
     Err(std::io::Error::other(error_message))
+}
+
+fn logout_stores_matching_rejected_auth(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
+    rejected_auth: &CodexAuth,
+) -> std::io::Result<bool> {
+    let remove_from = |mode, backend| -> std::io::Result<bool> {
+        let storage = create_auth_storage(codex_home.to_path_buf(), mode, backend);
+        let mut transaction = storage.begin_transaction()?;
+        let removed = transaction
+            .compare_delete(|stored| auth_dot_json_matches_rejected_auth(stored, rejected_auth))?;
+        Ok(removed)
+    };
+    let removed_ephemeral = remove_from(
+        AuthCredentialsStoreMode::Ephemeral,
+        AuthKeyringBackendKind::default(),
+    )?;
+    if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
+        return Ok(removed_ephemeral);
+    }
+    let removed_managed = remove_from(auth_credentials_store_mode, keyring_backend_kind)?;
+    Ok(removed_ephemeral || removed_managed)
+}
+
+fn auth_dot_json_matches_rejected_auth(stored: &AuthDotJson, rejected: &CodexAuth) -> bool {
+    if stored.resolved_mode() != rejected.api_auth_mode() {
+        return false;
+    }
+    match rejected {
+        CodexAuth::ApiKey(auth) => stored.openai_api_key.as_deref() == Some(auth.api_key.as_str()),
+        CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
+            let Some(rejected) = rejected.get_current_auth_json() else {
+                return false;
+            };
+            let (Some(stored_tokens), Some(rejected_tokens)) = (&stored.tokens, &rejected.tokens)
+            else {
+                return false;
+            };
+            stored_tokens.access_token == rejected_tokens.access_token
+                && stored_tokens.refresh_token == rejected_tokens.refresh_token
+                && stored_tokens.account_id == rejected_tokens.account_id
+        }
+        CodexAuth::AgentIdentity(auth) => stored
+            .agent_identity
+            .as_ref()
+            .is_some_and(|identity| identity.matches_record(auth.record())),
+        CodexAuth::PersonalAccessToken(auth) => {
+            stored.personal_access_token.as_deref() == Some(auth.access_token())
+        }
+        CodexAuth::BedrockApiKey(auth) => stored.bedrock_api_key.as_ref() == Some(auth),
+        CodexAuth::Headers(_) => false,
+    }
 }
 
 fn logout_all_stores(
@@ -1317,13 +1440,18 @@ async fn load_auth(
 // Persist refreshed tokens into auth storage and update last_refresh.
 fn persist_tokens(
     storage: &Arc<dyn AuthStorageBackend>,
+    expected_auth: &AuthDotJson,
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> std::io::Result<AuthDotJson> {
-    let mut auth_dot_json = storage
-        .load()?
-        .ok_or(std::io::Error::other("Token data is not available."))?;
+    let mut transaction = storage.begin_transaction()?;
+    if transaction.snapshot().auth.as_ref() != Some(expected_auth) {
+        return Err(std::io::Error::other(
+            REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE,
+        ));
+    }
+    let mut auth_dot_json = expected_auth.clone();
 
     let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
     if let Some(id_token) = id_token {
@@ -1336,7 +1464,7 @@ fn persist_tokens(
         tokens.refresh_token = refresh_token;
     }
     auth_dot_json.last_refresh = Some(Utc::now());
-    storage.save(&auth_dot_json)?;
+    transaction.save(&auth_dot_json)?;
     Ok(auth_dot_json)
 }
 
@@ -2763,6 +2891,9 @@ impl AuthManager {
         auth: &ChatgptAuth,
         refresh_token: String,
     ) -> Result<(), RefreshTokenError> {
+        let expected_auth = auth.current_auth_json().ok_or_else(|| {
+            RefreshTokenError::Transient(std::io::Error::other("Token data is not available."))
+        })?;
         let refresh_response = request_chatgpt_token_refresh(refresh_token, auth.client()).await?;
 
         let _transition = self.provider_request_gate.write().await;
@@ -2773,6 +2904,7 @@ impl AuthManager {
 
         persist_tokens(
             auth.storage(),
+            &expected_auth,
             refresh_response.id_token,
             refresh_response.access_token,
             refresh_response.refresh_token,

@@ -16,6 +16,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 use tracing::warn;
 
 use super::BedrockApiKeyAuth;
@@ -84,6 +85,15 @@ impl AgentIdentityStorage {
             Self::Record(record) => Some(record),
         }
     }
+
+    pub(crate) fn matches_record(&self, record: &AgentIdentityAuthRecord) -> bool {
+        match self {
+            Self::Jwt(jwt) => AgentIdentityAuthRecord::from_agent_identity_jwt(jwt)
+                .ok()
+                .is_some_and(|stored| stored.same_credential(record)),
+            Self::Record(stored) => stored.same_credential(record),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -130,6 +140,13 @@ impl AgentIdentityAuthRecord {
 
         Ok(claims.into())
     }
+
+    pub(crate) fn same_credential(&self, other: &Self) -> bool {
+        self.agent_runtime_id == other.agent_runtime_id
+            && self.agent_private_key == other.agent_private_key
+            && self.account_id == other.account_id
+            && self.chatgpt_user_id == other.chatgpt_user_id
+    }
 }
 
 impl From<AgentIdentityJwtClaims> for AgentIdentityAuthRecord {
@@ -160,10 +177,157 @@ pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> 
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AuthStorageSource {
+    File,
+    DirectKeyring,
+    SecretsKeyring,
+    Ephemeral,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct AuthStorageSnapshot {
+    pub source: AuthStorageSource,
+    pub auth: Option<AuthDotJson>,
+}
+
 pub(super) trait AuthStorageBackend: Debug + Send + Sync {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>>;
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()>;
-    fn delete(&self) -> std::io::Result<bool>;
+    fn codex_home(&self) -> &Path;
+    fn source(&self) -> AuthStorageSource;
+    fn load_unlocked(&self) -> std::io::Result<Option<AuthDotJson>>;
+    fn save_unlocked(&self, auth: &AuthDotJson) -> std::io::Result<()>;
+    fn delete_unlocked(&self) -> std::io::Result<bool>;
+
+    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+        Ok(self.begin_transaction()?.snapshot().auth.clone())
+    }
+
+    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+        let mut transaction = self.begin_transaction()?;
+        // A direct save is a new Auto policy decision: prefer the keyring and
+        // fall back to the file when that backend is unavailable. Operations
+        // that already resolved an authority use `transaction.save` below so
+        // they remain pinned to their transaction snapshot.
+        transaction.save_preferred(auth)
+    }
+
+    fn delete(&self) -> std::io::Result<bool> {
+        let mut transaction = self.begin_transaction()?;
+        transaction.delete()
+    }
+
+    fn resolve_snapshot_unlocked(&self) -> std::io::Result<AuthStorageSnapshot> {
+        Ok(AuthStorageSnapshot {
+            source: self.source(),
+            auth: self.load_unlocked()?,
+        })
+    }
+
+    fn save_to_source_unlocked(
+        &self,
+        source: AuthStorageSource,
+        auth: &AuthDotJson,
+    ) -> std::io::Result<()> {
+        if source != self.source() {
+            return Err(std::io::Error::other("auth storage source changed"));
+        }
+        self.save_unlocked(auth)
+    }
+
+    fn delete_from_source_unlocked(&self, source: AuthStorageSource) -> std::io::Result<bool> {
+        if source != self.source() {
+            return Err(std::io::Error::other("auth storage source changed"));
+        }
+        self.delete_unlocked()
+    }
+
+    fn begin_transaction(&self) -> std::io::Result<AuthStorageTransaction<'_>> {
+        let process_guard = AUTH_STORAGE_TRANSACTION_LOCK
+            .lock()
+            .map_err(|_| std::io::Error::other("failed to lock auth storage"))?;
+        let file_guard = lock_auth_storage(self.codex_home())?;
+        let snapshot = self.resolve_snapshot_unlocked()?;
+        Ok(AuthStorageTransaction {
+            _process_guard: process_guard,
+            _file_guard: file_guard,
+            snapshot,
+            save_to_source: Box::new(move |source, auth| {
+                self.save_to_source_unlocked(source, auth)
+            }),
+            save_preferred: Box::new(move |auth| self.save_unlocked(auth)),
+            delete_from_source: Box::new(move |source| self.delete_from_source_unlocked(source)),
+        })
+    }
+}
+
+pub(super) struct AuthStorageTransaction<'a> {
+    _process_guard: MutexGuard<'static, ()>,
+    _file_guard: File,
+    snapshot: AuthStorageSnapshot,
+    save_to_source: Box<dyn Fn(AuthStorageSource, &AuthDotJson) -> std::io::Result<()> + 'a>,
+    save_preferred: Box<dyn Fn(&AuthDotJson) -> std::io::Result<()> + 'a>,
+    delete_from_source: Box<dyn Fn(AuthStorageSource) -> std::io::Result<bool> + 'a>,
+}
+
+impl AuthStorageTransaction<'_> {
+    pub(super) fn snapshot(&self) -> &AuthStorageSnapshot {
+        &self.snapshot
+    }
+
+    pub(super) fn save(&mut self, auth: &AuthDotJson) -> std::io::Result<()> {
+        (self.save_to_source)(self.snapshot.source, auth)?;
+        self.snapshot.auth = Some(auth.clone());
+        Ok(())
+    }
+
+    pub(super) fn save_preferred(&mut self, auth: &AuthDotJson) -> std::io::Result<()> {
+        (self.save_preferred)(auth)?;
+        self.snapshot.auth = Some(auth.clone());
+        Ok(())
+    }
+
+    pub(super) fn delete(&mut self) -> std::io::Result<bool> {
+        let removed = (self.delete_from_source)(self.snapshot.source)?;
+        if removed {
+            self.snapshot.auth = None;
+        }
+        Ok(removed)
+    }
+
+    pub(super) fn compare_delete(
+        &mut self,
+        should_delete: impl FnOnce(&AuthDotJson) -> bool,
+    ) -> std::io::Result<bool> {
+        let Some(auth) = self.snapshot.auth.as_ref() else {
+            return Ok(false);
+        };
+        if !should_delete(auth) {
+            return Ok(false);
+        }
+        self.delete()
+    }
+}
+
+// Serialize transactions in-process as well as across cooperating Codex
+// processes. The lock is deliberately separate from CODEX_HOME so acquiring it
+// does not create or modify the durable auth directory.
+static AUTH_STORAGE_TRANSACTION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+fn lock_auth_storage(codex_home: &Path) -> std::io::Result<File> {
+    let absolute_codex_home = std::path::absolute(codex_home)?;
+    let mut hasher = Sha256::new();
+    hasher.update(absolute_codex_home.to_string_lossy().as_bytes());
+    let lock_key = digest_hex(hasher.finalize());
+    let lock_dir = std::env::temp_dir().join("codex-auth-locks");
+    std::fs::create_dir_all(&lock_dir)?;
+    let lock_path = lock_dir.join(lock_key);
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let lock_file = options.open(lock_path)?;
+    lock_file.lock()?;
+    Ok(lock_file)
 }
 
 #[derive(Clone, Debug)]
@@ -189,7 +353,15 @@ impl FileAuthStorage {
 }
 
 impl AuthStorageBackend for FileAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+    fn codex_home(&self) -> &Path {
+        &self.codex_home
+    }
+
+    fn source(&self) -> AuthStorageSource {
+        AuthStorageSource::File
+    }
+
+    fn load_unlocked(&self) -> std::io::Result<Option<AuthDotJson>> {
         let auth_file = get_auth_file(&self.codex_home);
         let auth_dot_json = match self.try_read_auth_json(&auth_file) {
             Ok(auth) => auth,
@@ -199,7 +371,7 @@ impl AuthStorageBackend for FileAuthStorage {
         Ok(Some(auth_dot_json))
     }
 
-    fn save(&self, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
+    fn save_unlocked(&self, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
         let auth_file = get_auth_file(&self.codex_home);
 
         if let Some(parent) = auth_file.parent() {
@@ -218,7 +390,7 @@ impl AuthStorageBackend for FileAuthStorage {
         Ok(())
     }
 
-    fn delete(&self) -> std::io::Result<bool> {
+    fn delete_unlocked(&self) -> std::io::Result<bool> {
         delete_file_if_exists(&self.codex_home)
     }
 }
@@ -300,12 +472,20 @@ impl DirectKeyringAuthStorage {
 }
 
 impl AuthStorageBackend for DirectKeyringAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+    fn codex_home(&self) -> &Path {
+        &self.codex_home
+    }
+
+    fn source(&self) -> AuthStorageSource {
+        AuthStorageSource::DirectKeyring
+    }
+
+    fn load_unlocked(&self) -> std::io::Result<Option<AuthDotJson>> {
         let key = compute_store_key(&self.codex_home)?;
         self.load_from_keyring(&key)
     }
 
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+    fn save_unlocked(&self, auth: &AuthDotJson) -> std::io::Result<()> {
         let key = compute_store_key(&self.codex_home)?;
         // Simpler error mapping per style: prefer method reference over closure
         let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
@@ -316,7 +496,7 @@ impl AuthStorageBackend for DirectKeyringAuthStorage {
         Ok(())
     }
 
-    fn delete(&self) -> std::io::Result<bool> {
+    fn delete_unlocked(&self) -> std::io::Result<bool> {
         let key = compute_store_key(&self.codex_home)?;
         let keyring_removed = self
             .keyring_store
@@ -363,7 +543,15 @@ impl SecretsKeyringAuthStorage {
 }
 
 impl AuthStorageBackend for SecretsKeyringAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+    fn codex_home(&self) -> &Path {
+        &self.codex_home
+    }
+
+    fn source(&self) -> AuthStorageSource {
+        AuthStorageSource::SecretsKeyring
+    }
+
+    fn load_unlocked(&self) -> std::io::Result<Option<AuthDotJson>> {
         match self
             .secrets_manager
             .get(&SecretScope::Global, &CODEX_AUTH_SECRET_NAME)
@@ -381,7 +569,7 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
         }
     }
 
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+    fn save_unlocked(&self, auth: &AuthDotJson) -> std::io::Result<()> {
         let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
         self.secrets_manager
             .set(&SecretScope::Global, &CODEX_AUTH_SECRET_NAME, &serialized)
@@ -397,7 +585,7 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
         Ok(())
     }
 
-    fn delete(&self) -> std::io::Result<bool> {
+    fn delete_unlocked(&self) -> std::io::Result<bool> {
         let keyring_removed = self
             .secrets_manager
             .delete(&SecretScope::Global, &CODEX_AUTH_SECRET_NAME)
@@ -407,7 +595,10 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
                 ))
             })?;
         let file_removed = delete_file_if_exists(&self.codex_home)?;
-        let direct_removed = self.direct_storage.delete()?;
+        // The outer auth transaction already owns the process and file locks.
+        // Re-entering `delete` here would try to acquire the non-reentrant
+        // process lock a second time and deadlock the transaction.
+        let direct_removed = self.direct_storage.delete_unlocked()?;
         Ok(keyring_removed || file_removed || direct_removed)
     }
 }
@@ -436,30 +627,104 @@ impl AutoAuthStorage {
 }
 
 impl AuthStorageBackend for AutoAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        match self.keyring_storage.load() {
-            Ok(Some(auth)) => Ok(Some(auth)),
-            Ok(None) => self.file_storage.load(),
+    fn codex_home(&self) -> &Path {
+        self.file_storage.codex_home()
+    }
+
+    // Auto resolves its concrete source as part of the transaction snapshot.
+    // This value is only a placeholder for callers that do not use a snapshot.
+    fn source(&self) -> AuthStorageSource {
+        AuthStorageSource::File
+    }
+
+    fn resolve_snapshot_unlocked(&self) -> std::io::Result<AuthStorageSnapshot> {
+        match self.keyring_storage.load_unlocked() {
+            Ok(Some(auth)) => Ok(AuthStorageSnapshot {
+                source: self.keyring_storage.source(),
+                auth: Some(auth),
+            }),
+            Ok(None) => {
+                let file_auth = self.file_storage.load_unlocked()?;
+                Ok(AuthStorageSnapshot {
+                    source: if file_auth.is_some() {
+                        AuthStorageSource::File
+                    } else {
+                        self.keyring_storage.source()
+                    },
+                    auth: file_auth,
+                })
+            }
             Err(err) => {
                 warn!("failed to load CLI auth from keyring, falling back to file storage: {err}");
-                self.file_storage.load()
+                Ok(AuthStorageSnapshot {
+                    source: AuthStorageSource::File,
+                    auth: self.file_storage.load_unlocked()?,
+                })
             }
         }
     }
 
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        match self.keyring_storage.save(auth) {
+    fn load_unlocked(&self) -> std::io::Result<Option<AuthDotJson>> {
+        Ok(self.resolve_snapshot_unlocked()?.auth)
+    }
+
+    fn save_unlocked(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+        match self.keyring_storage.save_unlocked(auth) {
             Ok(()) => Ok(()),
             Err(err) => {
                 warn!("failed to save auth to keyring, falling back to file storage: {err}");
-                self.file_storage.save(auth)
+                self.file_storage.save_unlocked(auth)
             }
+        }
+    }
+
+    fn save_to_source_unlocked(
+        &self,
+        source: AuthStorageSource,
+        auth: &AuthDotJson,
+    ) -> std::io::Result<()> {
+        match source {
+            AuthStorageSource::File => self.file_storage.save_unlocked(auth),
+            source if source == self.keyring_storage.source() => {
+                self.keyring_storage.save_unlocked(auth)
+            }
+            _ => Err(std::io::Error::other("auth storage source changed")),
+        }
+    }
+
+    fn delete_unlocked(&self) -> std::io::Result<bool> {
+        // Preserve the historical Auto logout behavior: remove both the keyring
+        // entry and any fallback file.
+        match self.keyring_storage.delete_unlocked() {
+            Ok(keyring_removed) => {
+                let file_removed = self.file_storage.delete_unlocked()?;
+                Ok(keyring_removed || file_removed)
+            }
+            Err(err) => {
+                warn!(
+                    "failed to delete CLI auth from keyring, falling back to file storage: {err}"
+                );
+                self.file_storage.delete_unlocked()
+            }
+        }
+    }
+
+    fn delete_from_source_unlocked(&self, source: AuthStorageSource) -> std::io::Result<bool> {
+        match source {
+            AuthStorageSource::File => self.file_storage.delete_unlocked(),
+            source if source == self.keyring_storage.source() => {
+                self.keyring_storage.delete_unlocked()
+            }
+            _ => Err(std::io::Error::other("auth storage source changed")),
         }
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        // Keyring storage will delete from disk as well
-        self.keyring_storage.delete()
+        let _process_guard = AUTH_STORAGE_TRANSACTION_LOCK
+            .lock()
+            .map_err(|_| std::io::Error::other("failed to lock auth storage"))?;
+        let _file_guard = lock_auth_storage(self.codex_home())?;
+        self.delete_unlocked()
     }
 }
 
@@ -490,18 +755,26 @@ impl EphemeralAuthStorage {
 }
 
 impl AuthStorageBackend for EphemeralAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+    fn codex_home(&self) -> &Path {
+        &self.codex_home
+    }
+
+    fn source(&self) -> AuthStorageSource {
+        AuthStorageSource::Ephemeral
+    }
+
+    fn load_unlocked(&self) -> std::io::Result<Option<AuthDotJson>> {
         self.with_store(|store, key| Ok(store.get(&key).cloned()))
     }
 
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+    fn save_unlocked(&self, auth: &AuthDotJson) -> std::io::Result<()> {
         self.with_store(|store, key| {
             store.insert(key, auth.clone());
             Ok(())
         })
     }
 
-    fn delete(&self) -> std::io::Result<bool> {
+    fn delete_unlocked(&self) -> std::io::Result<bool> {
         self.with_store(|store, key| Ok(store.remove(&key).is_some()))
     }
 }

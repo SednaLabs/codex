@@ -11,8 +11,38 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::tempdir;
 
+use codex_keyring_store::CredentialStoreError;
+use codex_keyring_store::KeyringStore;
 use codex_keyring_store::tests::MockKeyringStore;
 use keyring::Error as KeyringError;
+use std::sync::Mutex;
+
+#[derive(Debug)]
+struct ReadSuccessWriteFailureKeyring {
+    value: Mutex<Option<String>>,
+}
+
+impl KeyringStore for ReadSuccessWriteFailureKeyring {
+    fn load(&self, _service: &str, _account: &str) -> Result<Option<String>, CredentialStoreError> {
+        Ok(self.value.lock().expect("keyring value lock").clone())
+    }
+
+    fn save(
+        &self,
+        _service: &str,
+        _account: &str,
+        _value: &str,
+    ) -> Result<(), CredentialStoreError> {
+        Err(CredentialStoreError::new(KeyringError::Invalid(
+            "write unavailable".into(),
+            "save".into(),
+        )))
+    }
+
+    fn delete(&self, _service: &str, _account: &str) -> Result<bool, CredentialStoreError> {
+        Ok(false)
+    }
+}
 
 #[tokio::test]
 async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
@@ -774,6 +804,93 @@ fn auto_auth_storage_save_falls_back_when_keyring_errors() -> anyhow::Result<()>
         mock_keyring.saved_value(&key).is_none(),
         "keyring should not contain value when save fails"
     );
+    Ok(())
+}
+
+#[test]
+fn auto_auth_storage_save_falls_back_after_keyring_read_succeeds() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let keyring_auth = auth_with_prefix("existing-keyring");
+    let keyring = ReadSuccessWriteFailureKeyring {
+        value: Mutex::new(Some(serde_json::to_string(&keyring_auth)?)),
+    };
+    let storage = AutoAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(keyring),
+        AuthKeyringBackendKind::Direct,
+    );
+
+    let expected = auth_with_prefix("file-fallback");
+    storage.save(&expected)?;
+
+    assert_eq!(storage.file_storage.load()?, Some(expected));
+    assert!(get_auth_file(codex_home.path()).exists());
+    Ok(())
+}
+
+#[test]
+fn storage_transaction_commits_refresh_and_identity_as_one_snapshot() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let initial = auth_with_prefix("transaction");
+    storage.save(&initial)?;
+
+    let mut transaction = storage.begin_transaction()?;
+    assert_eq!(transaction.snapshot().source, AuthStorageSource::File);
+    let mut updated = transaction.snapshot().auth.clone().expect("auth snapshot");
+    updated.tokens.as_mut().expect("tokens").refresh_token =
+        "transaction-refresh-updated".to_string();
+    updated.agent_identity = Some(AgentIdentityStorage::Record(AgentIdentityAuthRecord {
+        agent_runtime_id: "runtime".to_string(),
+        agent_private_key: "private".to_string(),
+        account_id: "account".to_string(),
+        chatgpt_user_id: "user".to_string(),
+        email: None,
+        plan_type: AccountPlanType::Pro,
+        chatgpt_account_is_fedramp: false,
+        task_id: None,
+    }));
+    transaction.save(&updated)?;
+    drop(transaction);
+
+    let committed = storage.load()?.expect("committed auth");
+    assert_eq!(committed, updated);
+    Ok(())
+}
+
+#[test]
+fn auto_transaction_does_not_switch_from_file_when_keyring_recovers() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let mock_keyring = MockKeyringStore::default();
+    let storage = AutoAuthStorage::new(
+        codex_home.path().to_path_buf(),
+        Arc::new(mock_keyring.clone()),
+        AuthKeyringBackendKind::Secrets,
+    );
+    let rejected_file_auth = auth_with_prefix("rejected-file");
+    storage.file_storage.save(&rejected_file_auth)?;
+
+    let keyring_auth = auth_with_prefix("recovered-keyring");
+    seed_secrets_backend_with_auth(&mock_keyring, codex_home.path(), &keyring_auth)?;
+    mock_keyring.set_error(
+        &compute_keyring_account(codex_home.path()),
+        KeyringError::Invalid("temporarily unavailable".into(), "load".into()),
+    );
+
+    let mut transaction = storage.begin_transaction()?;
+    assert_eq!(transaction.snapshot().source, AuthStorageSource::File);
+    assert_eq!(
+        transaction.snapshot().auth,
+        Some(rejected_file_auth.clone())
+    );
+
+    // The one-shot mock error has now cleared: the keyring source is available
+    // again while the transaction still owns the original file source.
+    assert!(transaction.compare_delete(|auth| auth == &rejected_file_auth)?);
+    drop(transaction);
+
+    assert!(!get_auth_file(codex_home.path()).exists());
+    assert_eq!(storage.load()?, Some(keyring_auth));
     Ok(())
 }
 
