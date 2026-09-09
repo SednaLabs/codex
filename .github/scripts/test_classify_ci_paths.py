@@ -78,6 +78,21 @@ class ClassifyCiPathsTests(unittest.TestCase):
         self.assertEqual(scope.codeql_languages, CODEQL_ALL)
         self.assertTrue(scope.force_full_codeql)
 
+    def test_native_visual_contract_changes_select_repo_policy(self) -> None:
+        for path in (
+            ".github/codeql/rust-computer-use-contract/suites/rust-computer-use-production.qls",
+            (
+                ".github/codeql/rust-computer-use-contract/queries/"
+                "NativeVisualResponseCoverageWitness.ql"
+            ),
+            ".github/scripts/verify_native_visual_response_contract.py",
+            ".github/scripts/test_verify_native_visual_response_contract.py",
+            "codex-rs/android-computer-use/src/lib.rs",
+            "codex-rs/browser-computer-use/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify([path]).repo_policy)
+
     def test_routing_change_forces_full_blocking_and_codeql(self) -> None:
         scope = classify([".github/scripts/classify_ci_paths.py"])
         self.assertTrue(scope.force_full_blocking)

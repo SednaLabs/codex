@@ -48,6 +48,12 @@ jobs:
       - name: Verify Bazel clippy flags match Cargo workspace lints
         run: python3 .github/scripts/verify_bazel_clippy_lints.py
 
+      - name: Verify native visual response production CodeQL contract
+        run: python3 .github/scripts/verify_native_visual_response_contract.py
+
+      - name: Test native visual response production CodeQL contract verifier
+        run: python3 .github/scripts/test_verify_native_visual_response_contract.py
+
       - name: Check for a clean worktree
         if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
