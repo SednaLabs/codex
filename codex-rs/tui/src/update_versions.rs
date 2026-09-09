@@ -7,8 +7,8 @@ pub(crate) use codex_utils_version::is_sedna_release_version;
 /// Cache values are untrusted across releases. A cached value may be compared
 /// only after it passes the Sedna release grammar used for live release tags.
 pub(crate) fn is_actionable_sedna_update(latest: &str, current: &str) -> bool {
-    codex_utils_version::is_stable_sedna_release_version(latest)
-        && codex_utils_version::is_stable_sedna_release_version(current)
+    codex_utils_version::is_sedna_release_version(latest)
+        && codex_utils_version::is_sedna_release_version(current)
         && is_newer(latest, current).unwrap_or(false)
 }
 
@@ -78,7 +78,7 @@ mod tests {
             "1.5.1",
             "1.5.1+upstream.4",
             "1.5.1-sedna.x",
-            "1.5.1-alpha.1-sedna.1",
+            "not-a-sedna-release",
         ] {
             assert!(
                 !is_actionable_sedna_update(cached_version, "1.5.0-sedna.1"),

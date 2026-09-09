@@ -658,6 +658,19 @@ struct AppServerBootstrapCommand {
     /// Launch the managed app-server with remote control enabled.
     #[arg(long = "remote-control")]
     remote_control: bool,
+
+    /// Opt in to automatic installation of newer Sedna releases. Omit this to
+    /// preserve an existing preference; a first bootstrap defaults to off.
+    #[arg(long = "enable-auto-update", conflicts_with = "disable_auto_update")]
+    enable_auto_update: bool,
+
+    /// Disable automatic Sedna installation and stop a managed updater.
+    #[arg(long = "disable-auto-update", conflicts_with = "enable_auto_update")]
+    disable_auto_update: bool,
+
+    /// Persist the published Sedna release stream used by automatic updates.
+    #[arg(long = "release-channel", value_parser = ["stable", "prerelease"])]
+    release_channel: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -786,7 +799,7 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn run_update_command() -> anyhow::Result<()> {
+async fn run_update_command(_root_config_overrides: CliConfigOverrides) -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     {
         anyhow::bail!(
@@ -796,16 +809,25 @@ fn run_update_command() -> anyhow::Result<()> {
 
     #[cfg(not(debug_assertions))]
     {
-        let Some(action) = codex_tui::get_update_action() else {
+        let config = ConfigBuilder::default()
+            .cli_overrides(
+                _root_config_overrides
+                    .parse_overrides()
+                    .map_err(anyhow::Error::msg)?,
+            )
+            .build()
+            .await?;
+        let Some(action) = codex_tui::get_update_action(config.sedna_release_channel) else {
             if requires_manual_sedna_update(
                 option_env!("CODEX_RELEASE_REPOSITORY"),
                 option_env!("CODEX_RELEASE_TAG_PREFIX"),
                 codex_utils_version::RELEASE_VERSION,
                 std::env::consts::OS,
                 std::env::consts::ARCH,
+                config.sedna_release_channel,
             ) {
                 anyhow::bail!(
-                    "Automatic updates are available only for stable Sedna Linux releases. This build must be updated manually from https://github.com/sednalabs/codex/releases."
+                    "Automatic updates are available only for the selected Sedna release channel on Linux. This build must be updated manually from https://github.com/sednalabs/codex/releases."
                 );
             }
             anyhow::bail!(
@@ -820,21 +842,25 @@ fn run_update_command() -> anyhow::Result<()> {
     }
 }
 
+#[cfg(any(test, not(debug_assertions)))]
 fn requires_manual_sedna_update(
     repository: Option<&str>,
     tag_prefix: Option<&str>,
     release_version: &str,
     target_os: &str,
     target_arch: &str,
+    release_channel: codex_utils_version::SednaReleaseChannel,
 ) -> bool {
     codex_utils_version::is_sedna_release_identity(repository, tag_prefix)
-        && !codex_utils_version::is_sedna_automatic_update_eligible(
+        && !codex_utils_version::is_sedna_automatic_update_eligible_for_channel(
             release_version,
             target_os,
             target_arch,
+            release_channel,
         )
 }
 
+#[cfg(any(test, not(debug_assertions)))]
 fn update_manual_install_url_for_release_identity(
     repository: Option<&str>,
     tag_prefix: Option<&str>,
@@ -1191,6 +1217,19 @@ async fn cli_main(
                         let output =
                             codex_app_server_daemon::bootstrap(AppServerBootstrapOptions {
                                 remote_control_enabled: bootstrap_cli.remote_control,
+                                sedna_auto_update_enabled: bootstrap_cli
+                                    .enable_auto_update
+                                    .then_some(true)
+                                    .or(bootstrap_cli.disable_auto_update.then_some(false)),
+                                sedna_release_channel: bootstrap_cli.release_channel.map(
+                                    |channel| {
+                                        if channel == "prerelease" {
+                                            codex_utils_version::SednaReleaseChannel::Prerelease
+                                        } else {
+                                            codex_utils_version::SednaReleaseChannel::Stable
+                                        }
+                                    },
+                                ),
                             })
                             .await?;
                         println!("{}", serde_json::to_string(&output)?);
@@ -1448,7 +1487,7 @@ async fn cli_main(
                 root_remote_auth_token_env.as_deref(),
                 "update",
             )?;
-            run_update_command()?;
+            run_update_command(root_config_overrides.clone()).await?;
         }
         Some(Subcommand::Doctor(doctor_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -2654,13 +2693,15 @@ mod tests {
             "1.2.3-sedna.1",
             "linux",
             "x86_64",
+            codex_utils_version::SednaReleaseChannel::Stable,
         ));
-        assert!(requires_manual_sedna_update(
+        assert!(!requires_manual_sedna_update(
             Some("sednalabs/codex"),
             Some("v"),
             "1.2.3-alpha.1-sedna.1",
             "linux",
             "x86_64",
+            codex_utils_version::SednaReleaseChannel::Stable,
         ));
         assert!(requires_manual_sedna_update(
             Some("sednalabs/codex"),
@@ -2668,6 +2709,15 @@ mod tests {
             "1.2.3-sedna.1",
             "macos",
             "x86_64",
+            codex_utils_version::SednaReleaseChannel::Stable,
+        ));
+        assert!(!requires_manual_sedna_update(
+            Some("sednalabs/codex"),
+            Some("v"),
+            "1.2.3-alpha.1-sedna.1",
+            "linux",
+            "x86_64",
+            codex_utils_version::SednaReleaseChannel::Prerelease,
         ));
     }
 
@@ -4035,7 +4085,10 @@ mod tests {
             .subcommand,
             Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
                 subcommand: AppServerDaemonSubcommand::Bootstrap(AppServerBootstrapCommand {
-                    remote_control: true
+                    remote_control: true,
+                    enable_auto_update: false,
+                    disable_auto_update: false,
+                    release_channel: None,
                 })
             }))
         ));

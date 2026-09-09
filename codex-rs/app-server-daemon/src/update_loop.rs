@@ -106,7 +106,14 @@ async fn update_once(
     terminate: &mut Signal,
 ) -> Result<UpdateLoopControl> {
     let daemon = Daemon::from_environment()?;
+    let settings = daemon.load_settings().await?;
     let managed_release = resolved_managed_standalone_release(&daemon.managed_codex_bin).await?;
+    if !settings.sedna_auto_update_enabled {
+        daemon
+            .reconcile_updater(&settings, &managed_release)
+            .await?;
+        return Ok(UpdateLoopControl::Continue);
+    }
     let Some(managed_sedna_release) = managed_release.sedna_auto_update else {
         // A manually selected or otherwise ineligible current release must not
         // leave a previously eligible updater alive. Reconcile it against this
@@ -133,7 +140,12 @@ async fn update_once(
         return Ok(UpdateLoopControl::Stop);
     }
 
-    install_latest_standalone(http, &installed_from_version).await?;
+    install_latest_standalone(
+        http,
+        &installed_from_version,
+        settings.sedna_release_channel,
+    )
+    .await?;
 
     let managed_release = resolved_managed_standalone_release(&daemon.managed_codex_bin).await?;
     let Some(installed_release) = managed_release.sedna_auto_update else {
@@ -247,14 +259,16 @@ pub(crate) fn reexec_managed_updater(managed_codex_bin: &std::path::Path) -> Res
 async fn install_latest_standalone(
     http: &RouteAwareClientPool,
     managed_release_version: &str,
+    channel: codex_utils_version::SednaReleaseChannel,
 ) -> Result<()> {
-    install_latest_sedna_standalone(http, managed_release_version).await
+    install_latest_sedna_standalone(http, managed_release_version, channel).await
 }
 
 #[cfg(unix)]
 async fn install_latest_sedna_standalone(
     http: &impl InstallerHttp,
     current_release_version: &str,
+    channel: codex_utils_version::SednaReleaseChannel,
 ) -> Result<()> {
     let script = fetch_installer_script_from_url(http, SEDNA_STANDALONE_INSTALLER_URL).await?;
 
@@ -268,6 +282,10 @@ async fn install_latest_sedna_standalone(
             "latest",
         ])
         .args(["--require-newer-than", current_release_version])
+        .args(
+            (channel == codex_utils_version::SednaReleaseChannel::Prerelease)
+                .then_some("--allow-prerelease"),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())

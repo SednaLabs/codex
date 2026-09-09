@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_utils_version::SednaReleaseChannel;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::fs;
@@ -12,6 +13,12 @@ pub(crate) struct DaemonSettings {
     pub(crate) remote_control_enabled: bool,
     #[serde(default)]
     pub(crate) bootstrapped: bool,
+    /// Automatic Sedna installation is an explicit opt-in and remains off for legacy settings.
+    #[serde(default)]
+    pub(crate) sedna_auto_update_enabled: bool,
+    /// The persisted published-release stream. Legacy settings default to stable.
+    #[serde(default)]
+    pub(crate) sedna_release_channel: SednaReleaseChannel,
 }
 
 impl DaemonSettings {
@@ -48,6 +55,7 @@ impl DaemonSettings {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use codex_utils_version::SednaReleaseChannel;
     use pretty_assertions::assert_eq;
 
     use super::DaemonSettings;
@@ -58,9 +66,11 @@ mod tests {
             serde_json::to_string(&DaemonSettings {
                 remote_control_enabled: true,
                 bootstrapped: true,
+                sedna_auto_update_enabled: false,
+                sedna_release_channel: SednaReleaseChannel::Stable,
             })
             .expect("serialize"),
-            r#"{"remoteControlEnabled":true,"bootstrapped":true}"#
+            r#"{"remoteControlEnabled":true,"bootstrapped":true,"sednaAutoUpdateEnabled":false,"sednaReleaseChannel":"stable"}"#
         );
     }
 
@@ -72,6 +82,8 @@ mod tests {
             DaemonSettings {
                 remote_control_enabled: true,
                 bootstrapped: false,
+                sedna_auto_update_enabled: false,
+                sedna_release_channel: SednaReleaseChannel::Stable,
             }
         );
     }

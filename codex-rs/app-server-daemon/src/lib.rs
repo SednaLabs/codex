@@ -81,6 +81,11 @@ pub struct LifecycleOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BootstrapOptions {
     pub remote_control_enabled: bool,
+    /// `None` preserves an existing persisted choice; an unbootstrapped daemon
+    /// still defaults to disabled.
+    pub sedna_auto_update_enabled: Option<bool>,
+    /// `None` preserves the persisted stable/prerelease selection.
+    pub sedna_release_channel: Option<codex_utils_version::SednaReleaseChannel>,
 }
 
 /// Passively probes an existing app-server socket and returns its reported
@@ -557,6 +562,8 @@ impl Daemon {
                 let output = self
                     .bootstrap_locked(BootstrapOptions {
                         remote_control_enabled: true,
+                        sedna_auto_update_enabled: None,
+                        sedna_release_channel: None,
                     })
                     .await?;
                 Ok(RemoteControlStartOutput::Bootstrap(output))
@@ -645,9 +652,16 @@ impl Daemon {
         self.ensure_managed_codex_bin()?;
         let managed_release = self.resolved_managed_release().await?;
 
+        let existing_settings = self.load_settings().await?;
         let mut settings = DaemonSettings {
             remote_control_enabled: options.remote_control_enabled,
             bootstrapped: false,
+            sedna_auto_update_enabled: options
+                .sedna_auto_update_enabled
+                .unwrap_or(existing_settings.sedna_auto_update_enabled),
+            sedna_release_channel: options
+                .sedna_release_channel
+                .unwrap_or(existing_settings.sedna_release_channel),
         };
         if client::probe(&self.socket_path).await.is_ok()
             && self.running_backend(&settings).await?.is_none()
@@ -666,7 +680,8 @@ impl Daemon {
             self.backend_paths_with_bin(&settings, &managed_release.executable),
         );
         backend.start().await?;
-        let auto_update_enabled = managed_release.sedna_auto_update.is_some();
+        let auto_update_enabled =
+            settings.sedna_auto_update_enabled && managed_release.sedna_auto_update.is_some();
         self.reconcile_updater(&settings, &managed_release).await?;
 
         let info = self.wait_until_ready().await?;
@@ -747,24 +762,26 @@ impl Daemon {
             self.backend_paths_with_bin(settings, &managed_release.executable),
         );
         let updater_is_running = updater.is_starting_or_running().await?;
-        let updater_matches_managed_release =
-            if managed_release.sedna_auto_update.is_some() && updater_is_running {
-                #[cfg(unix)]
-                {
-                    let managed_identity = executable_identity(&managed_release.executable).await?;
-                    updater
-                        .is_running_from_executable(&managed_release.executable, &managed_identity)
-                        .await?
-                }
-                #[cfg(not(unix))]
-                {
-                    false
-                }
-            } else {
+        let updater_matches_managed_release = if settings.sedna_auto_update_enabled
+            && managed_release.sedna_auto_update.is_some()
+            && updater_is_running
+        {
+            #[cfg(unix)]
+            {
+                let managed_identity = executable_identity(&managed_release.executable).await?;
+                updater
+                    .is_running_from_executable(&managed_release.executable, &managed_identity)
+                    .await?
+            }
+            #[cfg(not(unix))]
+            {
                 false
-            };
+            }
+        } else {
+            false
+        };
         match updater_lifecycle_action(
-            managed_release.sedna_auto_update.is_some(),
+            settings.sedna_auto_update_enabled && managed_release.sedna_auto_update.is_some(),
             updater_is_running,
             updater_matches_managed_release,
         ) {

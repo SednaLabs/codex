@@ -1,3 +1,6 @@
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Serialize;
 use std::cmp::Ordering;
 
 /// The explicit repository identity for the Sedna release channel.
@@ -5,6 +8,23 @@ pub const SEDNA_RELEASE_REPOSITORY: &str = "sednalabs/codex";
 
 /// The required tag prefix for the Sedna release channel.
 pub const SEDNA_RELEASE_TAG_PREFIX: &str = "v";
+
+/// The user-selectable Sedna release stream.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SednaReleaseChannel {
+    #[default]
+    Stable,
+    Prerelease,
+}
+
+impl SednaReleaseChannel {
+    /// The GitHub API is authoritative for a published release's channel.
+    /// An upstream alpha suffix in a fork version is provenance, not a channel.
+    pub const fn allows_api_prerelease(self, prerelease: bool) -> bool {
+        matches!(self, Self::Prerelease) || !prerelease
+    }
+}
 
 /// The canonical Sedna release version used for updater comparisons, persistence, and telemetry.
 pub const RELEASE_VERSION: &str = env!("CODEX_RELEASE_VERSION_EFFECTIVE");
@@ -120,6 +140,27 @@ pub fn is_sedna_automatic_update_eligible(
     target_arch: &str,
 ) -> bool {
     is_stable_sedna_release_version(release_version)
+        && is_sedna_automatic_update_target_supported(target_os, target_arch)
+}
+
+pub fn is_sedna_automatic_update_eligible_for_channel(
+    release_version: &str,
+    target_os: &str,
+    target_arch: &str,
+    channel: SednaReleaseChannel,
+) -> bool {
+    // The selected channel filters remote candidates. A valid installed Sedna
+    // version may contain upstream prerelease provenance and can still move to
+    // a newer stable published release.
+    let _ = channel;
+    is_sedna_release_version(release_version)
+        && is_sedna_automatic_update_target_supported(target_os, target_arch)
+}
+
+/// Whether a validated managed binary carries a Sedna release identity. The
+/// configured channel decides whether stable or prerelease updates are allowed.
+pub fn is_sedna_managed_release(version: &str, target_os: &str, target_arch: &str) -> bool {
+    is_sedna_release_version(version)
         && is_sedna_automatic_update_target_supported(target_os, target_arch)
 }
 

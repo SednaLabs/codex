@@ -53,17 +53,29 @@ tag use `rust-v<semver>+<distance>@<upstream-sha>`, for example
 
 ### Automatic update boundary
 
-Automatic update discovery is enabled only for supported Linux `x86_64` and
-`aarch64` installations. It selects a stable, strictly newer Sedna release;
-the `--require-newer-than` floor is checked before release assets are fetched or
-the `current` link can change. Equality and older candidates are rejected
-without mutating the installed release.
+Automatic installation is disabled by default. It is available only for
+supported Linux `x86_64` and `aarch64` standalone installations after an
+explicit `codex app-server daemon bootstrap --enable-auto-update` opt-in. The
+persisted `--release-channel stable|prerelease` choice defaults to `stable`;
+it is also available to update-notice users as `sedna_release_channel` in
+`config.toml`. Re-running bootstrap without either update flag preserves the
+existing choice, while `--disable-auto-update` stops the managed updater.
 
-Automatic discovery is a no-op for unsupported targets, prerelease candidates,
-and macOS. A manual operator invocation may opt into a prerelease with
-`--allow-prerelease`; Intel macOS preview verification is a separate explicit
-`--macos-preview` mode. These manual opt-ins do not change the automatic
-candidate boundary.
+`stable` means a published GitHub Release whose API `prerelease` flag is
+`false`; it does not infer a channel from an upstream `-alpha` suffix inside a
+Sedna version. `prerelease` considers both published stable and prerelease
+releases. Discovery enumerates a bounded release list and selects the newest
+strictly newer valid candidate. Each candidate must have the exact Sedna
+repository, tag, version, current target, and `RELEASE-METADATA.json` asset
+identity. When the metadata declares `release_channel`, it must agree with the
+GitHub API flag; older valid metadata without that field uses the API flag
+without fabricating a value. Equality, older, malformed, offline, unauthenticated,
+or contradictory candidates do not mutate the installed release.
+
+Automatic discovery is a no-op for unsupported targets and macOS. Intel macOS
+preview and unnotarized verification remain explicit manual modes
+(`--macos-preview` and `--macos-unnotarized`); enabling an update channel does
+not expand automatic macOS deployment or signing authority.
 
 The current contract is covered by the installer lower-bound and candidate
 tests (`scripts/install/test_sedna_release_lower_bound.py` and

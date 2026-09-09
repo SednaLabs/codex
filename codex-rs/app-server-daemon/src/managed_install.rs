@@ -224,7 +224,7 @@ fn managed_sedna_automatic_update_release_from_metadata(
     (metadata.repository == codex_utils_version::SEDNA_RELEASE_REPOSITORY
         && metadata_version == metadata.release_version
         && metadata.target == expected_sedna_standalone_target(target_os, target_arch)?
-        && codex_utils_version::is_sedna_automatic_update_eligible(
+        && codex_utils_version::is_sedna_managed_release(
             &metadata.release_version,
             target_os,
             target_arch,
