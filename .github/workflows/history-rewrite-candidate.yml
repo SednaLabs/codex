@@ -4,61 +4,61 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "inventory (default) or rewrite (requires reviewed policy)"
+        description: "synthetic (no history inputs), inventory, or rewrite (requires reviewed policy)"
         required: true
-        default: inventory
+        default: synthetic
         type: choice
-        options: [inventory, rewrite]
+        options: [synthetic, inventory, rewrite]
       source_sha:
         description: "Exact source candidate commit"
-        required: true
+        required: false
         default: ""
         type: string
       workflow_harness_sha:
         description: "Exact commit containing this workflow and policy"
-        required: true
+        required: false
         type: string
       workflow_harness_tree:
         description: "Exact tree ID for workflow_harness_sha"
-        required: true
+        required: false
         type: string
       selected_refs_gzip_b64:
         description: "gzip+base64 canonical JSON snapshot map (heads/tags to expected SHAs)"
-        required: true
+        required: false
         type: string
       selected_refs_sha256:
         description: "SHA-256 of canonical sorted decompressed snapshot JSON"
-        required: true
+        required: false
         type: string
       selected_refs_count:
         description: "Exact number of entries in decompressed snapshot JSON"
-        required: true
+        required: false
         type: string
       selected_refs_bytes:
         description: "UTF-8 byte length of decompressed snapshot JSON"
-        required: true
+        required: false
         type: string
       backup_refs_sha256:
         description: "Recorded backup ref-set SHA-256"
-        required: true
+        required: false
         type: string
       backup_refs_count:
         description: "Recorded backup ref-set entry count"
-        required: true
+        required: false
         type: string
       backup_refs_bytes:
         description: "Recorded backup ref-set UTF-8 byte length"
-        required: true
+        required: false
         type: string
       backup_snapshot_refreshed:
         description: "Set true only when a refreshed backup covers selected refs"
-        required: true
+        required: false
         default: "false"
         type: choice
         options: ["false", "true"]
       tag_signature_ack:
         description: "Acknowledge annotated-tag signatures cannot survive rewritten commits"
-        required: true
+        required: false
         default: "false"
         type: choice
         options: ["false", "true"]
@@ -70,7 +70,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  synthetic:
+    if: inputs.mode == 'synthetic'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned git-filter-repo for synthetic execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, pathlib, urllib.request
+          url = "https://files.pythonhosted.org/packages/60/60/d3943f0880ebcb7e0bdf79254d10dddd39c7b656eeecae32b8806ff66dec/git_filter_repo-2.47.0-py3-none-any.whl"
+          expected = "2cd04929b9024e83e65db571cbe36aec65ead0cb5f9ec5abe42158654af5ad83"
+          data = urllib.request.urlopen(url).read()
+          if hashlib.sha256(data).hexdigest() != expected: raise SystemExit("pinned git-filter-repo digest mismatch")
+          pathlib.Path("git_filter_repo.whl").write_bytes(data)
+          PY
+          python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps git_filter_repo.whl
+      - name: Exercise the production rewrite and verifier against synthetic fixtures
+        shell: bash
+        run: scripts/history-rewrite/fixtures/run_fixture.sh > fixture-evidence.txt
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: history-rewrite-synthetic-${{ github.run_id }}
+          path: fixture-evidence.txt
+          if-no-files-found: error
+          retention-days: 7
+
   candidate:
+    if: inputs.mode != 'synthetic'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -180,16 +212,34 @@ jobs:
               raise SystemExit("rewrite mode requires at least one reviewed rule")
           PY
 
-      - name: Exercise synthetic topology and content fixture
+      - name: Install pinned git-filter-repo for synthetic and candidate execution
         shell: bash
-        run: mkdir -p output && scripts/history-rewrite/fixtures/run_fixture.sh > output/fixture-evidence.txt
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, pathlib, urllib.request
+          url = "https://files.pythonhosted.org/packages/60/60/d3943f0880ebcb7e0bdf79254d10dddd39c7b656eeecae32b8806ff66dec/git_filter_repo-2.47.0-py3-none-any.whl"
+          expected = "2cd04929b9024e83e65db571cbe36aec65ead0cb5f9ec5abe42158654af5ad83"
+          data = urllib.request.urlopen(url).read()
+          if hashlib.sha256(data).hexdigest() != expected: raise SystemExit("pinned git-filter-repo digest mismatch")
+          pathlib.Path("work").mkdir(exist_ok=True)
+          pathlib.Path("work/git_filter_repo.whl").write_bytes(data)
+          pathlib.Path("output").mkdir(exist_ok=True)
+          pathlib.Path("output/filter-repo-provenance.txt").write_text(f"version=2.47.0\\nfilename=git_filter_repo-2.47.0-py3-none-any.whl\\nsha256={expected}\\nurl={url}\\n", encoding="utf-8")
+          PY
+          python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps work/git_filter_repo.whl
+
+      - name: Exercise the production rewrite and verifier against synthetic fixtures
+        shell: bash
+        run: scripts/history-rewrite/fixtures/run_fixture.sh > output/fixture-evidence.txt
 
       - name: Fetch and bind exact source and selected refs
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf work output
-          mkdir -m 700 work output
+          rm -rf work
+          mkdir -m 700 work
+          test -d output
           git init --bare work/repo.git >/dev/null
           git -C work/repo.git remote add source "${REPO_URL}"
           git -C work/repo.git fetch --no-tags source "${SOURCE_SHA}:refs/rewrites/source"
@@ -282,7 +332,7 @@ jobs:
           printf '%s\n' 'classification.tsv contains identities and hashes only; matched plaintext is never retained' > output/classification-boundary.txt
           sha256sum output/* > output/manifest.sha256
 
-      - name: Apply reviewed deterministic rewrite and prove boundaries
+      - name: Apply reviewed deterministic rewrite and prove boundaries through the shared driver
         if: inputs.mode == 'rewrite'
         shell: bash
         run: |
@@ -293,230 +343,22 @@ jobs:
             echo 'tag rewrite requires explicit signature acknowledgement' >&2
             exit 1
           fi
-          before=$(git -C "$repo" show-ref | sort)
-          old_commit_count=$(git -C "$repo" rev-list --count --all)
-          git -C "$repo" rev-list --all | sort > work/old-commits.txt
-          git -C "$repo" for-each-ref --format='%(refname) %(objectname)' | sort > work/refs-before.map
           git clone --mirror --no-local "$repo" work/preimage.git >/dev/null
           test -d work/preimage.git/objects || { echo 'independent preimage repository missing' >&2; exit 1; }
-          git -C work/preimage.git for-each-ref --format='%(refname) %(objectname)' | sort > work/preimage.refs
-          cmp -s work/refs-before.map work/preimage.refs || { echo 'preimage ref/object domain differs from bound source' >&2; exit 1; }
-          while IFS= read -r old; do
-            git -C work/preimage.git cat-file -e "$old^{commit}" || { echo "preimage commit missing: $old" >&2; exit 1; }
-          done < work/old-commits.txt
-          git -C "$repo" show-ref | awk '{print $2}' | sort > work/refs-before.names
-          source_tree_before=$(git -C "$repo" rev-parse "${SOURCE_SHA}^{tree}")
-          python3 - <<'PY'
-          import hashlib, pathlib, urllib.request
-          url = "https://files.pythonhosted.org/packages/60/60/d3943f0880ebcb7e0bdf79254d10dddd39c7b656eeecae32b8806ff66dec/git_filter_repo-2.47.0-py3-none-any.whl"
-          expected = "2cd04929b9024e83e65db571cbe36aec65ead0cb5f9ec5abe42158654af5ad83"
-          data = urllib.request.urlopen(url).read()
-          digest = hashlib.sha256(data).hexdigest()
-          if digest != expected: raise SystemExit("pinned git-filter-repo digest mismatch")
-          pathlib.Path("work/git_filter_repo.whl").write_bytes(data)
-          pathlib.Path("output/filter-repo-provenance.txt").write_text(f"version=2.47.0\\nfilename=git_filter_repo-2.47.0-py3-none-any.whl\\nsha256={expected}\\nurl={url}\\n", encoding="utf-8")
-          PY
-          python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps work/git_filter_repo.whl
-          python3 - "$repo" "$policy_abs" > "$GITHUB_WORKSPACE/work/rule-context.json" <<'PY'
-          import json, subprocess, sys
-          repo, policy_path = sys.argv[1:]
-          policy = json.load(open(policy_path, encoding="utf-8"))
-          commits = subprocess.check_output(["git", "-C", repo, "rev-list", "--all"], text=True).splitlines()
-          context = {"path_rules": [], "blob_rules": {}}
-          for rule in policy["rules"]:
-              targets = rule.get("target_paths")
-              if rule["scope"] in {"path", "blob"} and (not isinstance(targets, list) or not targets or not all(isinstance(p, str) and p for p in targets)):
-                  raise SystemExit(f"{rule['id']}: target_paths is required for scoped {rule['scope']} rules")
-              if rule["scope"] == "path":
-                  context["path_rules"].append({"old": rule["old"], "new": rule["new"], "targets": targets})
-              if rule["scope"] == "blob":
-                  target_set = set(targets)
-                  blobs = set(); locations = {}
-                  for commit in commits:
-                      for row in subprocess.check_output(["git", "-C", repo, "ls-tree", "-r", "-z", commit], text=False).split(b"\0"):
-                          if not row: continue
-                          meta, path = row.split(b"\t", 1)
-                          mode, typ, oid = meta.split()
-                          path_text = path.decode("utf-8", "surrogateescape")
-                          locations.setdefault(oid.decode(), set()).add(path_text)
-                          if path_text in target_set: blobs.add(oid.decode())
-                  for oid, paths in locations.items():
-                      if not paths.issubset(target_set) and not rule.get("global", False):
-                          raise SystemExit(f"{rule['id']}: shared blob reaches an unrelated path")
-                  context["blob_rules"][rule["id"]] = {"old": rule["old"], "new": rule["new"], "oids": sorted(blobs), "global": bool(rule.get("global", False))}
-          print(json.dumps(context, sort_keys=True))
-          PY
-          cat > "$GITHUB_WORKSPACE/work/commit.py" <<'PY'
-          import json, os
-          policy = json.load(open(os.path.join(os.environ["GITHUB_WORKSPACE"], "scripts/history-rewrite/policy.json"), encoding="utf-8"))
-          for rule in policy["rules"]:
-              if rule["scope"] not in {"commit_subject", "commit_body"}: continue
-              message = commit.message.decode("utf-8", "replace")
-              subject, sep, body = message.partition("\n")
-              if rule["scope"] == "commit_subject":
-                  commit.message = (subject.replace(rule["old"], rule["new"]) + ("\n" + body if sep else "")).encode("utf-8")
-              else:
-                  commit.message = (subject + ("\n" if sep else "") + body.replace(rule["old"], rule["new"])).encode("utf-8")
-          PY
-          cat > "$GITHUB_WORKSPACE/work/filename.py" <<'PY'
-          import json, os
-          policy = json.load(open(os.path.join(os.environ["GITHUB_WORKSPACE"], "scripts/history-rewrite/policy.json"), encoding="utf-8"))
-          for rule in policy["rules"]:
-              if rule["scope"] == "path":
-                  targets = [p.encode() for p in rule["target_paths"]]
-                  if any(filename == p or filename.startswith(p + b"/") for p in targets):
-                      filename = filename.replace(rule["old"].encode(), rule["new"].encode())
-          PY
-          cat > "$GITHUB_WORKSPACE/work/blob.py" <<'PY'
-          import json, os
-          context = json.load(open(os.path.join(os.environ["GITHUB_WORKSPACE"], "work/rule-context.json"), encoding="utf-8"))
-          original_id = blob.original_id.hex()
-          for rule in context["blob_rules"].values():
-              if rule["global"] or original_id in rule["oids"]:
-                  blob.data = blob.data.replace(rule["old"].encode(), rule["new"].encode())
-          PY
-          git -C "$repo" filter-repo --force --commit-callback "$GITHUB_WORKSPACE/work/commit.py" --filename-callback "$GITHUB_WORKSPACE/work/filename.py" --blob-callback "$GITHUB_WORKSPACE/work/blob.py"
-          after=$(git -C "$repo" show-ref | sort)
-          printf '%s\n' "$before" > output/refs-before.txt
-          printf '%s\n' "$after" > output/refs-after.txt
-          git -C "$repo" rev-list --all --objects | sha256sum > output/object-paths-after.digest
-          git -C "$repo" fsck --full --no-reflogs | sha256sum > output/fsck.digest
-          test -s "$repo/filter-repo/commit-map" || { echo 'missing exact old/new commit map' >&2; exit 1; }
-          cp "$repo/filter-repo/commit-map" output/commit-map.txt
-          test -s "$repo/filter-repo/ref-map" || { echo 'missing exact old/new ref map' >&2; exit 1; }
-          cp "$repo/filter-repo/ref-map" output/ref-map.txt
-          git -C "$repo" for-each-ref --format='%(refname) %(objectname)' > output/refs-final.txt
-          python3 - "$repo" work/preimage.git output/commit-map.txt output/ref-map.txt output/map-proof.tsv work/old-commits.txt work/refs-before.map output/refs-final.txt <<'PY'
-          import re, subprocess, sys
-          repo, preimage, cmap, rmap, proof, old_domain, refs_before, refs_after = sys.argv[1:]
-          def cat(path, oid): return subprocess.check_output(["git", "-C", path, "cat-file", "-p", oid], text=True)
-          rows = []
-          mapping = {}
-          for line in open(cmap, encoding="utf-8"):
-              fields = line.split()
-              if fields and fields[0].lower() in {"old", "old_commit"}: continue
-              if len(fields) != 2 or not all(re.fullmatch(r"[0-9a-f]{40}", x) for x in fields): raise SystemExit("malformed commit map")
-              if fields[1] == "0" * 40: raise SystemExit("deleted commit mapping is unsupported")
-              mapping[fields[0]] = fields[1]
-          if not mapping: raise SystemExit("empty commit map")
-          if set(mapping) != set(x.strip() for x in open(old_domain) if x.strip()): raise SystemExit("commit-map key domain mismatch")
-          for old, new in mapping.items():
-              old_parents = [x.split()[1] for x in cat(preimage, old).splitlines() if x.startswith("parent ")]
-              new_parents = [x.split()[1] for x in cat(repo, new).splitlines() if x.startswith("parent ")]
-              expected = [mapping.get(x, x) for x in old_parents]
-              if expected != new_parents: raise SystemExit(f"topology mismatch for {old}")
-              rows.append((old, new, ",".join(old_parents), ",".join(new_parents), "verified"))
-          ref_rows = []
-          for line in open(rmap, encoding="utf-8"):
-              fields = line.split()
-              if fields and fields[0].lower() in {"old", "old_object"}: continue
-              if len(fields) != 3 or not re.fullmatch(r"[0-9a-f]{40}", fields[0]) or not re.fullmatch(r"[0-9a-f]{40}", fields[1]): raise SystemExit("malformed ref map")
-              if fields[0] == "0" * 40 or fields[1] == "0" * 40: raise SystemExit("deleted ref mapping is unsupported")
-              ref_rows.append(fields)
-          if not ref_rows: raise SystemExit("empty ref map")
-          before = dict(line.split() for line in open(refs_before) if line.split())
-          after = dict(line.split() for line in open(refs_after) if line.split())
-          if set(x[2] for x in ref_rows) != set(before) or set(x[2] for x in ref_rows) != set(after): raise SystemExit("ref-map ref-name domain mismatch")
-          for old_object, new_object, ref_name in ref_rows:
-              if ref_name not in before or ref_name not in after: raise SystemExit("ref-map ref-name domain mismatch")
-              if before[ref_name] != old_object or after[ref_name] != new_object: raise SystemExit("ref-map object readback mismatch")
-              old_ref, new_ref = ref_name, ref_name
-              if subprocess.check_output(["git", "-C", repo, "rev-parse", new_ref], text=True).strip() != new_object: raise SystemExit("ref-map new object mismatch")
-              old_type = subprocess.check_output(["git", "-C", preimage, "cat-file", "-t", old_object], text=True).strip()
-              new_type = subprocess.check_output(["git", "-C", repo, "cat-file", "-t", new_object], text=True).strip()
-              if old_type == "commit" and new_type == "commit":
-                  if mapping.get(old_object) != new_object: raise SystemExit("ref-map commit object is not bound by commit-map")
-              elif old_type == "tag" and new_type == "tag":
-                  old_peeled = subprocess.check_output(["git", "-C", preimage, "rev-parse", f"{old_object}^{{commit}}"], text=True).strip()
-                  new_peeled = subprocess.check_output(["git", "-C", repo, "rev-parse", f"{new_object}^{{commit}}"], text=True).strip()
-                  if mapping.get(old_peeled) != new_peeled: raise SystemExit("annotated tag peeled commit is not bound by commit-map")
-              else:
-                  raise SystemExit("unsupported or changed ref object type")
-          with open(proof, "w", encoding="utf-8") as out:
-              out.write("old_commit\tnew_commit\told_parents\tnew_parents\tstatus\n")
-              for row in rows: out.write("\t".join(row) + "\n")
-          PY
-          if jq -e '[.rules[] | select(.scope == "path" or .scope == "blob")] | length == 0' "$POLICY" >/dev/null; then
-            grep -E '^[0-9a-f]{40} [0-9a-f]{40}$' output/commit-map.txt | while read -r old new; do
-              test "$(git -C work/preimage.git rev-parse "$old^{tree}")" = "$(git -C "$repo" rev-parse "$new^{tree}")" || { echo "mapped tree changed: $old" >&2; exit 1; }
-            done
-          fi
-          git -C "$repo" show-ref | awk '{print $2}' | sort > work/refs-after.names
-          cmp -s work/refs-before.names work/refs-after.names || { echo 'before/after ref sets differ' >&2; exit 1; }
-          if grep -Eq 'refs/heads/main|refs/remotes/origin/main' output/refs-final.txt; then
-            echo 'canonical ref survived into candidate namespace' >&2; exit 1
-          fi
-          new_source=$(awk -v old="$SOURCE_SHA" '$1 == old { print $2; found=1 } END { if (!found) exit 1 }' output/commit-map.txt)
-          before_tree="$source_tree_before"
-          after_tree=$(git -C "$repo" rev-parse "${new_source}^{tree}")
-          printf 'source_tree_before=%s\nsource_tree_after=%s\n' "$before_tree" "$after_tree" > output/equivalence.txt
-          if jq -e '[.rules[] | select(.scope == "path" or .scope == "blob")] | length == 0' "$POLICY" >/dev/null && test "$before_tree" != "$after_tree"; then
-            echo 'tree changed without an explicit path/blob rule' >&2; exit 1
-          fi
-          python3 - "$repo" work/preimage.git output/commit-map.txt "$POLICY" output/untouched-proof.tsv <<'PY'
-          import json, subprocess, sys
-          repo, preimage, cmap, policy_path, proof = sys.argv[1:]
-          rules = [r for r in json.load(open(policy_path, encoding="utf-8"))["rules"] if r["scope"] in {"path", "blob"}]
-          mapping = {x.split()[0]: x.split()[1] for x in open(cmap, encoding="utf-8") if len(x.split()) == 2}
-          def entries(path, commit):
-              out = {}
-              for row in subprocess.check_output(["git", "-C", path, "ls-tree", "-r", "-z", commit], text=False).split(b"\0"):
-                  if row:
-                      meta, name = row.split(b"\t", 1); mode, typ, oid = meta.split(); out[name] = (mode, typ, oid)
-              return out
-          def scoped(name, rule):
-              return any(name == p.encode() or name.startswith(p.encode() + b"/") for p in rule.get("target_paths", []))
-          with open(proof, "w", encoding="utf-8") as out:
-              out.write("old_commit\tnew_commit\tuntouched_entries\tstatus\n")
-              for old, new in mapping.items():
-                  before, after = entries(preimage, old), entries(repo, new); untouched = 0
-                  for name, value in before.items():
-                      candidates = [name]
-                      for rule in rules:
-                          if rule["scope"] == "path" and scoped(name, rule): candidates.append(name.replace(rule["old"].encode(), rule["new"].encode()))
-                      if any(scoped(name, rule) for rule in rules):
-                          present = [after.get(candidate) for candidate in candidates if candidate in after]
-                          if not present or any(item[:2] != value[:2] for item in present):
-                              raise SystemExit(f"target mode/type changed or entry disappeared: {old}:{name!r}")
-                          continue
-                      if not any(after.get(candidate) == value for candidate in candidates): raise SystemExit(f"untouched tree entry changed: {old}:{name!r}")
-                      untouched += 1
-                  out.write(f"{old}\t{new}\t{untouched}\tverified\n")
-          PY
+          python3 scripts/history-rewrite/rewrite_candidate.py apply --repo "$repo" --preimage work/preimage.git --policy "$POLICY" --source-sha "$SOURCE_SHA" --work work --output output
           python3 scripts/history-rewrite/classify.py "$repo" "$POLICY" output/classification-after.tsv
           python3 - "$POLICY" output/classification.tsv output/classification-after.tsv <<'PY'
           import json, sys
           policy, before, after = sys.argv[1:]
           def counts(path):
-              out = {}
-              for line in open(path, encoding="utf-8"):
-                  if line.startswith("#count\t"):
-                      _, key, value = line.rstrip().split("\t")
-                      out[key] = int(value)
-              return out
+              return {line.rstrip().split("\t")[1]: int(line.rstrip().split("\t")[2]) for line in open(path, encoding="utf-8") if line.startswith("#count\t")}
           b, a = counts(before), counts(after)
           for rule in json.load(open(policy, encoding="utf-8"))["rules"]:
               old, new = rule["id"] + ":old", rule["id"] + ":new"
-              if a.get(old, 0) != 0 or a.get(new, 0) - b.get(new, 0) != b.get(old, 0):
-                  raise SystemExit(f"rewrite match-count delta failed for {rule['id']}")
+              if a.get(old, 0) != 0 or a.get(new, 0) - b.get(new, 0) != b.get(old, 0): raise SystemExit(f"rewrite match-count delta failed for {rule['id']}")
           PY
-          python3 - "$repo" output/commit-map.txt output/classification.tsv output/classification-after.tsv <<'PY'
-          import collections, sys
-          repo, cmap, before, after = sys.argv[1:]
-          mapping = {x.split()[0]: x.split()[1] for x in open(cmap, encoding="utf-8") if x.split()}
-          def rows(path, remap):
-              out = []
-              for line in open(path, encoding="utf-8"):
-                  if not line.strip() or line.startswith("#") or line.startswith("kind\t"): continue
-                  fields = line.rstrip("\n").split("\t")
-                  if len(fields) != 8 or fields[4].startswith("rewrite_rule"): continue
-                  if remap and fields[0].startswith("commit_"): fields[1] = mapping.get(fields[1], fields[1])
-                  out.append(tuple(fields))
-              return collections.Counter(out)
-          if rows(before, True) != rows(after, False): raise SystemExit("preserve/ambiguous classification drift")
-          PY
-          printf 'tag_signature_consequence=rewritten commits invalidate existing annotated tag signatures; no tags are created or uploaded\n' > output/tag-signatures.txt
           sha256sum output/* > output/manifest-after.sha256
+
 
       - name: Upload bounded metadata (never backups or keys)
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
