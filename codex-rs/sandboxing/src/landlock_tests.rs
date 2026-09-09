@@ -54,6 +54,7 @@ fn proxy_flag_takes_precedence_over_legacy_landlock() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ true,
+        SandboxProcessLifetime::TerminateWithParent,
     );
     assert_eq!(
         args.contains(&"--allow-network-for-proxy".to_string()),
@@ -63,7 +64,7 @@ fn proxy_flag_takes_precedence_over_legacy_landlock() {
 }
 
 #[test]
-fn permission_profile_flag_is_included() {
+fn permission_profile_args_keep_parent_tied_lifetime_by_default() {
     let command = vec!["/bin/true".to_string()];
     let command_cwd = Path::new("/tmp/link");
     let cwd = Path::new("/tmp");
@@ -76,6 +77,7 @@ fn permission_profile_flag_is_included() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ false,
+        SandboxProcessLifetime::TerminateWithParent,
     );
 
     assert_eq!(
@@ -89,6 +91,7 @@ fn permission_profile_flag_is_included() {
         true
     );
     assert_eq!(args.contains(&"--use-legacy-landlock".to_string()), true);
+    assert!(!args.contains(&"--allow-detached-children".to_string()));
 }
 
 #[test]
@@ -126,6 +129,7 @@ fn permission_profile_can_model_split_policy_without_legacy_landlock_flag() {
         cwd.path(),
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ false,
+        SandboxProcessLifetime::TerminateWithParent,
     );
 
     assert_eq!(args.contains(&"--use-legacy-landlock".to_string()), false);

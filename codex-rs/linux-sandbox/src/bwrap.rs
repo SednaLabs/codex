@@ -24,6 +24,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::linux_run_main::synthetic_mount_registry_root;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::permissions::is_protected_metadata_name;
@@ -65,6 +66,8 @@ pub(crate) struct BwrapOptions {
     pub mount_proc: bool,
     /// How networking should be configured inside the bubblewrap sandbox.
     pub network_mode: BwrapNetworkMode,
+    /// How the sandbox lifetime should relate to the initial command process.
+    pub process_lifetime: BwrapProcessLifetime,
     /// Optional maximum depth for expanding unreadable glob patterns with ripgrep.
     ///
     /// Keep this uncapped by default so existing nested deny-read matches are
@@ -77,9 +80,20 @@ impl Default for BwrapOptions {
         Self {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
+            process_lifetime: BwrapProcessLifetime::TerminateWithParent,
             glob_scan_max_depth: None,
         }
     }
+}
+
+/// Lifetime behavior for descendants running inside bubblewrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum BwrapProcessLifetime {
+    /// Ask bubblewrap to kill the sandbox when its parent exits.
+    #[default]
+    TerminateWithParent,
+    /// Allow intentionally detached children to keep running in the sandbox.
+    AllowDetachedChildren,
 }
 
 /// Network policy modes for bubblewrap.
@@ -109,6 +123,7 @@ pub(crate) struct BwrapArgs {
     pub preserved_files: Vec<File>,
     pub synthetic_mount_targets: Vec<SyntheticMountTarget>,
     pub protected_create_targets: Vec<ProtectedCreateTarget>,
+    pub process_lifetime: BwrapProcessLifetime,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,17 +159,33 @@ pub(crate) struct SyntheticMountTarget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProtectedCreateTarget {
     path: PathBuf,
+    // Keep the writable root alongside the protected path so cleanup can
+    // validate the path after a command has had a chance to create it.
+    root: PathBuf,
 }
 
 impl ProtectedCreateTarget {
     pub(crate) fn missing(path: &Path) -> Self {
+        let root = path
+            .parent()
+            .unwrap_or_else(|| Path::new("/"))
+            .to_path_buf();
+        Self::missing_under_root(path, &root)
+    }
+
+    pub(crate) fn missing_under_root(path: &Path, root: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
+            root: root.to_path_buf(),
         }
     }
 
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
     }
 }
 
@@ -249,6 +280,7 @@ pub(crate) fn create_bwrap_command_args(
                 preserved_files: Vec::new(),
                 synthetic_mount_targets: Vec::new(),
                 protected_create_targets: Vec::new(),
+                process_lifetime: options.process_lifetime,
             })
         } else {
             Ok(create_bwrap_flags_full_filesystem(command, options))
@@ -265,9 +297,11 @@ pub(crate) fn create_bwrap_command_args(
 }
 
 fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> BwrapArgs {
-    let mut args = vec![
-        "--new-session".to_string(),
-        "--die-with-parent".to_string(),
+    let mut args = vec!["--new-session".to_string()];
+    if options.process_lifetime == BwrapProcessLifetime::TerminateWithParent {
+        args.push("--die-with-parent".to_string());
+    }
+    args.extend([
         "--bind".to_string(),
         "/".to_string(),
         "/".to_string(),
@@ -275,7 +309,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         // not need ambient CAP_SYS_ADMIN to create the remaining namespaces.
         "--unshare-user".to_string(),
         "--unshare-pid".to_string(),
-    ];
+    ]);
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
@@ -290,6 +324,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         preserved_files: Vec::new(),
         synthetic_mount_targets: Vec::new(),
         protected_create_targets: Vec::new(),
+        process_lifetime: options.process_lifetime,
     }
 }
 
@@ -306,6 +341,7 @@ fn create_bwrap_flags(
         preserved_files,
         synthetic_mount_targets,
         protected_create_targets,
+        process_lifetime: _,
     } = create_filesystem_args(
         file_system_sandbox_policy,
         sandbox_policy_cwd,
@@ -316,7 +352,9 @@ fn create_bwrap_flags(
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
-    args.push("--die-with-parent".to_string());
+    if options.process_lifetime == BwrapProcessLifetime::TerminateWithParent {
+        args.push("--die-with-parent".to_string());
+    }
     args.extend(filesystem_args);
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
@@ -345,6 +383,7 @@ fn create_bwrap_flags(
         preserved_files,
         synthetic_mount_targets,
         protected_create_targets,
+        process_lifetime: options.process_lifetime,
     })
 }
 
@@ -515,6 +554,7 @@ fn create_filesystem_args(
         preserved_files: Vec::new(),
         synthetic_mount_targets: Vec::new(),
         protected_create_targets: Vec::new(),
+        process_lifetime: BwrapProcessLifetime::TerminateWithParent,
     };
     let mut allowed_write_paths = Vec::with_capacity(writable_roots.len());
     for writable_root in &writable_roots {
@@ -589,12 +629,30 @@ fn create_filesystem_args(
             &mut bwrap_args,
             &protected_metadata_names,
             root,
+            mount_root,
             symlink_target.as_deref(),
             &read_only_subpaths,
         );
         read_only_subpaths.sort_by_key(|path| path_depth(path));
         for subpath in read_only_subpaths {
             append_read_only_subpath_args(&mut bwrap_args, &subpath, &allowed_write_paths)?;
+        }
+        // Protect the registry only where a writable bind exposes it. Apply
+        // this before deny masks so a denied parent stays hidden, rather than
+        // trying to recreate the registry beneath an already read-only tmpfs.
+        let registry_root = synthetic_mount_registry_root();
+        let registry_mount = if registry_root.starts_with(mount_root) {
+            Some(registry_root.as_path())
+        } else if mount_root.starts_with(&registry_root) {
+            Some(mount_root)
+        } else {
+            None
+        };
+        if let Some(registry_mount) = registry_mount {
+            fs::create_dir_all(&registry_root)?;
+            bwrap_args.args.push("--ro-bind".to_string());
+            bwrap_args.args.push(path_to_string(registry_mount));
+            bwrap_args.args.push(path_to_string(registry_mount));
         }
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
@@ -633,6 +691,7 @@ fn append_protected_create_targets_for_writable_root(
     bwrap_args: &mut BwrapArgs,
     protected_metadata_names: &[String],
     root: &Path,
+    mount_root: &Path,
     symlink_target: Option<&Path>,
     read_only_subpaths: &[PathBuf],
 ) {
@@ -648,7 +707,7 @@ fn append_protected_create_targets_for_writable_root(
         }
         bwrap_args
             .protected_create_targets
-            .push(ProtectedCreateTarget::missing(&path));
+            .push(ProtectedCreateTarget::missing_under_root(&path, mount_root));
     }
 }
 
@@ -1413,6 +1472,32 @@ mod tests {
     }
 
     #[test]
+    fn allow_detached_children_omits_die_with_parent_but_keeps_pid_namespace() {
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
+        }]);
+        let args = create_bwrap_command_args(
+            vec!["/bin/true".to_string()],
+            &policy,
+            Path::new("/"),
+            Path::new("/"),
+            BwrapOptions {
+                process_lifetime: BwrapProcessLifetime::AllowDetachedChildren,
+                ..Default::default()
+            },
+        )
+        .expect("create bwrap args");
+
+        assert!(!args.args.contains(&"--die-with-parent".to_string()));
+        assert!(args.args.contains(&"--unshare-pid".to_string()));
+        assert!(args.args.contains(&"--unshare-user".to_string()));
+    }
+
+    #[test]
     fn full_disk_write_with_unreadable_glob_still_wraps_and_masks_match() {
         if !ripgrep_available() {
             return;
@@ -1696,6 +1781,46 @@ mod tests {
             "{message}"
         );
         assert!(message.contains(&real_linked_private_str), "{message}");
+    }
+
+    #[test]
+    fn registry_protection_precedes_denied_parent_mask() {
+        let registry_root = synthetic_mount_registry_root();
+        let temp_root = registry_root.parent().expect("registry parent");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: AbsolutePathBuf::try_from(temp_root).expect("absolute temp root"),
+                },
+                access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
+            },
+        ]);
+
+        let args =
+            create_filesystem_args(&policy, Path::new("/"), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+                .expect("filesystem args");
+        let registry_path = path_to_string(&registry_root);
+        let temp_path = path_to_string(temp_root);
+        let registry_bind = args
+            .args
+            .windows(3)
+            .position(|args| args == ["--ro-bind", registry_path.as_str(), registry_path.as_str()]);
+        let temp_mask = args
+            .args
+            .windows(2)
+            .position(|args| args == ["--tmpfs", temp_path.as_str()]);
+        assert!(
+            registry_bind.expect("registry read-only bind") < temp_mask.expect("temp deny mask"),
+            "registry protection must not reopen denied temp paths"
+        );
     }
 
     #[test]
@@ -2088,6 +2213,9 @@ mod tests {
                 "/.codex".to_string(),
                 "--remount-ro".to_string(),
                 "/.codex".to_string(),
+                "--ro-bind".to_string(),
+                path_to_string(&synthetic_mount_registry_root()),
+                path_to_string(&synthetic_mount_registry_root()),
                 // Rebind /dev after the root bind so device nodes remain
                 // writable/usable inside the writable root.
                 "--bind".to_string(),

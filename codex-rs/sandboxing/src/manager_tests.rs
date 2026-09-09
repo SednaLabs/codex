@@ -2,6 +2,7 @@ use super::SandboxCommand;
 #[cfg(target_os = "windows")]
 use super::SandboxDirectSpawnTransformRequest;
 use super::SandboxManager;
+use super::SandboxProcessLifetime;
 use super::SandboxTransformRequest;
 use super::SandboxType;
 use super::SandboxablePreference;
@@ -104,6 +105,7 @@ fn unsandboxed_transform_preserves_foreign_cwd_and_unrestricted_file_system_poli
             sandbox_policy_cwd: &cwd_uri,
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
+            process_lifetime: SandboxProcessLifetime::TerminateWithParent,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
         })
@@ -160,6 +162,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             sandbox_policy_cwd: &cwd_uri,
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
+            process_lifetime: SandboxProcessLifetime::TerminateWithParent,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
         })
@@ -233,6 +236,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             sandbox_policy_cwd: &cwd_uri,
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
+            process_lifetime: SandboxProcessLifetime::TerminateWithParent,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
         })
@@ -337,6 +341,7 @@ fn transform_linux_seccomp_request(
             sandbox_policy_cwd: &cwd_uri,
             codex_linux_sandbox_exe: Some(codex_linux_sandbox_exe),
             use_legacy_landlock: false,
+            process_lifetime: SandboxProcessLifetime::TerminateWithParent,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
         })
@@ -480,6 +485,7 @@ fn transform_linux_seccomp_uses_bwrap_for_direct_runtime_profiles() {
             sandbox_policy_cwd: &cwd_uri,
             codex_linux_sandbox_exe: Some(&codex_linux_sandbox_exe),
             use_legacy_landlock: true,
+            process_lifetime: SandboxProcessLifetime::TerminateWithParent,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
         })
@@ -593,6 +599,7 @@ fn transform_for_direct_spawn_windows_materializes_inner_helper() {
                     sandbox_policy_cwd: &cwd_uri,
                     codex_linux_sandbox_exe: None,
                     use_legacy_landlock: false,
+                    process_lifetime: SandboxProcessLifetime::TerminateWithParent,
                     windows_sandbox_level: WindowsSandboxLevel::Elevated,
                     windows_sandbox_private_desktop: false,
                 },

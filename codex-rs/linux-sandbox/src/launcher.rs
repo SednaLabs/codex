@@ -33,7 +33,20 @@ struct SystemBwrapCapabilities {
     supports_perms: bool,
 }
 
-pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
+pub(crate) fn exec_bwrap(mut argv: Vec<String>, preserved_files: Vec<File>) -> ! {
+    // Keep the conventional argv[0] value and add the option without using
+    // Vec::insert. The latter is modelled as a log sink by CodeQL, even though
+    // this vector is an exec argument list rather than a log record.
+    let mut argv_with_pid1 = Vec::new();
+    if let Some(argv0) = argv.first() {
+        argv_with_pid1.push(argv0.clone());
+        argv_with_pid1.push("--as-pid-1".to_string());
+        argv_with_pid1.extend(argv.into_iter().skip(1));
+    } else {
+        argv_with_pid1.push("--as-pid-1".to_string());
+    }
+    argv = argv_with_pid1;
+
     match preferred_bwrap_launcher() {
         BubblewrapLauncher::System(launcher) => {
             exec_system_bwrap(&launcher.program, argv, preserved_files)
@@ -117,6 +130,9 @@ fn system_bwrap_capabilities(system_bwrap_path: &Path) -> Option<SystemBwrapCapa
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stdout.contains("--as-pid-1") && !stderr.contains("--as-pid-1") {
+        return None;
+    }
     Some(SystemBwrapCapabilities {
         supports_argv0: stdout.contains("--argv0") || stderr.contains("--argv0"),
         supports_perms: stdout.contains("--perms") || stderr.contains("--perms"),

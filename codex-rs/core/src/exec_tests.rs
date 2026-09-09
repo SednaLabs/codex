@@ -1122,12 +1122,84 @@ fn build_exec_request_preserves_windows_workspace_roots() -> Result<()> {
         workspace_roots.as_slice(),
         &None,
         /*use_legacy_landlock*/ false,
+        SandboxProcessLifetime::TerminateWithParent,
     )?;
 
     assert_eq!(
         exec_request.windows_sandbox_workspace_roots,
         workspace_roots
     );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_sandbox_detached_children_requires_explicit_opt_in() -> Result<()> {
+    let temp_dir = tempfile::TempDir::new()?;
+    let cwd = temp_dir.path().abs();
+    let sandbox_exe = temp_dir.path().join("codex-linux-sandbox");
+    let exec_request = build_exec_request(
+        ExecParams {
+            command: vec!["echo".to_string(), "ok".to_string()],
+            cwd: cwd.clone(),
+            expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: ExecCapturePolicy::ShellTool,
+            env: HashMap::new(),
+            network: None,
+            network_environment_id: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            justification: None,
+            arg0: None,
+        },
+        &PermissionProfile::read_only(),
+        &cwd,
+        &[],
+        &Some(sandbox_exe.clone()),
+        /*use_legacy_landlock*/ false,
+        SandboxProcessLifetime::TerminateWithParent,
+    )?;
+
+    assert_eq!(exec_request.sandbox, SandboxType::LinuxSeccomp);
+    assert!(
+        !exec_request
+            .command
+            .contains(&"--allow-detached-children".to_string())
+    );
+
+    let exec_request = build_exec_request(
+        ExecParams {
+            command: vec!["echo".to_string(), "ok".to_string()],
+            cwd: cwd.clone(),
+            expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: ExecCapturePolicy::ShellTool,
+            env: HashMap::new(),
+            network: None,
+            network_environment_id: None,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            justification: None,
+            arg0: None,
+        },
+        &PermissionProfile::read_only(),
+        &cwd,
+        &[],
+        &Some(sandbox_exe),
+        /*use_legacy_landlock*/ false,
+        SandboxProcessLifetime::AllowDetachedChildren,
+    )?;
+    let separator = exec_request
+        .command
+        .iter()
+        .position(|arg| arg == "--")
+        .expect("linux sandbox argv should contain a command separator");
+    assert_eq!(
+        exec_request.command[separator - 1],
+        "--allow-detached-children"
+    );
+
     Ok(())
 }
 

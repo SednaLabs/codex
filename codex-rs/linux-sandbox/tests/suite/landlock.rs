@@ -23,6 +23,8 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 use tempfile::NamedTempFile;
 
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
@@ -205,13 +207,32 @@ async fn run_cmd_result_with_permission_profile_for_cwd(
     timeout_ms: u64,
     use_legacy_landlock: bool,
 ) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
+    run_cmd_result_with_permission_profile_for_cwd_and_env(
+        cmd,
+        cwd,
+        permission_profile,
+        create_env_from_core_vars(),
+        timeout_ms,
+        use_legacy_landlock,
+    )
+    .await
+}
+
+async fn run_cmd_result_with_permission_profile_for_cwd_and_env(
+    cmd: &[&str],
+    cwd: AbsolutePathBuf,
+    permission_profile: PermissionProfile,
+    env: HashMap<String, String>,
+    timeout_ms: u64,
+    use_legacy_landlock: bool,
+) -> Result<codex_protocol::exec_output::ExecToolCallOutput> {
     let sandbox_cwd = cwd.clone();
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
         cwd: sandbox_cwd.clone(),
         expiration: timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
-        env: create_env_from_core_vars(),
+        env,
         network: None,
         network_environment_id: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
@@ -489,6 +510,111 @@ async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
 
     assert_eq!(output.exit_code, 0);
     assert_eq!(output.stdout.text, "sandbox-ok");
+}
+
+#[tokio::test]
+async fn detached_children_survive_parent_exit_under_bwrap() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let log_path = tempdir.path().join("detached.log");
+    let command = format!(
+        "test \"$(awk '/^NSpid:/ {{ print $NF }}' /proc/1/status)\" = 1; \
+         nohup sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do printf x >> \"{log}\"; sleep 0.2; done' >/dev/null 2>&1 </dev/null &",
+        log = log_path.to_string_lossy(),
+    );
+
+    let started_at = Instant::now();
+    let output = run_cmd_result_with_writable_roots(
+        &["bash", "-lc", &command],
+        &[tempdir.path().to_path_buf()],
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+    assert!(
+        started_at.elapsed() < Duration::from_secs(1),
+        "the launcher must return the initial command status while the detached child remains live"
+    );
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let first_len = std::fs::metadata(&log_path)
+        .expect("detached child should create log file")
+        .len();
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let second_len = std::fs::metadata(&log_path)
+        .expect("detached child log file should still exist")
+        .len();
+    assert!(
+        second_len > first_len,
+        "detached child should keep writing after the parent exits",
+    );
+}
+
+#[tokio::test]
+async fn detached_child_cannot_create_protected_metadata_after_parent_exit() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let repository = tempdir.path().join("repository");
+    let workspace = repository.join("workspace");
+    std::fs::create_dir_all(repository.join(".git")).expect("create parent git metadata");
+    std::fs::write(repository.join(".git/HEAD"), "ref: refs/heads/main\n")
+        .expect("write parent git HEAD");
+    std::fs::create_dir(&workspace).expect("create writable workspace");
+    let protected_path = workspace.join(".git");
+    let ordinary_path = workspace.join("ordinary.txt");
+    let result_path = workspace.join("detached-result.txt");
+    let command = format!(
+        "nohup sh -c 'sleep 0.5; mkdir \"{protected}\" 2>/dev/null || true; \
+         for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
+         [ ! -e \"{protected}\" ] && break; sleep 0.05; done; \
+         if [ -e \"{protected}\" ]; then printf allowed; else printf denied; fi > \"{result}\"; \
+         printf ordinary > \"{ordinary}\"' >/dev/null 2>&1 </dev/null &",
+        protected = protected_path.to_string_lossy(),
+        result = result_path.to_string_lossy(),
+        ordinary = ordinary_path.to_string_lossy(),
+    );
+
+    let output = run_cmd_result_with_writable_roots(
+        &["bash", "-lc", &command],
+        &[workspace],
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+    assert_eq!(output.exit_code, 0);
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !result_path.exists() || !ordinary_path.exists() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("detached child should report its post-parent behavior");
+
+    assert_eq!(
+        std::fs::read_to_string(&result_path).expect("read detached result"),
+        "denied"
+    );
+    assert!(!protected_path.exists());
+    assert_eq!(
+        std::fs::read_to_string(&ordinary_path).expect("read ordinary output"),
+        "ordinary"
+    );
 }
 
 #[tokio::test]
@@ -775,6 +901,111 @@ async fn sandbox_reports_codex_symlink_build_failure_without_panicking() {
 }
 
 #[tokio::test]
+async fn sandbox_rejects_symlinked_synthetic_mount_registry() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    let registry_target = workspace.join("registry");
+    std::fs::create_dir_all(&registry_target).expect("create registry target");
+    let effective_uid = unsafe { libc::geteuid() };
+    let registry = temp.path().join(format!(
+        "codex-bwrap-synthetic-mount-targets-{effective_uid}"
+    ));
+    std::os::unix::fs::symlink(&registry_target, &registry).expect("symlink registry");
+
+    let cwd = AbsolutePathBuf::try_from(workspace).expect("absolute workspace");
+    let permission_profile = PermissionProfile::workspace_write_with(
+        std::slice::from_ref(&cwd),
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+    let mut env = create_env_from_core_vars();
+    env.insert("TMPDIR".to_string(), temp.path().display().to_string());
+    let output = expect_denied(
+        run_cmd_result_with_permission_profile_for_cwd_and_env(
+            &["sh", "-c", "touch registry/forged-marker"],
+            cwd,
+            permission_profile,
+            env,
+            LONG_TIMEOUT_MS,
+            /*use_legacy_landlock*/ false,
+        )
+        .await,
+        "a symlinked registry must not expose writable bookkeeping",
+    );
+    assert!(
+        output
+            .stderr
+            .text
+            .contains("synthetic mount registry must not be a symlink"),
+        "stderr: {}",
+        output.stderr.text
+    );
+    assert_eq!(
+        std::fs::read_dir(registry_target)
+            .expect("read registry target")
+            .count(),
+        0,
+        "the registry symlink must be rejected before registration or command execution"
+    );
+}
+
+#[tokio::test]
+async fn default_workspace_write_cannot_delete_or_lock_synthetic_mount_registry() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    let effective_uid = unsafe { libc::geteuid() };
+    let temp_dir = std::env::temp_dir()
+        .canonicalize()
+        .expect("canonical temporary directory");
+    let registry = temp_dir.join(format!(
+        "codex-bwrap-synthetic-mount-targets-{effective_uid}"
+    ));
+    assert!(
+        registry.starts_with(&temp_dir),
+        "registry must remain beneath the canonical temporary directory"
+    );
+    std::fs::create_dir_all(&registry).expect("create authoritative registry");
+    let marker = registry.join(format!("hostile-delete-{}", std::process::id()));
+    let hostile_lock = registry.join(format!("hostile-lock-{}", std::process::id()));
+    std::fs::write(&marker, "operator-owned").expect("seed registry marker");
+
+    let command = format!(
+        "set -eu; \
+         if rm -f \"{marker}\"; then exit 41; fi; \
+         if (exec 9>\"{hostile_lock}\"; flock -n 9); then exit 42; fi",
+        marker = marker.display(),
+        hostile_lock = hostile_lock.display(),
+    );
+    let output = run_cmd_result_with_writable_roots(
+        &["bash", "-lc", &command],
+        &[workspace.path().to_path_buf()],
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandbox should deny registry mutation while returning normally");
+
+    assert_eq!(output.exit_code, 0, "stderr: {}", output.stderr.text);
+    assert!(marker.exists(), "sandbox must not delete registry marker");
+    assert!(
+        !hostile_lock.exists(),
+        "sandbox must not create or hold an authoritative registry lock"
+    );
+    std::fs::remove_file(marker).expect("remove test registry marker");
+}
+
+#[tokio::test]
 async fn sandbox_keeps_parent_repo_discovery_while_blocking_child_metadata() {
     if should_skip_bwrap_tests().await {
         eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
@@ -966,6 +1197,91 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
     );
 
     assert_ne!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn sandbox_starts_with_denied_tmp_without_exposing_registry() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("AGENTS.md"), "project instructions\n")
+        .expect("write instructions");
+    let cwd = AbsolutePathBuf::try_from(temp.path()).expect("absolute workspace");
+    let sandbox_helper = codex_linux_sandbox_exe();
+    let helper_dir = AbsolutePathBuf::try_from(sandbox_helper.parent().expect("helper parent"))
+        .expect("absolute helper directory");
+
+    for tmp_root in [PathBuf::from("/tmp"), temp.path().join("denied-tmp")] {
+        std::fs::create_dir_all(&tmp_root).expect("create temp root");
+        let secret = NamedTempFile::new_in(&tmp_root).expect("denied file");
+        std::fs::write(secret.path(), "private").expect("write denied file");
+        for read_root in [FileSystemSpecialPath::Root, FileSystemSpecialPath::Minimal] {
+            let denied_path = if tmp_root == std::path::Path::new("/tmp") {
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::SlashTmp,
+                }
+            } else {
+                FileSystemPath::Path {
+                    path: AbsolutePathBuf::try_from(tmp_root.as_path())
+                        .expect("absolute temp root"),
+                }
+            };
+            let policy = FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry::new(
+                    FileSystemPath::Special { value: read_root },
+                    FileSystemAccessMode::Read,
+                ),
+                FileSystemSandboxEntry::new(
+                    FileSystemPath::Path {
+                        path: helper_dir.clone(),
+                    },
+                    FileSystemAccessMode::Read,
+                ),
+                FileSystemSandboxEntry::new(
+                    FileSystemPath::Path { path: cwd.clone() },
+                    FileSystemAccessMode::Write,
+                ),
+                FileSystemSandboxEntry::new(denied_path, FileSystemAccessMode::Deny),
+            ]);
+            let mut env = create_env_from_core_vars();
+            env.insert("TMPDIR".to_string(), tmp_root.display().to_string());
+            env.insert(
+                "DENIED_SECRET".to_string(),
+                secret.path().display().to_string(),
+            );
+            let output = run_cmd_result_with_permission_profile_for_cwd_and_env(
+                &[
+                    "sh",
+                    "-c",
+                    r#"set -e
+cat AGENTS.md
+test ! -r "$DENIED_SECRET"
+if printf modified > "$DENIED_SECRET" 2>/dev/null; then exit 1; fi
+registry="$TMPDIR/codex-bwrap-synthetic-mount-targets-$(id -u)"
+test ! -e "$registry"
+"#,
+                ],
+                cwd.clone(),
+                PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Enabled),
+                env,
+                LONG_TIMEOUT_MS,
+                /*use_legacy_landlock*/ false,
+            )
+            .await
+            .expect("sandbox should start with denied temp directory");
+            assert_eq!(
+                (output.exit_code, output.stdout.text.as_str()),
+                (0, "project instructions\n"),
+                "stderr: {}",
+                output.stderr.text
+            );
+            assert_eq!(std::fs::read_to_string(secret.path()).unwrap(), "private");
+            assert!(!temp.path().join(".git").exists());
+        }
+    }
 }
 
 #[tokio::test]

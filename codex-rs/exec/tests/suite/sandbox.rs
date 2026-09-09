@@ -53,6 +53,7 @@ async fn spawn_command_under_sandbox(
         std::slice::from_ref(sandbox_cwd),
         &codex_linux_sandbox_exe,
         /*use_legacy_landlock*/ false,
+        codex_core::exec::SandboxProcessLifetime::TerminateWithParent,
     )
     .map_err(|err| io::Error::other(err.to_string()))?;
 

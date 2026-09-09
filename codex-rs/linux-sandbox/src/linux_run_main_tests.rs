@@ -420,6 +420,27 @@ fn cleanup_protected_create_targets_removes_created_path_and_reports_violation()
 }
 
 #[test]
+fn cleanup_protected_create_targets_removes_nested_inaccessible_tree() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let dot_git = temp_dir.path().join(".git");
+    let nested = dot_git.join("objects").join("pack");
+    let target = crate::bwrap::ProtectedCreateTarget::missing(&dot_git);
+    let registrations = register_protected_create_targets(&[target]);
+    std::fs::create_dir_all(&nested).expect("create protected tree");
+    std::fs::write(nested.join("object"), "blocked").expect("write protected child");
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o000))
+        .expect("make nested protected directory inaccessible");
+
+    let violation = cleanup_protected_create_targets(&registrations);
+
+    assert!(violation);
+    assert!(!dot_git.exists());
+    assert!(!registrations[0].marker_dir.exists());
+}
+
+#[test]
 fn cleanup_protected_create_targets_waits_for_other_active_registrations() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let dot_git = temp_dir.path().join(".git");
@@ -454,6 +475,184 @@ fn bwrap_signal_forwarder_terminates_child_and_keeps_parent_alive() {
     let status = wait_for_bwrap_child(supervisor_pid);
     assert!(libc::WIFEXITED(status), "supervisor status: {status}");
     assert_eq!(libc::WEXITSTATUS(status), 0);
+}
+
+#[test]
+fn reparented_namespace_pid_one_validation_uses_nspid_not_ppid() {
+    // The outer launcher may already have exited when the detached namespace
+    // reaper is observed. The accepted identity is its namespace PID, not a
+    // host-parent relationship that has legitimately changed under reaping.
+    let before_reparent = "Name:\tbwrap\nPPid:\t4312\nNSpid:\t4312 1\n";
+    let after_reparent = "Name:\tbwrap\nPPid:\t1\nNSpid:\t4312 1\n";
+    let non_reaper = "Name:\tbwrap\nPPid:\t1\nNSpid:\t4312 2\n";
+
+    assert!(namespace_status_is_pid_one(before_reparent));
+    assert!(namespace_status_is_pid_one(after_reparent));
+    assert!(!namespace_status_is_pid_one(non_reaper));
+}
+
+#[test]
+fn parses_bwrap_child_pid_from_strict_json() {
+    assert_eq!(
+        parse_bwrap_child_pid(r#"{"child-pid":123,"other":true}"#),
+        Some(123)
+    );
+    assert_eq!(
+        parse_bwrap_child_pid(
+            r#"{
+                "other": true,
+                "child-pid": 456
+            }"#
+        ),
+        Some(456)
+    );
+}
+
+#[test]
+fn rejects_invalid_bwrap_child_pid_json() {
+    for info in [
+        "",
+        "not-json",
+        r#"{"child-pid":0}"#,
+        r#"{"child-pid":-1}"#,
+        r#"{"child-pid":"123"}"#,
+        r#"{"other":123}"#,
+        r#"[{"child-pid":123}]"#,
+    ] {
+        assert_eq!(parse_bwrap_child_pid(info), None, "input: {info:?}");
+    }
+}
+
+#[test]
+fn zombie_marker_owner_is_not_treated_as_live_custody() {
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0, "fork zombie owner");
+    if child == 0 {
+        unsafe { libc::_exit(0) };
+    }
+    loop {
+        if process_is_zombie(child) {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(!process_is_active(child), "zombie must not retain a marker");
+    let mut status = 0;
+    assert_eq!(unsafe { libc::waitpid(child, &mut status, 0) }, child);
+}
+
+#[test]
+fn detached_status_writer_is_close_on_exec_before_command_runs() {
+    let pipe = create_detached_command_status_pipe();
+    mark_fd_close_on_exec(pipe[1]);
+    let flags = unsafe { libc::fcntl(pipe[1], libc::F_GETFD) };
+    assert!(flags & libc::FD_CLOEXEC != 0);
+    close_fd_if_open(pipe[0]);
+    close_fd_if_open(pipe[1]);
+}
+
+#[test]
+fn execed_command_cannot_forge_detached_status_writer() {
+    let pipe = create_detached_command_status_pipe();
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0, "fork forged-status command");
+    if child == 0 {
+        close_fd_if_open(pipe[0]);
+        mark_fd_close_on_exec(pipe[1]);
+        let fd = pipe[1].to_string();
+        let shell = std::ffi::CString::new("/bin/sh").expect("shell cstring");
+        let arg0 = std::ffi::CString::new("sh").expect("arg0 cstring");
+        let dash_c = std::ffi::CString::new("-c").expect("-c cstring");
+        let script = std::ffi::CString::new("printf '\\377\\377\\377\\377' >&\"$1\"")
+            .expect("script cstring");
+        let argument = std::ffi::CString::new(fd).expect("fd cstring");
+        unsafe {
+            libc::execl(
+                shell.as_ptr(),
+                arg0.as_ptr(),
+                dash_c.as_ptr(),
+                script.as_ptr(),
+                arg0.as_ptr(),
+                argument.as_ptr(),
+                std::ptr::null::<libc::c_char>(),
+            );
+            libc::_exit(127);
+        }
+    }
+    close_fd_if_open(pipe[1]);
+    let mut byte = [0_u8; 1];
+    assert_eq!(
+        unsafe { libc::read(pipe[0], byte.as_mut_ptr().cast(), 1) },
+        0
+    );
+    close_fd_if_open(pipe[0]);
+    let status = wait_for_bwrap_child(child);
+    assert!(libc::WIFEXITED(status));
+    assert_ne!(libc::WEXITSTATUS(status), 0, "forgery command must fail");
+}
+
+#[test]
+fn post_ready_monitor_death_kills_namespace_and_cleans_protected_marker() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let protected_path = temp_dir.path().join(".git");
+    let target = crate::bwrap::ProtectedCreateTarget::missing(&protected_path);
+    let mut registrations = register_protected_create_targets(std::slice::from_ref(&target));
+    assert!(
+        !protected_path.exists(),
+        "the protected target must be absent before monitor readiness"
+    );
+
+    let namespace_pid = unsafe { libc::fork() };
+    assert!(namespace_pid >= 0, "fork namespace stand-in");
+    if namespace_pid == 0 {
+        loop {
+            unsafe { libc::pause() };
+        }
+    }
+    let raw_pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, namespace_pid, 0) };
+    assert!(raw_pidfd >= 0, "open pidfd for namespace stand-in");
+    let namespace_init = BwrapNamespaceInit {
+        pid: namespace_pid,
+        pidfd: unsafe { OwnedFd::from_raw_fd(raw_pidfd as libc::c_int) },
+    };
+    transfer_protected_create_registrations(&mut registrations, namespace_pid);
+
+    let mut ready_pipe = [-1, -1];
+    assert_eq!(unsafe { libc::pipe(ready_pipe.as_mut_ptr()) }, 0);
+    FORCE_DETACHED_MONITOR_EXIT_AFTER_READY.store(true, Ordering::SeqCst);
+    let supervisor_pid = unsafe { libc::fork() };
+    assert!(supervisor_pid >= 0, "fork supervisor");
+    if supervisor_pid == 0 {
+        close_fd_if_open(ready_pipe[0]);
+        supervise_protected_create_monitor(
+            namespace_init,
+            vec![target],
+            registrations,
+            ready_pipe[1],
+        );
+    }
+    close_fd_if_open(ready_pipe[1]);
+    let mut ready = [0_u8; 1];
+    assert_eq!(
+        unsafe { libc::read(ready_pipe[0], ready.as_mut_ptr().cast(), 1) },
+        1
+    );
+    assert_eq!(ready, [1]);
+    close_fd_if_open(ready_pipe[0]);
+
+    let status = wait_for_bwrap_child(supervisor_pid);
+    FORCE_DETACHED_MONITOR_EXIT_AFTER_READY.store(false, Ordering::SeqCst);
+    assert!(libc::WIFEXITED(status));
+    assert_ne!(libc::WEXITSTATUS(status), 0, "supervisor must fail closed");
+    assert!(
+        !process_is_active(namespace_pid),
+        "supervisor must kill namespace"
+    );
+    assert!(!protected_path.exists(), "protected target must be removed");
+    assert!(
+        !synthetic_mount_marker_dir(&protected_path).exists(),
+        "marker must be removed"
+    );
 }
 
 #[cfg(test)]
@@ -494,6 +693,7 @@ fn managed_proxy_inner_command_includes_route_spec() {
         command_cwd: Some(Path::new("/tmp/link")),
         permission_profile: &permission_profile,
         allow_network_for_proxy: true,
+        allow_detached_children: false,
         proxy_route_spec: Some("{\"routes\":[]}".to_string()),
         command: vec!["/bin/true".to_string()],
     });
@@ -510,6 +710,7 @@ fn inner_command_includes_permission_profile_flag() {
         command_cwd: Some(Path::new("/tmp/link")),
         permission_profile: &permission_profile,
         allow_network_for_proxy: false,
+        allow_detached_children: false,
         proxy_route_spec: None,
         command: vec!["/bin/true".to_string()],
     });
@@ -529,6 +730,7 @@ fn non_managed_inner_command_omits_route_spec() {
         command_cwd: Some(Path::new("/tmp/link")),
         permission_profile: &permission_profile,
         allow_network_for_proxy: false,
+        allow_detached_children: false,
         proxy_route_spec: None,
         command: vec!["/bin/true".to_string()],
     });
@@ -598,6 +800,7 @@ fn managed_proxy_inner_command_requires_route_spec() {
             command_cwd: Some(Path::new("/tmp/link")),
             permission_profile: &permission_profile,
             allow_network_for_proxy: true,
+            allow_detached_children: false,
             proxy_route_spec: None,
             command: vec!["/bin/true".to_string()],
         })

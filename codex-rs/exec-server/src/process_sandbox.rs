@@ -16,6 +16,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxProcessLifetime;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
@@ -234,6 +235,7 @@ pub(crate) async fn prepare_exec_request(
             sandbox_policy_cwd,
             codex_linux_sandbox_exe: runtime_paths.codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock: sandbox_context.use_legacy_landlock,
+            process_lifetime: SandboxProcessLifetime::TerminateWithParent,
             windows_sandbox_level: sandbox_context.windows_sandbox_level,
             windows_sandbox_private_desktop: sandbox_context.windows_sandbox_private_desktop,
         },
