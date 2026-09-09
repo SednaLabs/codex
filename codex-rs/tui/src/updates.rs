@@ -1,4 +1,4 @@
-#![cfg(not(debug_assertions))]
+#![cfg(any(not(debug_assertions), test))]
 
 use crate::legacy_core::config::Config;
 use crate::update_action;
@@ -13,6 +13,7 @@ use chrono::Duration;
 use chrono::Utc;
 use codex_login::default_client::create_client;
 use serde::Deserialize;
+use std::future::Future;
 use std::path::Path;
 
 use crate::version::CODEX_CLI_VERSION;
@@ -139,6 +140,21 @@ async fn fetch_latest_github_release_version(
         .error_for_status()?
         .json::<Vec<ReleaseInfo>>()
         .await?;
+    select_latest_github_release_version(releases, channel, |release, version| async move {
+        release_metadata_is_valid(&release, &version).await
+    })
+    .await
+}
+
+async fn select_latest_github_release_version<F, Fut>(
+    releases: Vec<ReleaseInfo>,
+    channel: codex_utils_version::SednaReleaseChannel,
+    mut metadata_is_valid: F,
+) -> anyhow::Result<String>
+where
+    F: FnMut(ReleaseInfo, String) -> Fut,
+    Fut: Future<Output = anyhow::Result<bool>>,
+{
     let mut candidates = releases
         .into_iter()
         .filter(|release| !release.draft)
@@ -160,12 +176,13 @@ async fn fetch_latest_github_release_version(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     for (release, version) in candidates.into_iter().rev() {
-        match release_metadata_is_valid(&release, &version).await {
+        let release_tag = release.tag_name.clone();
+        match metadata_is_valid(release, version.clone()).await {
             Ok(true) => return Ok(version),
             Ok(false) => {}
             Err(err) => {
                 tracing::warn!(
-                    release_tag = %release.tag_name,
+                    %release_tag,
                     "skipping Sedna release with unreadable metadata: {err}"
                 );
             }
@@ -199,18 +216,159 @@ async fn release_metadata_is_valid(release: &ReleaseInfo, version: &str) -> anyh
         .error_for_status()?
         .json::<ReleaseMetadata>()
         .await?;
+    Ok(release_metadata_matches(
+        release, version, target, &metadata,
+    ))
+}
+
+fn release_metadata_matches(
+    release: &ReleaseInfo,
+    version: &str,
+    target: &str,
+    metadata: &ReleaseMetadata,
+) -> bool {
     let api_channel = if release.prerelease {
         codex_utils_version::SednaReleaseChannel::Prerelease
     } else {
         codex_utils_version::SednaReleaseChannel::Stable
     };
-    Ok(metadata.release_tag == release.tag_name
+    metadata.release_tag == release.tag_name
         && metadata.release_version == version
         && metadata.repository == CODEX_RELEASE_REPOSITORY
         && metadata.target == target
         // Legacy metadata did not carry a channel. Its API flag remains the
         // authority; when the field exists, disagreement is a hard rejection.
-        && metadata.release_channel.is_none_or(|candidate| candidate == api_channel))
+        && metadata.release_channel.is_none_or(|candidate| candidate == api_channel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TARGET: &str = "x86_64-unknown-linux-gnu";
+
+    fn release(tag_name: &str, prerelease: bool) -> ReleaseInfo {
+        ReleaseInfo {
+            tag_name: tag_name.to_string(),
+            prerelease,
+            draft: false,
+            assets: Vec::new(),
+        }
+    }
+
+    fn metadata(
+        tag: &str,
+        version: &str,
+        repository: &str,
+        target: &str,
+        channel: Option<codex_utils_version::SednaReleaseChannel>,
+    ) -> ReleaseMetadata {
+        ReleaseMetadata {
+            release_tag: tag.to_string(),
+            release_version: version.to_string(),
+            repository: repository.to_string(),
+            target: target.to_string(),
+            release_channel: channel,
+        }
+    }
+
+    #[tokio::test]
+    async fn unreadable_or_malformed_newer_metadata_falls_back_to_an_older_valid_release() {
+        let selected = select_latest_github_release_version(
+            vec![
+                release("v1.0.0-sedna.1", false),
+                release("v1.1.0-sedna.1", false),
+                release("v1.2.0-sedna.1", false),
+            ],
+            codex_utils_version::SednaReleaseChannel::Stable,
+            |release, version| async move {
+                if release.tag_name == "v1.2.0-sedna.1" {
+                    anyhow::bail!("metadata download interrupted");
+                }
+                let candidate = if release.tag_name == "v1.1.0-sedna.1" {
+                    metadata(
+                        &release.tag_name,
+                        &version,
+                        "other/repository",
+                        TARGET,
+                        Some(codex_utils_version::SednaReleaseChannel::Stable),
+                    )
+                } else {
+                    metadata(
+                        &release.tag_name,
+                        &version,
+                        CODEX_RELEASE_REPOSITORY,
+                        TARGET,
+                        Some(codex_utils_version::SednaReleaseChannel::Stable),
+                    )
+                };
+                Ok(release_metadata_matches(
+                    &release, &version, TARGET, &candidate,
+                ))
+            },
+        )
+        .await
+        .expect("older valid release should be selected");
+
+        assert_eq!(selected, "1.0.0-sedna.1");
+    }
+
+    #[tokio::test]
+    async fn all_invalid_metadata_fails_closed() {
+        let error = select_latest_github_release_version(
+            vec![
+                release("v1.0.0-sedna.1", false),
+                release("v1.1.0-sedna.1", false),
+            ],
+            codex_utils_version::SednaReleaseChannel::Stable,
+            |release, _version| async move {
+                if release.tag_name == "v1.1.0-sedna.1" {
+                    anyhow::bail!("metadata was unreadable");
+                }
+                Ok(false)
+            },
+        )
+        .await
+        .expect_err("all invalid metadata must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("no valid published Sedna release matches the selected channel")
+        );
+    }
+
+    #[tokio::test]
+    async fn newest_valid_release_is_selected_without_considering_the_other_channel() {
+        let selected = select_latest_github_release_version(
+            vec![
+                release("v1.0.0-sedna.1", false),
+                release("v1.1.0-sedna.1", false),
+                release("v9.0.0-alpha.1-sedna.1", true),
+            ],
+            codex_utils_version::SednaReleaseChannel::Stable,
+            |release, version| async move {
+                assert!(
+                    !release.prerelease,
+                    "stable selection must exclude prereleases"
+                );
+                let candidate = metadata(
+                    &release.tag_name,
+                    &version,
+                    CODEX_RELEASE_REPOSITORY,
+                    TARGET,
+                    Some(codex_utils_version::SednaReleaseChannel::Stable),
+                );
+                Ok(release_metadata_matches(
+                    &release, &version, TARGET, &candidate,
+                ))
+            },
+        )
+        .await
+        .expect("newest valid stable release should be selected");
+
+        assert_eq!(selected, "1.1.0-sedna.1");
+    }
 }
 
 /// Returns the latest version to show in a popup, if it should be shown.
