@@ -275,9 +275,9 @@ mod tests {
     async fn unreadable_or_malformed_newer_metadata_falls_back_to_an_older_valid_release() {
         let selected = select_latest_github_release_version(
             vec![
-                release("v1.0.0-sedna.1", false),
-                release("v1.1.0-sedna.1", false),
-                release("v1.2.0-sedna.1", false),
+                release("v1.0.0-sedna.1", /*prerelease*/ false),
+                release("v1.1.0-sedna.1", /*prerelease*/ false),
+                release("v1.2.0-sedna.1", /*prerelease*/ false),
             ],
             codex_utils_version::SednaReleaseChannel::Stable,
             |release, version| async move {
@@ -316,8 +316,8 @@ mod tests {
     async fn all_invalid_metadata_fails_closed() {
         let error = select_latest_github_release_version(
             vec![
-                release("v1.0.0-sedna.1", false),
-                release("v1.1.0-sedna.1", false),
+                release("v1.0.0-sedna.1", /*prerelease*/ false),
+                release("v1.1.0-sedna.1", /*prerelease*/ false),
             ],
             codex_utils_version::SednaReleaseChannel::Stable,
             |release, _version| async move {
@@ -341,9 +341,9 @@ mod tests {
     async fn newest_valid_release_is_selected_without_considering_the_other_channel() {
         let selected = select_latest_github_release_version(
             vec![
-                release("v1.0.0-sedna.1", false),
-                release("v1.1.0-sedna.1", false),
-                release("v9.0.0-alpha.1-sedna.1", true),
+                release("v1.0.0-sedna.1", /*prerelease*/ false),
+                release("v1.1.0-sedna.1", /*prerelease*/ false),
+                release("v9.0.0-alpha.1-sedna.1", /*prerelease*/ true),
             ],
             codex_utils_version::SednaReleaseChannel::Stable,
             |release, version| async move {
