@@ -10053,6 +10053,8 @@ fi
         for evidence in (
             "lipo",
             "codesign --verify --strict",
+            "validate_macos_minimum.py",
+            "missing LC_BUILD_VERSION minos load command",
             "diff -u",
             "hdiutil verify",
             "xcrun stapler validate",
@@ -10167,6 +10169,7 @@ fi
         self.assertEqual(resolve_matrix("off"), [linux, linux_arm])
         self.assertEqual(resolve_matrix("off", require_arm64=False), [linux])
         self.assertEqual(resolve_matrix("preview"), [linux, linux_arm, macos])
+        self.assertEqual(resolve_matrix("unnotarized"), [linux, linux_arm, macos])
         self.assertEqual(resolve_matrix("notarized"), [linux, linux_arm, macos])
         self.assertEqual(plan.get("runs-on"), "ubuntu-slim")
         compatibility_step = workflow_step_by_name(
@@ -10199,7 +10202,10 @@ fi
         self.assertIn("x86_64-apple-darwin", installer)
         self.assertIn("codesign --verify --strict", installer)
         self.assertIn("--macos-preview", installer)
+        self.assertIn("--macos-unnotarized", installer)
         self.assertIn("UNNOTARIZED-PREVIEW", installer)
+        self.assertIn("UNNOTARIZED.tar.gz", installer)
+        self.assertIn('"distribution": "unnotarized"', installer)
         self.assertIn("cosign verify-blob", installer)
         self.assertIn("gh attestation verify", installer)
         self.assertEqual(
@@ -10252,6 +10258,7 @@ fi
         self.assertIn("attestation_arg+=(--verify-signatures)", verify_script)
         self.assertIn("attestation_arg+=(--verify-attestation)", verify_script)
         self.assertIn("historical_x86_arg+=(--allow-historical-x86)", verify_script)
+        self.assertIn('macos_unnotarized_arg+=(--macos-unnotarized)', verify_script)
         self.assertIn('"${REQUIRE_LINUX_ARM64}" == "true"', verify_script)
         self.assertEqual(
             verify_script.count(
