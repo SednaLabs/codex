@@ -52,6 +52,12 @@ def make_repo(root: Path, *, shared_target_unrelated: bool = False, collision: b
     return repo, source, "master"
 
 
+def make_bare_mirror(root: Path, source: Path) -> tuple[Path, str, str]:
+    repo = root / "repo.git"
+    run("git", "clone", "--mirror", "--no-local", str(source), str(repo))
+    return repo, command(repo, "rev-parse", "HEAD").strip(), "master"
+
+
 def base_rules() -> list[dict]:
     return [
         {"id": "subject", "scope": "commit_subject", "old": "old", "new": "approved"},
@@ -143,9 +149,14 @@ def main() -> None:
         remote_before = command(root / "synthetic-source.git", "show-ref")
         positive = invoke(repo, source, policy, root)
         require_driver_success("positive_apply_and_verify", positive)
+        bare_root = Path(temporary) / "positive-bare"; bare_root.mkdir()
+        bare_repo, bare_source, _ = make_bare_mirror(bare_root, repo)
+        bare_positive = invoke(bare_repo, bare_source, policy, bare_root)
+        require_driver_success("positive_apply_and_verify_bare", bare_positive)
         if command(root / "synthetic-source.git", "show-ref") != remote_before:
             raise SystemExit("synthetic source remote changed during candidate execution")
         evidence.append(("positive_linear_merge_binary_nonutf8_repeated_target_unrelated_duplicate_tags", hashlib.sha256((root / "output/map-proof.tsv").read_bytes()).hexdigest()))
+        evidence.append(("positive_bare_linear_merge_binary_nonutf8_repeated_target_unrelated_duplicate_tags", hashlib.sha256((bare_root / "output/map-proof.tsv").read_bytes()).hexdigest()))
         for variant in ("bytes", "mode", "type"):
             tamper, cm, rm = tampered_tree(root, source, branch, variant)
             evidence.append((f"modified_non_target_{variant}", expect_failure(variant, invoke(tamper, source, policy, root, "verify", cm, rm))))

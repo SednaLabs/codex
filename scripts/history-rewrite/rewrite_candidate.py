@@ -32,6 +32,10 @@ def git_run(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True)
 
 
+def git_path(repo: Path, path: str) -> Path:
+    return Path(git(repo, "rev-parse", "--path-format=absolute", "--git-path", path).strip())
+
+
 def oid(value: str, label: str) -> None:
     if not HEX.fullmatch(value) or value == ZERO:
         fail(f"{label} must be a nonzero full SHA")
@@ -288,7 +292,8 @@ def apply(args: argparse.Namespace) -> None:
     args.work.mkdir(parents=True, exist_ok=True); args.output.mkdir(parents=True, exist_ok=True)
     callbacks = write_callbacks(args.work, args.policy, selected)
     subprocess.run(["git", "-C", str(args.repo), "filter-repo", "--force", "--commit-callback", str(callbacks[0]), "--filename-callback", str(callbacks[1]), "--blob-callback", str(callbacks[2])], check=True)
-    commit_map = args.repo / "filter-repo" / "commit-map"; ref_map = args.repo / "filter-repo" / "ref-map"
+    filter_repo_dir = git_path(args.repo, "filter-repo")
+    commit_map = filter_repo_dir / "commit-map"; ref_map = filter_repo_dir / "ref-map"
     if not commit_map.is_file() or not ref_map.is_file():
         fail("git-filter-repo did not create both exact maps")
     shutil.copy2(commit_map, args.output / "commit-map.txt"); shutil.copy2(ref_map, args.output / "ref-map.txt")
