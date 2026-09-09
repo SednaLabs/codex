@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::SkillInjections;
 use crate::build_skill_injections;
@@ -142,6 +145,22 @@ pub(crate) struct CachedEndpointRecommendedPluginCandidates {
 }
 
 const POST_SAMPLING_TOKEN_ESTIMATE_TARGET: &str = "codex_core::post_sampling_token_estimate";
+const GOAL_RUNTIME_DIAGNOSTIC_WINDOW: Duration = Duration::from_secs(30 * 60);
+static GOAL_RUNTIME_DIAGNOSTIC_STARTED_AT: OnceLock<Instant> = OnceLock::new();
+
+fn goal_runtime_diagnostic_window_open() -> bool {
+    if !matches!(
+        std::env::var("CODEX_GOAL_RUNTIME_DIAGNOSTIC").as_deref(),
+        Ok("1")
+    ) {
+        return false;
+    }
+
+    GOAL_RUNTIME_DIAGNOSTIC_STARTED_AT
+        .get_or_init(Instant::now)
+        .elapsed()
+        < GOAL_RUNTIME_DIAGNOSTIC_WINDOW
+}
 
 /// Takes initial turn input and runs a loop where, at each sampling request,
 /// the model replies with either:
@@ -1324,9 +1343,11 @@ async fn run_sampling_request(
                     return Err(err);
                 }
                 CodexErrorDetails::UsageLimitReached(e) => {
-                    let rate_limits = e.rate_limits.clone();
-                    if let Some(rate_limits) = rate_limits {
-                        sess.update_rate_limits(&turn_context, *rate_limits).await;
+                    if !goal_runtime_diagnostic_window_open() {
+                        let rate_limits = e.rate_limits.clone();
+                        if let Some(rate_limits) = rate_limits {
+                            sess.update_rate_limits(&turn_context, *rate_limits).await;
+                        }
                     }
                     return Err(err);
                 }

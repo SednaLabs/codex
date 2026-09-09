@@ -1,5 +1,8 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::Weak;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_analytics::AnalyticsEventsClient;
 use codex_core::GoalNotificationStore;
@@ -45,6 +48,23 @@ use crate::runtime::GoalRuntimeHandle;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::steering::budget_limit_steering_item;
 use crate::tool::GoalToolExecutor;
+
+const GOAL_RUNTIME_DIAGNOSTIC_WINDOW: Duration = Duration::from_secs(30 * 60);
+static GOAL_RUNTIME_DIAGNOSTIC_STARTED_AT: OnceLock<Instant> = OnceLock::new();
+
+fn goal_runtime_diagnostic_window_open() -> bool {
+    if !matches!(
+        std::env::var("CODEX_GOAL_RUNTIME_DIAGNOSTIC").as_deref(),
+        Ok("1")
+    ) {
+        return false;
+    }
+
+    GOAL_RUNTIME_DIAGNOSTIC_STARTED_AT
+        .get_or_init(Instant::now)
+        .elapsed()
+        < GOAL_RUNTIME_DIAGNOSTIC_WINDOW
+}
 
 #[derive(Clone, Debug)]
 pub struct GoalExtensionConfig {
@@ -371,6 +391,12 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+
+            if matches!(input.error, CodexErrorInfo::UsageLimitExceeded)
+                && goal_runtime_diagnostic_window_open()
+            {
+                return;
+            }
 
             let reason = match input.error {
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
