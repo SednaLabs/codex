@@ -33,7 +33,7 @@ for rule in policy.get("rules", []):
         scope = {rule["scope"]}
         target_paths = set(rule.get("target_paths", []))
         if rule["scope"] == "path":
-            target_paths.update(path.replace(rule["old"], rule["new"]) for path in target_paths)
+            target_paths.update(path.replace(rule["old"], rule["new"]) for path in tuple(target_paths))
         rewrite_patterns.append((rule["id"] + ":old", compile_pattern(re.escape(rule["old"]), rule["id"] + ":old"), "rewrite_rule_old", rule.get("proof", ""), rule.get("priority", 50), scope, target_paths))
         rewrite_patterns.append((rule["id"] + ":new", compile_pattern(re.escape(rule["new"]), rule["id"] + ":new"), "rewrite_rule_new", rule.get("proof", ""), rule.get("priority", 50), scope, target_paths))
 

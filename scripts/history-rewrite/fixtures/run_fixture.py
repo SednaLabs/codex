@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / "rewrite_candidate.py"
+CLASSIFIER = ROOT / "classify.py"
 ADAPTER = ROOT / "adapt_review_packet.py"
 RECEIPT = ROOT.parent / "recovery-snapshot" / "receipt.py"
 
@@ -128,6 +129,73 @@ def require_driver_success(phase: str, result: subprocess.CompletedProcess[str])
     print(f"fixture_phase={phase} driver_exit={result.returncode}", file=sys.stderr)
     print(diagnostic[-4096:], file=sys.stderr)
     raise SystemExit(f"synthetic production driver failed during {phase}")
+
+
+def read_classifier_output(path: Path) -> tuple[list[tuple[str, ...]], dict[str, int]]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    expected_header = "kind\tidentity\tpath\tpattern_class\tclassification\trationale_sha256\tproof_sha256\tmatch_count"
+    if not lines or lines[0] != expected_header:
+        raise SystemExit("synthetic classifier output header mismatch")
+    rows = []
+    counts = {}
+    for line in lines[1:]:
+        fields = line.split("\t")
+        if fields[0] == "#count":
+            if len(fields) != 3 or fields[1] in counts:
+                raise SystemExit("synthetic classifier count row is malformed")
+            counts[fields[1]] = int(fields[2])
+        elif len(fields) != 8:
+            raise SystemExit("synthetic classifier identity row is malformed")
+        else:
+            rows.append(tuple(fields))
+    return rows, counts
+
+
+def classifier_path_rename_fixture(root: Path, repo: Path, source: str, policy: Path) -> str:
+    preimage = root / "preimage.git"
+    before, after = root / "classification-before.tsv", root / "classification-after.tsv"
+    for phase, target, output in (("classifier_before", preimage, before), ("classifier_after", repo, after)):
+        result = subprocess.run(["python3", str(CLASSIFIER), str(target), str(policy), str(output)], text=True, capture_output=True)
+        require_driver_success(phase, result)
+    before_rows, before_counts = read_classifier_output(before)
+    after_rows, after_counts = read_classifier_output(after)
+    before_commits = command(preimage, "rev-list", "--all").splitlines()
+    after_commits = command(repo, "rev-list", "--all").splitlines()
+    if not before_commits or len(before_commits) != len(after_commits):
+        raise SystemExit("synthetic classifier commit domain changed")
+    occurrences = len(before_commits)
+    original_blob = command(preimage, "rev-parse", f"{source}:rename-old.txt").strip()
+    mapped_source = read_commit_map(root / "output/commit-map.txt")[source]
+    rewritten_blob = command(repo, "rev-parse", f"{mapped_source}:rename-new.txt").strip()
+    if original_blob != rewritten_blob:
+        raise SystemExit("synthetic path rename changed the blob identity")
+    rationale = hashlib.sha256(b"").hexdigest()
+    old_proof = hashlib.sha256(b"rename-old.txt").hexdigest()
+    new_proof = hashlib.sha256(b"rename-new.txt").hexdigest()
+    expected_before = ("path", original_blob, "path_sha256:" + old_proof, "rename:old", "rewrite_rule_old", rationale, old_proof, "1")
+    expected_after = ("path", rewritten_blob, "path_sha256:" + new_proof, "rename:new", "rewrite_rule_new", rationale, new_proof, "1")
+    before_rename_rows = [row for row in before_rows if row[3].startswith("rename:")]
+    after_rename_rows = [row for row in after_rows if row[3].startswith("rename:")]
+    if before_rename_rows != [expected_before] * occurrences or after_rename_rows != [expected_after] * occurrences:
+        raise SystemExit("synthetic classifier path rename identity rows mismatch")
+    if before_counts.get("rename:old", 0) != occurrences or before_counts.get("rename:new", 0) != 0:
+        raise SystemExit("synthetic classifier preimage path counts mismatch")
+    if after_counts.get("rename:old", 0) != 0 or after_counts.get("rename:new", 0) != occurrences:
+        raise SystemExit("synthetic classifier rewritten path counts mismatch")
+    before_metadata = json.loads(Path(str(before) + ".metadata.json").read_text(encoding="utf-8"))
+    after_metadata = json.loads(Path(str(after) + ".metadata.json").read_text(encoding="utf-8"))
+    expected_pattern = {"matches": occurrences, "rows": occurrences}
+    if before_metadata.get("per_pattern", {}).get("rename:old") != expected_pattern or "rename:new" in before_metadata.get("per_pattern", {}):
+        raise SystemExit("synthetic classifier preimage metadata counts mismatch")
+    if after_metadata.get("per_pattern", {}).get("rename:new") != expected_pattern or "rename:old" in after_metadata.get("per_pattern", {}):
+        raise SystemExit("synthetic classifier rewritten metadata counts mismatch")
+    evidence = {
+        "before_sha256": hashlib.sha256(before.read_bytes()).hexdigest(),
+        "after_sha256": hashlib.sha256(after.read_bytes()).hexdigest(),
+        "blob": original_blob,
+        "occurrences": occurrences,
+    }
+    return hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def corrupt_map(path: Path, kind: str, source: str, branch: str, repo: Path) -> tuple[Path, Path]:
@@ -420,6 +488,7 @@ def main() -> None:
         remote_before = command(root / "synthetic-source.git", "show-ref")
         positive = invoke(repo, source, policy, root)
         require_driver_success("positive_apply_and_verify", positive)
+        evidence.append(("classifier_path_rename_before_after", classifier_path_rename_fixture(root, repo, source, policy)))
         bare_root = Path(temporary) / "positive-bare"; bare_root.mkdir()
         bare_repo, bare_source, _ = make_bare_mirror(bare_root, root / "preimage.git")
         bare_positive = invoke(bare_repo, bare_source, policy, bare_root)
