@@ -350,6 +350,8 @@ pub enum InputResult {
     CommandWithArgs(SlashCommand, String, Vec<TextElement>),
     /// Agent-directed input was attempted while viewing a parent-owned spawned child thread.
     ParentOwnedInputBlocked,
+    /// A replay-only thread rejected a would-be submission before it could alter the draft.
+    ReplayOnlyInputBlocked,
     None,
 }
 
@@ -468,6 +470,7 @@ pub(crate) struct ChatComposer {
     attachments: AttachmentState,
     placeholder_text: String,
     blocks_direct_input: bool,
+    replay_only_thread: bool,
     is_task_running: bool,
     queue_submissions: bool,
     /// Slash-command draft staged for local recall after application-level dispatch.
@@ -649,6 +652,7 @@ impl ChatComposer {
             attachments: AttachmentState::default(),
             placeholder_text,
             blocks_direct_input: false,
+            replay_only_thread: false,
             is_task_running: false,
             queue_submissions: false,
             pending_slash_command_history: None,
@@ -1338,6 +1342,14 @@ impl ChatComposer {
     /// Returns whether the composer currently accepts interactive draft edits.
     pub(crate) fn input_enabled(&self) -> bool {
         self.draft.input_enabled
+    }
+
+    pub(crate) fn set_replay_only_thread(&mut self, replay_only: bool) {
+        self.replay_only_thread = replay_only;
+    }
+
+    pub(crate) fn is_replay_only_thread(&self) -> bool {
+        self.replay_only_thread
     }
 
     pub(crate) fn pending_pastes(&self) -> Vec<(String, String)> {
@@ -2960,6 +2972,9 @@ impl ChatComposer {
         should_queue: bool,
         now: Instant,
     ) -> (InputResult, bool) {
+        if self.replay_only_thread {
+            return (InputResult::ReplayOnlyInputBlocked, false);
+        }
         // Preserve newlines that are part of a paste before applying parent-owned submission
         // policy. Queued startup input still flushes the burst into its queued message below.
         let in_slash_context = self.slash_commands_enabled()
@@ -4883,6 +4898,39 @@ mod tests {
             .0;
 
         assert_eq!(result, InputResult::Command(SlashCommand::Agent));
+    }
+
+    #[test]
+    fn replay_only_submission_keeps_draft_and_blocks_slash_dispatch() {
+        let (mut composer, mut rx) = new_test_composer();
+        composer.set_replay_only_thread(/*replay_only*/ true);
+        composer.set_text_content("/skills".to_string(), Vec::new(), Vec::new());
+        composer.move_cursor_to_end();
+
+        let (result, needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::ReplayOnlyInputBlocked);
+        assert!(needs_redraw);
+        assert_eq!(composer.current_text(), "/skills");
+        assert!(rx.try_recv().is_err());
+
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
+        assert_eq!(result, InputResult::None);
+        assert!(
+            composer.is_in_paste_burst(),
+            "a printable key is held briefly before the next UI tick"
+        );
+        assert!(
+            composer.handle_paste_burst_flush(
+                Instant::now() + ChatComposer::recommended_paste_flush_delay()
+            ),
+            "the next UI tick should flush the held printable key"
+        );
+        assert_eq!(composer.current_text(), "/skills!");
+        assert!(!composer.is_in_paste_burst());
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -9291,6 +9339,9 @@ mod tests {
             InputResult::ParentOwnedInputBlocked => {
                 panic!("expected command dispatch, but parent-owned input was blocked")
             }
+            InputResult::ReplayOnlyInputBlocked => {
+                panic!("expected command dispatch, but replay-only input was blocked")
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(
@@ -9801,6 +9852,9 @@ mod tests {
             InputResult::ParentOwnedInputBlocked => {
                 panic!("expected command dispatch, but parent-owned input was blocked")
             }
+            InputResult::ReplayOnlyInputBlocked => {
+                panic!("expected command dispatch, but replay-only input was blocked")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.draft.textarea.is_empty());
@@ -10000,6 +10054,9 @@ mod tests {
             }
             InputResult::ParentOwnedInputBlocked => {
                 panic!("expected command dispatch, but parent-owned input was blocked")
+            }
+            InputResult::ReplayOnlyInputBlocked => {
+                panic!("expected command dispatch, but replay-only input was blocked")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }
