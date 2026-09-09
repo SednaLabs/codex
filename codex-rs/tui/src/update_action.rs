@@ -117,9 +117,11 @@ impl UpdateAction {
     fn sedna_standalone_unix_command_args(
         release_channel: SednaReleaseChannel,
     ) -> (&'static str, Vec<String>) {
-        let allow_prerelease = (release_channel == SednaReleaseChannel::Prerelease)
-            .then_some(" --allow-prerelease")
-            .unwrap_or_default();
+        let allow_prerelease = if release_channel == SednaReleaseChannel::Prerelease {
+            " --allow-prerelease"
+        } else {
+            ""
+        };
         (
             "bash",
             vec![
