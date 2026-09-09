@@ -240,6 +240,25 @@ fn release_metadata_matches(
         && metadata.release_channel.is_none_or(|candidate| candidate == api_channel)
 }
 
+/// Returns the latest version to show in a popup, if it should be shown.
+/// This respects the user's dismissal choice for the current latest version.
+pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
+    if !config.check_for_update_on_startup || is_source_build_version(CODEX_CLI_VERSION) {
+        return None;
+    }
+
+    let version_file = version_filepath(config);
+    let latest = get_upgrade_version(config)?;
+    // If the user dismissed this exact version previously, do not show the popup.
+    if let Ok(info) = read_version_info(&version_file)
+        && info.matches_current_channel(config.sedna_release_channel)
+        && info.dismissed_version.as_deref() == Some(latest.as_str())
+    {
+        return None;
+    }
+    Some(latest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,23 +387,4 @@ mod tests {
 
         assert_eq!(selected, "1.1.0-sedna.1");
     }
-}
-
-/// Returns the latest version to show in a popup, if it should be shown.
-/// This respects the user's dismissal choice for the current latest version.
-pub fn get_upgrade_version_for_popup(config: &Config) -> Option<String> {
-    if !config.check_for_update_on_startup || is_source_build_version(CODEX_CLI_VERSION) {
-        return None;
-    }
-
-    let version_file = version_filepath(config);
-    let latest = get_upgrade_version(config)?;
-    // If the user dismissed this exact version previously, do not show the popup.
-    if let Ok(info) = read_version_info(&version_file)
-        && info.matches_current_channel(config.sedna_release_channel)
-        && info.dismissed_version.as_deref() == Some(latest.as_str())
-    {
-        return None;
-    }
-    Some(latest)
 }
