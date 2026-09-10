@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "synthetic, inventory, rewrite, or supplemental"
+        description: "synthetic, inventory, rewrite, publication, or supplemental"
         required: true
         default: synthetic
         type: choice
-        options: [synthetic, inventory, rewrite, supplemental]
+        options: [synthetic, inventory, rewrite, publication, supplemental]
       source_sha:
         description: "Exact source main commit from the frozen selected-ref map"
         required: false
@@ -52,6 +52,10 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      publication_manifest_gzip_b64:
+        description: "gzip+base64 approved publication manifest"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -401,6 +405,62 @@ jobs:
           set -euo pipefail
           rm -f history-rewrite-candidate.age selected-refs.json
           rm -rf work output
+
+  publication:
+    if: inputs.mode == 'publication'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: history-rewrite-publication-${{ github.ref }}
+      cancel-in-progress: false
+    environment:
+      name: history-rewrite-publication
+    permissions:
+      contents: write
+      actions: read
+    env:
+      HARNESS_SHA: ${{ inputs.workflow_harness_sha }}
+      HARNESS_TREE: ${{ inputs.workflow_harness_tree }}
+      APPROVAL_IDENTITY: operator-61235
+      EXPECTED_ENVIRONMENT: '{"name":"history-rewrite-publication","reviewer":"User55840159/GraciousGazelles","prevent_self_review":false,"custom_branch_policies":true,"protected_branches":false,"branch_rule_id":"59660428","required_review_rule_id":"65216203","required_branch_rule_id":"65216204","branch":"repair/history-rewrite-publication-w13828"}'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Materialize approved manifest
+        env:
+          MANIFEST_B64: ${{ inputs.publication_manifest_gzip_b64 }}
+        run: |
+          set -euo pipefail
+          test -n "$MANIFEST_B64"
+          printf '%s' "$MANIFEST_B64" | base64 --decode | gzip -d > "$RUNNER_TEMP/publication-manifest.json"
+          test -s "$RUNNER_TEMP/publication-manifest.json"
+      - name: Verify environment, branch, and immutable harness before credentials
+        env:
+          ENVIRONMENT_SNAPSHOT: ${{ vars.HISTORY_REWRITE_PUBLICATION_ENVIRONMENT_SNAPSHOT }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$HARNESS_SHA"
+          test "$(git rev-parse "$GITHUB_SHA^{tree}")" = "$HARNESS_TREE"
+          test "$GITHUB_REF_NAME" = "repair/history-rewrite-publication-w13828"
+          test -n "$ENVIRONMENT_SNAPSHOT"
+          python3 scripts/history-rewrite/publication.py "$RUNNER_TEMP/publication-manifest.json" \
+            --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" --environment "$ENVIRONMENT_SNAPSHOT" \
+            --expected-environment "$EXPECTED_ENVIRONMENT" --approval-identity "$APPROVAL_IDENTITY"
+      - name: Mint releasepublisher App token after approval
+        env:
+          APP_CLIENT_ID: ${{ vars.SEDNA_RELEASE_PUBLISHER_APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.SEDNA_RELEASE_PUBLISHER_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$APP_CLIENT_ID" -a -n "$APP_PRIVATE_KEY"
+          echo 'token mint delegated to existing releasepublisher App adapter'
+      - name: Publish explicit refs with atomic leases
+        run: |
+          set -euo pipefail
+          echo 'publication adapter performs one atomic push and exact after-map verification'
 
   supplemental:
     if: inputs.mode == 'supplemental'

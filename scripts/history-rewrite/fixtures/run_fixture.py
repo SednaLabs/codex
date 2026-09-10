@@ -601,6 +601,9 @@ def receipt_fixture(root: Path) -> list[tuple[str, str]]:
 
 def main() -> None:
     evidence: list[tuple[str, str]] = []
+    publication = subprocess.run(["python3", str(Path(__file__).with_name("publication_fixtures.py"))], text=True, capture_output=True)
+    require_driver_success("publication_contract", publication)
+    evidence.append(("publication_contract", hashlib.sha256(publication.stdout.encode()).hexdigest()))
     with tempfile.TemporaryDirectory() as temporary:
         adapter_check = subprocess.run(["python3", str(ADAPTER), "check-policy", "--policy", str(ROOT / "policy.json")], text=True, capture_output=True)
         require_driver_success("review_packet_adapter_policy", adapter_check)

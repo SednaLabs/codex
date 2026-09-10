@@ -37,3 +37,9 @@ an isolated test-only repository and verify its commit, tree, blob, and file
 digests before the differential case runs. The fixture emits identity-only
 maps/digests and discards temporary repositories and contents. It is a hosted
 validation input, not a local test.
+
+The runner also executes `publication_fixtures.py` against a local mock remote.
+Those fixtures cover immutable manifest and proof binding, empty/extra/missing
+ref rejection, stale backup and environment rejection, credential ordering,
+active-writer draining, atomic push leases, ambiguous transport readback, and
+restoration classification. They never contact GitHub or perform a live push.
