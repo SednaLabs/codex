@@ -50,6 +50,14 @@ import sys
 MAX_ITEMS = 32
 MAX_ITEM_BYTES = 256
 MAX_LIST_BYTES = 4096
+MAX_REPORT_BYTES = 65536
+MAX_DIAGNOSTIC_BYTES = 16384
+
+
+def bounded_scalar(value):
+    if not isinstance(value, str) or len(value.encode("utf-8")) > MAX_ITEM_BYTES:
+        raise TypeError("expected a bounded string")
+    return value
 
 
 def bounded_strings(values):
@@ -82,27 +90,26 @@ def bounded_strings(values):
 
 
 try:
-    with open(sys.argv[1], encoding="utf-8") as audit_file:
-        audit = json.load(audit_file)
+    with open(sys.argv[1], "rb") as audit_file:
+        report_bytes = audit_file.read(MAX_REPORT_BYTES + 1)
+    if len(report_bytes) > MAX_REPORT_BYTES:
+        raise ValueError("report is too large")
+    audit = json.loads(report_bytes)
     mirror = audit["mirror"]
     snapshot = audit["snapshot"]
     verdict = audit["verdict"]
     registry = audit["registry_reconciliation"]
-    initial_mirror_sha = snapshot["initial"]["mirror"]["sha"]
-    final_mirror_sha = snapshot["final"]["mirror"]["sha"]
-    if not isinstance(mirror["health"], str):
-        raise TypeError("mirror.health is not a string")
-    if not isinstance(mirror["expected_mirror_sha"], str):
-        raise TypeError("mirror.expected_mirror_sha is not a string")
+    initial_mirror_sha = bounded_scalar(snapshot["initial"]["mirror"]["sha"])
+    final_mirror_sha = bounded_scalar(snapshot["final"]["mirror"]["sha"])
+    mirror_health = bounded_scalar(mirror["health"])
+    expected_mirror_sha = bounded_scalar(mirror["expected_mirror_sha"])
     if not isinstance(mirror["expected_mirror_matches"], bool):
         raise TypeError("mirror.expected_mirror_matches is not boolean")
     if not isinstance(mirror["usable_as_compare_baseline"], bool):
         raise TypeError("mirror.usable_as_compare_baseline is not boolean")
     if not isinstance(snapshot["stable"], bool):
         raise TypeError("snapshot.stable is not boolean")
-    if not isinstance(initial_mirror_sha, str) or not isinstance(final_mirror_sha, str):
-        raise TypeError("snapshot mirror SHA is not a string")
-    if not isinstance(verdict["exit_code"], int):
+    if type(verdict["exit_code"]) is not int or not 0 <= verdict["exit_code"] <= 255:
         raise TypeError("verdict.exit_code is not an integer")
     if not isinstance(verdict["ok"], bool):
         raise TypeError("verdict.ok is not boolean")
@@ -114,8 +121,8 @@ try:
             "final_mirror_sha": final_mirror_sha,
         },
         "mirror": {
-            "health": mirror["health"],
-            "expected_mirror_sha": mirror["expected_mirror_sha"],
+            "health": mirror_health,
+            "expected_mirror_sha": expected_mirror_sha,
             "expected_mirror_matches": mirror["expected_mirror_matches"],
             "usable_as_compare_baseline": mirror["usable_as_compare_baseline"],
         },
@@ -134,7 +141,17 @@ except (OSError, UnicodeError, ValueError, TypeError, KeyError):
         "diagnostic": "downstream-divergence-audit",
         "error": "missing or malformed report",
     }
-print(json.dumps(diagnostic, ensure_ascii=True, separators=(",", ":"), sort_keys=True), file=sys.stderr)
+serialized = json.dumps(diagnostic, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+if len(serialized.encode("utf-8")) > MAX_DIAGNOSTIC_BYTES:
+    serialized = json.dumps(
+        {
+            "diagnostic": "downstream-divergence-audit",
+            "error": "diagnostic exceeded output limit",
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+print(serialized, file=sys.stderr)
 PY
   exit "${audit_exit}"
 fi
