@@ -712,6 +712,60 @@ class DispatchSednaReleaseTests(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_main_allows_unnotarized_macos_for_stable_release(self) -> None:
+        metadata = {
+            "release_tag": "v0.133.0-sedna.1",
+            "target_commit": "d4b356a4c23ff606556dac7232353c80d2ce8deb",
+            "github_prerelease": False,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                mock.patch.object(DISPATCH_SEDNA_RELEASE, "refresh_upstream_rust_tags"),
+                mock.patch.object(
+                    DISPATCH_SEDNA_RELEASE,
+                    "resolve_release_metadata",
+                    return_value=metadata,
+                ),
+                mock.patch.object(DISPATCH_SEDNA_RELEASE, "dispatch_release") as dispatch,
+            ):
+                result = DISPATCH_SEDNA_RELEASE.main(
+                    [
+                        "--repo",
+                        tmpdir,
+                        "--target-sha",
+                        metadata["target_commit"],
+                        "--channel",
+                        "stable",
+                        "--macos-release-mode",
+                        "unnotarized",
+                    ]
+                )
+
+        self.assertEqual(result, 0)
+        dispatch.assert_called_once()
+
+    def test_macos_minimum_validator_requires_monterey_exactly(self) -> None:
+        validator = REPO_ROOT / ".github/scripts/validate_macos_minimum.py"
+        for value in ("12.0", "12.0.0"):
+            with self.subTest(value=value):
+                proc = subprocess.run(
+                    [sys.executable, str(validator), value],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+        for value in ("12.1", "13.0", "", "12", "12.0.1", "twelve"):
+            with self.subTest(value=value):
+                proc = subprocess.run(
+                    [sys.executable, str(validator), value],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(proc.returncode, 0)
+
 
 class RouteSelectionTests(unittest.TestCase):
     maxDiff = None
@@ -4559,7 +4613,7 @@ class ValidationPlanScriptTests(unittest.TestCase):
         )
         self.assertEqual(
             install_sccache_step.get("uses"),
-            "taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e",
+            "taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c",
         )
         configure_sccache_step = workflow_step_by_name(
             REPO_ROOT / ".github/workflows/sedna-branch-build.yml",
@@ -5112,7 +5166,7 @@ class ValidationPlanScriptTests(unittest.TestCase):
         tool_values: list[str] = []
         for job in (payload.get("jobs") or {}).values():
             for step in (job or {}).get("steps") or []:
-                if step.get("uses") != "taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e":
+                if step.get("uses") != "taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c":
                     continue
                 with_section = step.get("with") or {}
                 self.assertNotIn("version", with_section)
@@ -5298,6 +5352,7 @@ class ValidationPlanScriptTests(unittest.TestCase):
                 "codex.tui-agent-usage-totals-targeted",
                 "codex.tui-brokered-tool-replay-targeted",
                 "codex.tui-collab-spawn-identity-targeted",
+                "codex.model-catalog-compat-targeted",
                 "codex.tui-config-refresh-session-targeted",
                 "codex.tui-esc-interrupt-targeted",
                 "codex.tui-front-queue-submit-targeted",
@@ -5949,7 +6004,12 @@ class ValidationPlanScriptTests(unittest.TestCase):
                     generated,
                     {
                         "name": f"codex-codeql-rust-{rust_scope}",
-                        "queries": [{"uses": "security-and-quality"}],
+                        "queries": [
+                            {"uses": "security-and-quality"},
+                            {
+                                "uses": "./.github/codeql/rust-computer-use-contract/suites/rust-computer-use-production.qls"
+                            },
+                        ],
                         "paths": expected_paths,
                         "paths-ignore": [".github/codeql/rust-computer-use-contract/test/**"],
                         "threat-models": "local",
@@ -6129,6 +6189,9 @@ class ValidationPlanScriptTests(unittest.TestCase):
                 "name": "codex-codeql-rust",
                 "queries": [
                     {"uses": "security-and-quality"},
+                    {
+                        "uses": "./.github/codeql/rust-computer-use-contract/suites/rust-computer-use-production.qls"
+                    },
                 ],
                 "paths": ["codex-rs", "tools"],
                 "paths-ignore": [".github/codeql/rust-computer-use-contract/test/**"],
@@ -7056,15 +7119,15 @@ class ValidationPlanScriptTests(unittest.TestCase):
         self.assertIn("codex.argument-comment-lint", selected_lane_ids)
         self.assertIn("downstream-ledger-seam", selected_lane_ids)
         self.assertIn("codex.core-multi-agent-orchestration-targeted", selected_lane_ids)
-        self.assertEqual(payload["planned_job_count"], 46)
+        self.assertEqual(payload["planned_job_count"], 47)
         self.assertEqual(payload["selected_workflow_lane_count"], 8)
         self.assertEqual(payload["selected_node_lane_count"], 2)
         self.assertEqual(payload["selected_rust_minimal_lane_count"], 1)
-        self.assertEqual(payload["selected_rust_minimal_batch_count"], 14)
+        self.assertEqual(payload["selected_rust_minimal_batch_count"], 15)
         self.assertEqual(payload["selected_rust_integration_lane_count"], 7)
         self.assertEqual(payload["selected_rust_integration_batch_count"], 13)
         self.assertEqual(payload["selected_release_lane_count"], 1)
-        self.assertEqual(payload["rust_minimal_max_parallel"], "28")
+        self.assertEqual(payload["rust_minimal_max_parallel"], "29")
         self.assertEqual(payload["rust_integration_max_parallel"], "27")
 
     def test_validation_lab_frontier_all_excludes_smoke_gate_lanes_by_metadata(self) -> None:
@@ -7955,14 +8018,21 @@ class RustCiModeScriptTests(unittest.TestCase):
             (toolchain.get("with") or {}).get("target"),
             "x86_64-unknown-linux-gnu",
         )
-        clippy = next(step for step in steps if step.get("name") == "cargo clippy (targeted packages)")
+        clippy = next(
+            step for step in steps if step.get("name") == "cargo clippy (targeted packages)"
+        )
         clippy_run = clippy.get("run") or ""
-        self.assertIn("--all-features", clippy_run)
-        self.assertIn("--tests", clippy_run)
-        self.assertIn("--profile dev", clippy_run)
-        self.assertIn("--no-deps", clippy_run)
-        self.assertIn("-- -D warnings", clippy_run)
-        self.assertNotIn("--workspace", clippy_run)
+        self.assertIn("run_targeted_clippy.sh", clippy_run)
+        helper = (REPO_ROOT / ".github/scripts/run_targeted_clippy.sh").read_text()
+        for flag in (
+            "--all-features",
+            "--tests",
+            "--profile dev",
+            "--no-deps",
+            "-- -D warnings",
+        ):
+            self.assertIn(flag, helper)
+        self.assertNotIn("--workspace", helper)
         self.assertIn("steps.targeted_clippy_packages.outputs.packages", clippy.get("if") or "")
 
     def test_rust_ci_argument_comment_lint_uses_single_cached_bazel_action(self) -> None:
@@ -9616,6 +9686,14 @@ fi
                 "options": ["auto", "stable", "prerelease"],
             },
         )
+        markerless_input = inputs.get("allow_markerless_prerelease") or {}
+        self.assertEqual(
+            {
+                "default": markerless_input.get("default"),
+                "type": markerless_input.get("type"),
+            },
+            {"default": "false", "type": "boolean"},
+        )
         self.assertEqual(
             {
                 "default": macos_input.get("default"),
@@ -9623,7 +9701,7 @@ fi
             },
             {
                 "default": "off",
-                "options": ["off", "preview", "notarized"],
+                "options": ["off", "preview", "unnotarized", "notarized"],
             },
         )
 
@@ -9655,9 +9733,19 @@ fi
                     },
                     {
                         "default": "off",
-                        "options": ["off", "preview", "notarized"],
+                        "options": ["off", "preview", "unnotarized", "notarized"],
                     },
                 )
+
+    def test_prerelease_main_command_dispatches_explicit_markerless_opt_in(self) -> None:
+        justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+        self.assertIn("prerelease-main:", justfile)
+        self.assertIn(
+            "gh workflow run sedna-release.yml --repo sednalabs/codex --ref main "
+            "-f channel=prerelease -f draft=false -f macos_release_mode=off "
+            "-f allow_markerless_prerelease=true",
+            justfile,
+        )
 
     def test_sedna_release_main_pushes_are_routed_before_publisher(self) -> None:
         release_payload = load_workflow_payload(
@@ -9716,6 +9804,19 @@ fi
         self.assertIn(
             'if [[ "${target_sha}" != "${HOST_SHA}" ]]',
             resolve_metadata_step.get("run") or "",
+        )
+        resolve_script = resolve_named_steps["Resolve release metadata"].get("run") or ""
+        self.assertIn(
+            'INPUT_ALLOW_MARKERLESS_PRERELEASE',
+            resolve_metadata_step.get("env") or {},
+        )
+        self.assertIn(
+            '[[ "${INPUT_CHANNEL}" == "prerelease" && "${INPUT_ALLOW_MARKERLESS_PRERELEASE}" == "true" ]]',
+            resolve_script,
+        )
+        self.assertIn(
+            "--require-marker --missing-marker error",
+            resolve_script,
         )
         self.assertEqual(
             release_job.get("name"),
@@ -9796,7 +9897,7 @@ fi
         self.assertIn("Upload workflow artifacts", release_named_steps)
         self.assertEqual(
             release_named_steps["Generate SPDX SBOM"].get("uses"),
-            "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
+            "anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26",
         )
         self.assertEqual(
             release_named_steps["Attest Linux archive and SBOM provenance"].get("uses"),
@@ -9913,6 +10014,7 @@ fi
         self.assertEqual(build.get("runs-on"), "macos-15-intel")
         self.assertEqual(build.get("needs"), ["resolve", "release-macos-signing-preflight"])
         self.assertEqual((build.get("env") or {}).get("TARGET"), "x86_64-apple-darwin")
+        self.assertEqual((build.get("env") or {}).get("MACOSX_DEPLOYMENT_TARGET"), "12.0")
         self.assertEqual(sign.get("runs-on"), "ubuntu-24.04")
         self.assertIn(
             "macos_release_mode == 'notarized'",
@@ -9951,6 +10053,8 @@ fi
         for evidence in (
             "lipo",
             "codesign --verify --strict",
+            "validate_macos_minimum.py",
+            "missing LC_BUILD_VERSION minos load command",
             "diff -u",
             "hdiutil verify",
             "xcrun stapler validate",
@@ -9979,7 +10083,20 @@ fi
         self.assertIn("macos_release_mode == 'preview'", build.get("if") or "")
         self.assertEqual(preview.get("runs-on"), "macos-15-intel")
         self.assertEqual(preview.get("needs"), ["resolve", "release-macos-build"])
-        self.assertIn("macos_release_mode == 'preview'", preview.get("if") or "")
+        preview_if = preview.get("if") or ""
+        self.assertIn("always()", preview_if)
+        self.assertIn("needs.resolve.result == 'success'", preview_if)
+        self.assertIn(
+            "needs.resolve.outputs.release_requested == 'true'",
+            preview_if,
+        )
+        self.assertIn(
+            "needs.resolve.outputs.release_build_required == 'true'",
+            preview_if,
+        )
+        self.assertIn("needs.release-macos-build.result == 'success'", preview_if)
+        self.assertIn("macos_release_mode == 'preview'", preview_if)
+        self.assertIn("macos_release_mode == 'unnotarized'", preview_if)
 
         preview_steps = {
             step.get("name"): step
@@ -9992,6 +10109,8 @@ fi
         for evidence in (
             "--identity -",
             "Signature=adhoc",
+            "LC_BUILD_VERSION",
+            "validate_macos_minimum.py",
             "UNNOTARIZED-PREVIEW",
             '"signing": "ad-hoc"',
             '"notarized": False',
@@ -10007,6 +10126,21 @@ fi
         create_script = publish_steps["Create GitHub release"].get("run") or ""
         self.assertIn("not Developer ID signed or notarized", create_script)
         self.assertIn("not an official supported macOS distribution", create_script)
+
+        publish_if = publish.get("if") or ""
+        self.assertIn("needs.release-linux.result == 'success'", publish_if)
+        self.assertIn(
+            "needs.release-macos-preview-package.result == 'success'",
+            publish_if,
+        )
+        self.assertIn(
+            "needs.resolve.outputs.release_requested == 'true'",
+            publish_if,
+        )
+        self.assertIn(
+            "needs.resolve.outputs.release_build_required == 'true'",
+            publish_if,
+        )
 
     def test_sedna_release_installer_targets_native_linux_and_intel_macos(self) -> None:
         payload = load_workflow_payload(
@@ -10062,6 +10196,7 @@ fi
         self.assertEqual(resolve_matrix("off"), [linux, linux_arm])
         self.assertEqual(resolve_matrix("off", require_arm64=False), [linux])
         self.assertEqual(resolve_matrix("preview"), [linux, linux_arm, macos])
+        self.assertEqual(resolve_matrix("unnotarized"), [linux, linux_arm, macos])
         self.assertEqual(resolve_matrix("notarized"), [linux, linux_arm, macos])
         self.assertEqual(plan.get("runs-on"), "ubuntu-slim")
         compatibility_step = workflow_step_by_name(
@@ -10094,7 +10229,10 @@ fi
         self.assertIn("x86_64-apple-darwin", installer)
         self.assertIn("codesign --verify --strict", installer)
         self.assertIn("--macos-preview", installer)
+        self.assertIn("--macos-unnotarized", installer)
         self.assertIn("UNNOTARIZED-PREVIEW", installer)
+        self.assertIn("UNNOTARIZED.tar.gz", installer)
+        self.assertIn('"distribution": "unnotarized"', installer)
         self.assertIn("cosign verify-blob", installer)
         self.assertIn("gh attestation verify", installer)
         self.assertEqual(
@@ -10147,6 +10285,7 @@ fi
         self.assertIn("attestation_arg+=(--verify-signatures)", verify_script)
         self.assertIn("attestation_arg+=(--verify-attestation)", verify_script)
         self.assertIn("historical_x86_arg+=(--allow-historical-x86)", verify_script)
+        self.assertIn('macos_unnotarized_arg+=(--macos-unnotarized)', verify_script)
         self.assertIn('"${REQUIRE_LINUX_ARM64}" == "true"', verify_script)
         self.assertEqual(
             verify_script.count(
@@ -10423,7 +10562,7 @@ fi
             },
             {
                 "cargo_home_restore": "actions/cache/restore@v6",
-                "sccache_install": "taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e",
+                "sccache_install": "taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c",
                 "sccache_configure_run": "bash .github/scripts/configure_sccache_backend.sh write-fallback",
                 "sccache_restore": "actions/cache/restore@v6",
                 "cargo_home_save": "actions/cache/save@v6",
@@ -11950,6 +12089,17 @@ class SednaReleaseVersionResolverTests(unittest.TestCase):
                 "github_prerelease": True,
             },
         )
+
+    def test_explicit_prerelease_channel_allows_markerless_tag_allocation(self) -> None:
+        repo, _upstream, downstream = self.create_fixture(marker=None)
+        try:
+            result = self.resolve(repo, downstream, channel="prerelease")
+        finally:
+            repo.cleanup()
+
+        self.assertEqual(result["release_channel"], "prerelease")
+        self.assertEqual(result["release_tag"], "v0.126.0-alpha.3-sedna.1")
+        self.assertTrue(result["github_prerelease"])
 
     def test_future_upstream_tag_is_not_used_for_older_synced_upstream_base(self) -> None:
         repo, upstream, downstream = self.create_fixture(marker=None)

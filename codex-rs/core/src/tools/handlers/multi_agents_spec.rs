@@ -214,7 +214,7 @@ pub fn create_send_message_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_message".to_string(),
-        description: "Send a text message to an existing agent. Use `interrupt=true` to stop the current task before queueing the message. Does not trigger a new turn."
+        description: "Send a text message to an existing agent. Use `interrupt=true` to stop the current task before queueing the message. Does not trigger a new turn. The receipt's effective_* identity fields describe the recipient agent named by target, never the sending agent."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -254,7 +254,7 @@ pub fn create_followup_task_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "followup_task".to_string(),
-        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
+        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes. The receipt's effective_* identity fields describe the recipient agent named by target, never the sending agent."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -572,25 +572,36 @@ fn followup_task_output_schema() -> Value {
                 "type": "string",
                 "description": "Canonical task name of the agent receiving the follow-up."
             },
+            "recipient_task_name": {
+                "type": "string",
+                "description": "Explicit canonical task name of the recipient; the effective_* fields below describe this recipient, not the sending agent."
+            },
+            "effective_identity_scope": {
+                "type": "string",
+                "enum": ["recipient"],
+                "description": "Identity scope for the effective_* fields in this receipt."
+            },
             "effective_model": {
                 "type": "string",
-                "description": "Effective model retained by the agent for the follow-up turn."
+                "description": "Effective model retained by the recipient agent for the follow-up turn."
             },
             "effective_model_provider_id": {
                 "type": "string",
-                "description": "Effective model provider retained by the agent for the follow-up turn."
+                "description": "Effective model provider retained by the recipient agent for the follow-up turn."
             },
             "effective_reasoning_effort": {
                 "type": ["string", "null"],
-                "description": "Effective reasoning effort retained by the agent for the follow-up turn, when configured."
+                "description": "Effective reasoning effort retained by the recipient agent for the follow-up turn, when configured."
             },
             "effective_service_tier": {
                 "type": ["string", "null"],
-                "description": "Effective service tier retained by the agent for the follow-up turn, when configured."
+                "description": "Effective service tier retained by the recipient agent for the follow-up turn, when configured."
             }
         },
         "required": [
             "task_name",
+            "recipient_task_name",
+            "effective_identity_scope",
             "effective_model",
             "effective_model_provider_id",
             "effective_reasoning_effort",
@@ -622,6 +633,15 @@ fn send_message_output_schema() -> Value {
                 "type": "string",
                 "description": "Canonical target task name that accepted the handoff."
             },
+            "recipient_task_name": {
+                "type": "string",
+                "description": "Explicit canonical task name of the recipient; the effective_* fields below describe this recipient, not the sending agent."
+            },
+            "effective_identity_scope": {
+                "type": "string",
+                "enum": ["recipient"],
+                "description": "Identity scope for the effective_* fields in this receipt."
+            },
             "handoff_state": {
                 "type": "string",
                 "enum": ["queued"],
@@ -629,17 +649,25 @@ fn send_message_output_schema() -> Value {
             },
             "effective_model": {
                 "type": ["string", "null"],
-                "description": "Effective model when the target runtime is already loaded. Null for a cold or evicted target so queue-only delivery does not activate it."
+                "description": "Effective model of the recipient when its runtime is already loaded. Null for a cold or evicted target so queue-only delivery does not activate it."
             },
             "effective_model_provider_id": {
                 "type": ["string", "null"],
-                "description": "Effective model provider when the target runtime is already loaded. Null for a cold or evicted target so queue-only delivery does not activate it."
+                "description": "Effective model provider of the recipient when its runtime is already loaded. Null for a cold or evicted target so queue-only delivery does not activate it."
             },
-            "effective_reasoning_effort": { "type": ["string", "null"] },
-            "effective_service_tier": { "type": ["string", "null"] }
+            "effective_reasoning_effort": {
+                "type": ["string", "null"],
+                "description": "Effective reasoning effort of the recipient when configured."
+            },
+            "effective_service_tier": {
+                "type": ["string", "null"],
+                "description": "Effective service tier of the recipient when configured."
+            }
         },
         "required": [
             "task_name",
+            "recipient_task_name",
+            "effective_identity_scope",
             "handoff_state",
             "effective_model",
             "effective_model_provider_id",

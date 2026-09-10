@@ -30,6 +30,7 @@ on:
         options:
           - "off"
           - preview
+          - unnotarized
           - notarized
 
 permissions:
@@ -179,6 +180,10 @@ jobs:
           if [[ "${MACOS_RELEASE_MODE}" == "preview" ]]; then
             macos_preview_arg+=(--macos-preview)
           fi
+          macos_unnotarized_arg=()
+          if [[ "${MACOS_RELEASE_MODE}" == "unnotarized" ]]; then
+            macos_unnotarized_arg+=(--macos-unnotarized)
+          fi
 
           attestation_arg=()
           if [[ "${REQUIRE_LINUX_ARM64}" == "true" && "${TARGET}" == *-unknown-linux-gnu ]]; then
@@ -198,7 +203,8 @@ jobs:
             "${allow_prerelease_arg[@]}" \
             "${attestation_arg[@]}" \
             "${historical_x86_arg[@]}" \
-            "${macos_preview_arg[@]}"
+            "${macos_preview_arg[@]}" \
+            "${macos_unnotarized_arg[@]}"
 
       - name: Summarize
         if: ${{ always() }}

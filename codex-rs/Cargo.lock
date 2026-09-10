@@ -2248,6 +2248,7 @@ dependencies = [
  "codex-http-client",
  "codex-uds",
  "codex-utils-home-dir",
+ "codex-utils-version",
  "futures",
  "libc",
  "pretty_assertions",
@@ -2738,6 +2739,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-path",
  "codex-utils-path-uri",
+ "codex-utils-version",
  "core-foundation 0.10.1",
  "dns-lookup",
  "dunce",
@@ -2890,6 +2892,7 @@ dependencies = [
  "codex-utils-pty",
  "codex-utils-stream-parser",
  "codex-utils-string",
+ "codex-utils-version",
  "codex-web-search-extension",
  "codex-windows-sandbox",
  "core_test_support",
@@ -4730,6 +4733,10 @@ dependencies = [
 [[package]]
 name = "codex-utils-version"
 version = "0.0.0"
+dependencies = [
+ "schemars 1.2.1",
+ "serde",
+]
 
 [[package]]
 name = "codex-v8-poc"

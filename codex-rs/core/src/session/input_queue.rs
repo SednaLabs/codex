@@ -42,10 +42,17 @@ pub(crate) struct TurnInputQueue {
     items: Vec<TurnInput>,
 }
 
+#[derive(Default)]
+struct MailboxQueue {
+    communications: VecDeque<InterAgentCommunication>,
+    sequences: VecDeque<u64>,
+}
+
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
 pub(crate) struct InputQueue {
     activity_tx: watch::Sender<InputQueueActivity>,
-    mailbox_pending_mails: Mutex<VecDeque<InterAgentCommunication>>,
+    mailbox: Mutex<MailboxQueue>,
+    next_mailbox_sequence: AtomicU64,
     terminal_completions: Mutex<VecDeque<TerminalCompletionNotification>>,
     residency_transition: Arc<Mutex<()>>,
     residency_activity_generation: AtomicU64,
@@ -57,12 +64,14 @@ pub(crate) struct InputQueue {
 
 impl InputQueue {
     const MAX_PENDING_TERMINAL_COMPLETIONS: usize = 64;
+    pub(crate) const MAX_MAILBOX_NOTIFICATION_SNAPSHOT: usize = 64;
 
     pub(crate) fn new() -> Self {
         let (activity_tx, _) = watch::channel(InputQueueActivity::Mailbox);
         Self {
             activity_tx,
-            mailbox_pending_mails: Mutex::new(VecDeque::new()),
+            mailbox: Mutex::new(MailboxQueue::default()),
+            next_mailbox_sequence: AtomicU64::new(0),
             terminal_completions: Mutex::new(VecDeque::new()),
             residency_transition: Arc::new(Mutex::new(())),
             residency_activity_generation: AtomicU64::new(0),
@@ -197,10 +206,13 @@ impl InputQueue {
         if communications.is_empty() {
             return;
         }
-        self.mailbox_pending_mails
-            .lock()
-            .await
-            .extend(communications);
+        let communication_count = communications.len();
+        let mut mailbox = self.mailbox.lock().await;
+        mailbox.communications.extend(communications);
+        mailbox.sequences.extend(
+            (0..communication_count)
+                .map(|_| self.next_mailbox_sequence.fetch_add(1, Ordering::Relaxed)),
+        );
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
     }
 
@@ -211,16 +223,39 @@ impl InputQueue {
         if communications.is_empty() {
             return;
         }
-        let mut pending = self.mailbox_pending_mails.lock().await;
-        for communication in communications.into_iter().rev() {
-            pending.push_front(communication);
+        let mut mailbox = self.mailbox.lock().await;
+        let queued: Vec<_> = communications
+            .into_iter()
+            .map(|communication| {
+                let sequence = self.next_mailbox_sequence.fetch_add(1, Ordering::Relaxed);
+                (communication, sequence)
+            })
+            .collect();
+        for (communication, sequence) in queued.into_iter().rev() {
+            mailbox.communications.push_front(communication);
+            mailbox.sequences.push_front(sequence);
         }
-        drop(pending);
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
     }
 
     pub(crate) async fn has_pending_mailbox_items(&self) -> bool {
-        !self.mailbox_pending_mails.lock().await.is_empty()
+        !self.mailbox.lock().await.communications.is_empty()
+    }
+
+    /// Nondestructive mailbox read used by native wait reporting. The delivery
+    /// queue remains untouched so model delivery ordering and ownership are
+    /// preserved.
+    pub(crate) async fn snapshot_mailbox_communications(
+        &self,
+    ) -> Vec<(InterAgentCommunication, u64)> {
+        let mailbox = self.mailbox.lock().await;
+        mailbox
+            .communications
+            .iter()
+            .zip(mailbox.sequences.iter())
+            .take(Self::MAX_MAILBOX_NOTIFICATION_SNAPSHOT)
+            .map(|(communication, sequence)| (communication.clone(), *sequence))
+            .collect()
     }
 
     pub(crate) async fn enqueue_terminal_completion(
@@ -263,9 +298,10 @@ impl InputQueue {
     }
 
     pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {
-        self.mailbox_pending_mails
+        self.mailbox
             .lock()
             .await
+            .communications
             .iter()
             .any(|mail| mail.trigger_turn)
     }
@@ -279,7 +315,10 @@ impl InputQueue {
     }
 
     pub(crate) async fn drain_mailbox_communications(&self) -> Vec<InterAgentCommunication> {
-        self.mailbox_pending_mails.lock().await.drain(..).collect()
+        let mut mailbox = self.mailbox.lock().await;
+        let communications = mailbox.communications.drain(..).collect();
+        mailbox.sequences.clear();
+        communications
     }
 
     pub(crate) async fn turn_state_for_sub_id(

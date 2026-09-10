@@ -13,6 +13,19 @@ python := if os_family() == "windows" { "python" } else { "python3" }
 help:
     just -l
 
+# Dispatch a prerelease for the exact protected main tip captured by GitHub.
+# The workflow resolves the version and tag on its runner, so this command does
+# not depend on a potentially stale local main ref.
+[no-cd]
+prerelease-main:
+    gh workflow run sedna-release.yml --repo sednalabs/codex --ref main -f channel=prerelease -f draft=false -f macos_release_mode=off -f allow_markerless_prerelease=true
+
+# Dispatch the same Linux prerelease plus an explicitly labelled Intel macOS
+# ad-hoc asset. The asset is not Developer ID signed or notarized.
+[no-cd]
+prerelease-main-macos:
+    gh workflow run sedna-release.yml --repo sednalabs/codex --ref main -f channel=prerelease -f draft=false -f macos_release_mode=unnotarized -f allow_markerless_prerelease=true
+
 # `codex`
 
 alias c := codex
@@ -117,6 +130,15 @@ bench-smoke:
 core-compile-smoke:
     cargo check -p codex-linux-sandbox -p codex-core --tests
 
+# Focused model catalog compatibility and overlay regression slice.
+model-catalog-compat-targeted:
+    cargo test -p codex-protocol --lib model_catalog_deserializer
+    cargo test -p codex-models-manager --lib bundled_models_json_roundtrips
+    cargo test -p codex-models-manager --lib cache_deserializer_accepts_catalog_without_legacy_base
+    cargo test -p codex-models-manager --lib openai_overlay_preserves_unrelated_metadata_and_static_catalog_precedence
+    cargo test -p codex-models-manager --lib openai_overlay_applies_after_remote_and_cache_composition
+    cargo fmt -p codex-protocol -p codex-models-manager -- --check
+
 # Carry-only downstream behavior smoke checks (core-only seam).
 core-carry-core-smoke:
     RUST_MIN_STACK={{ rust_min_stack }} CODEX_JS_REPL_NODE_PATH="${CODEX_JS_REPL_NODE_PATH:-/tmp/codex-node22/bin/node}" cargo nextest run -p codex-core --no-fail-fast --test all -- suite::subagent_notifications::spawn_agent_requested_model_and_reasoning_override_inherited_settings_without_role suite::subagent_notifications::spawn_agent_role_overrides_requested_model_and_reasoning_settings suite::code_mode::code_mode_exports_all_tools_metadata_for_builtin_tools suite::code_mode::code_mode_exports_all_tools_metadata_for_namespaced_mcp_tools suite::code_mode::code_mode_exec_nested_limit_formats_result_variable_before_default_history_truncation suite::code_mode::code_mode_exec_nested_limit_truncates_result_variable_when_exceeded suite::code_mode::code_mode_exec_nested_limit_formats_result_variable_before_configured_history_truncation suite::code_mode::code_mode_exec_without_nested_limit_formats_result_variable_before_default_history_truncation suite::code_mode::code_mode_exec_without_nested_limit_formats_result_variable_before_configured_history_truncation suite::compact_remote::remote_request_with_v3_initial_items_uses_custom_experimental_realtime_start_instructions suite::compact_resume_fork::snapshot_rollback_past_compaction_replays_append_only_history suite::compact_resume_fork::snapshot_rollback_followup_turn_trims_context_updates suite::unified_exec::exec_command_reports_chunk_and_exit_metadata suite::unified_exec::write_stdin_returns_exit_metadata_and_clears_session --exact
@@ -125,6 +147,7 @@ core-carry-core-smoke:
 # Carry-only downstream behavior smoke checks (TUI/UI seam).
 core-carry-ui-smoke:
     RUST_MIN_STACK={{ rust_min_stack }} CODEX_JS_REPL_NODE_PATH="${CODEX_JS_REPL_NODE_PATH:-/tmp/codex-node22/bin/node}" cargo nextest run -p codex-tui --no-fail-fast -- chatwidget::tests::slash_commands::queued_popup_command_replay_waits_before_submitting_next_message chatwidget::tests::slash_commands::slash_quit_in_side_conversation_requests_side_exit chatwidget::tests::slash_commands::slash_exit_in_side_conversation_requests_side_exit chatwidget::tests::composer_submission::alt_up_restores_most_recent_queued_slash_command chatwidget::tests::composer_submission::alt_up_restored_state_with_missing_insert_order_preserves_front_back_recall_order app::tests::replayed_turn_complete_submits_restored_queued_follow_up app::agent_navigation::tests::active_agent_label_tracks_current_thread streaming::render::tests::visualization_context_without_directive_keeps_incremental_rendering --exact
+    cargo test -p codex-tui updates::tests:: --lib -- --test-threads=1
 
 # Compatibility wrapper while callers migrate to split core/UI smoke lanes.
 core-carry-smoke:

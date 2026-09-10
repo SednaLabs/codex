@@ -27,6 +27,29 @@
       "needs_sccache": true
     },
     {
+      "lane_id": "codex.model-catalog-compat-targeted",
+      "groups": [
+        "core"
+      ],
+      "lane_sets": [
+        "all",
+        "core-carry"
+      ],
+      "explicit_only": true,
+      "setup_class": "rust_minimal",
+      "working_directory": ".",
+      "script_path": ".github/scripts/validation-lanes/run-just-recipe.sh",
+      "script_args": [
+        "model-catalog-compat-targeted"
+      ],
+      "needs_just": true,
+      "needs_node": false,
+      "needs_nextest": false,
+      "needs_linux_build_deps": false,
+      "needs_dotslash": false,
+      "needs_sccache": true
+    },
+    {
       "lane_id": "core-carry-core-smoke",
       "groups": [
         "core"

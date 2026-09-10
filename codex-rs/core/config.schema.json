@@ -3690,6 +3690,14 @@
       },
       "type": "object"
     },
+    "SednaReleaseChannel": {
+      "description": "The user-selectable Sedna release stream.",
+      "enum": [
+        "stable",
+        "prerelease"
+      ],
+      "type": "string"
+    },
     "SessionPickerViewMode": {
       "description": "Preferred layout for the resume/fork session picker.",
       "enum": [
@@ -7208,6 +7216,17 @@
       "oneOf": [
         {
           "$ref": "#/definitions/SandboxWorkspaceWrite"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sedna_release_channel": {
+      "description": "The published Sedna release stream used by update notices. `stable` includes only GitHub Releases whose `prerelease` flag is false. Defaults to `stable`.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/SednaReleaseChannel"
         },
         {
           "type": "null"

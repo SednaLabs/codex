@@ -8,6 +8,7 @@ use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_server_session::source_agent_path;
 use crate::chatwidget::ThreadInputStateRestoreMode;
+use crate::multi_agents::SubAgentActivityDisplay;
 use crate::session_resume::SessionModelSettings;
 use crate::session_resume::read_session_model_settings;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -1054,27 +1055,7 @@ impl App {
         if let Some(activity) =
             sub_agent_activity_item(notification).and_then(sub_agent_activity_display)
         {
-            let thread_id = activity.thread_id;
-            let update = if activity.is_running_hint {
-                let protected = [self.primary_thread_id, self.active_thread_id]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>();
-                self.agent_navigation
-                    .record_sub_agent_activity_retaining(activity, &protected)
-            } else if self.agent_navigation.record_sub_agent_activity(activity) {
-                AgentNavigationUpdate::Accepted { evicted: None }
-            } else {
-                AgentNavigationUpdate::Rejected
-            };
-            if let Some(evicted) = update.evicted() {
-                self.chat_widget.remove_collab_agent_metadata(evicted);
-            }
-            if !update.accepted() {
-                return;
-            }
-            self.sync_agent_picker_identity(thread_id);
-            self.sync_active_agent_label();
+            self.cache_sub_agent_activity(activity);
             return;
         }
 
@@ -1104,6 +1085,30 @@ impl App {
                 /*is_closed*/ false,
             );
         }
+    }
+
+    fn cache_sub_agent_activity(&mut self, activity: SubAgentActivityDisplay) {
+        let thread_id = activity.thread_id;
+        let update = if activity.is_running_hint {
+            let protected = [self.primary_thread_id, self.active_thread_id]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            self.agent_navigation
+                .record_sub_agent_activity_retaining(activity, &protected)
+        } else if self.agent_navigation.record_sub_agent_activity(activity) {
+            AgentNavigationUpdate::Accepted { evicted: None }
+        } else {
+            AgentNavigationUpdate::Rejected
+        };
+        if let Some(evicted) = update.evicted() {
+            self.chat_widget.remove_collab_agent_metadata(evicted);
+        }
+        if !update.accepted() {
+            return;
+        }
+        self.sync_agent_picker_identity(thread_id);
+        self.sync_active_agent_label();
     }
 
     pub(super) async fn infer_session_for_thread_notification(
@@ -1325,6 +1330,11 @@ impl App {
         if should_buffer_initial_replay {
             self.app_event_tx
                 .send(AppEvent::BeginInitialHistoryReplayBuffer);
+        }
+        for item in turns.iter().flat_map(|turn| turn.items.iter()) {
+            if let Some(activity) = sub_agent_activity_display(item) {
+                self.cache_sub_agent_activity(activity);
+            }
         }
         self.chat_widget
             .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
@@ -1563,6 +1573,11 @@ impl App {
                 preserve_in_flight_turn: true,
             },
         );
+        for item in snapshot.turns.iter().flat_map(|turn| turn.items.iter()) {
+            if let Some(activity) = sub_agent_activity_display(item) {
+                self.cache_sub_agent_activity(activity);
+            }
+        }
         if !snapshot.turns.is_empty() {
             self.chat_widget
                 .replay_thread_turns(snapshot.turns, ReplayKind::ThreadSnapshot);
@@ -1663,9 +1678,15 @@ impl App {
 
     pub(super) fn handle_thread_event_replay(&mut self, event: ThreadBufferedEvent) {
         match event {
-            ThreadBufferedEvent::Notification(notification) => self
-                .chat_widget
-                .handle_server_notification(notification, Some(ReplayKind::ThreadSnapshot)),
+            ThreadBufferedEvent::Notification(notification) => {
+                // Replay is the first view of a resumed root thread after a restart.  Register
+                // embedded native-V2 activity before rendering it; live delivery does the same
+                // in `handle_thread_event_now`, and omitting it here leaves `/agent` with no
+                // path-backed descendant even though the snapshot contains one.
+                self.cache_collab_receiver_threads_for_notification(&notification);
+                self.chat_widget
+                    .handle_server_notification(notification, Some(ReplayKind::ThreadSnapshot));
+            }
             ThreadBufferedEvent::Request(request) => self
                 .chat_widget
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),

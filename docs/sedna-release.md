@@ -51,6 +51,52 @@ builds use `rust-v<semver>@<upstream-sha>`, while builds whose upstream merge-ba
 tag use `rust-v<semver>+<distance>@<upstream-sha>`, for example
 `0.126.0-alpha.5-sedna.1+upstream.1 (up:rust-v0.126.0-alpha.5+1@4f1d5f00 down:82fafe27)`.
 
+### Automatic update boundary
+
+Automatic installation is disabled by default. It is available only for
+supported Linux `x86_64` and `aarch64` standalone installations after an
+explicit `codex app-server daemon bootstrap --enable-auto-update` opt-in. The
+persisted `--release-channel stable|prerelease` choice defaults to `stable`;
+it is also available to update-notice users as `sedna_release_channel` in
+`config.toml`. Re-running bootstrap without either update flag preserves the
+existing choice, while `--disable-auto-update` stops the managed updater.
+
+`stable` means a published GitHub Release whose API `prerelease` flag is
+`false`; it does not infer a channel from an upstream `-alpha` suffix inside a
+Sedna version. `prerelease` considers both published stable and prerelease
+releases. Discovery enumerates a bounded release list and selects the newest
+strictly newer valid candidate. Each candidate must have the exact Sedna
+repository, tag, version, current target, and `RELEASE-METADATA.json` asset
+identity. When the metadata declares `release_channel`, it must agree with the
+GitHub API flag; older valid metadata without that field uses the API flag
+without fabricating a value. Equality, older, malformed, offline, unauthenticated,
+or contradictory candidates do not mutate the installed release.
+
+Automatic discovery is a no-op for unsupported targets and macOS. Intel macOS
+preview and unnotarized verification remain explicit manual modes
+(`--macos-preview` and `--macos-unnotarized`); enabling an update channel does
+not expand automatic macOS deployment or signing authority.
+
+The current contract is covered by the installer lower-bound and candidate
+tests (`scripts/install/test_sedna_release_lower_bound.py` and
+`scripts/install/test_sedna_release_installer.py`), the TUI update-version and
+prompt surfaces, `codex doctor` diagnostics, and the hosted
+`sedna.update-installer-contract` validation lane. The tests use a legacy unsigned
+fixture only to preserve compatibility; they are not modern release-trust
+assurance.
+
+The public installer form is explicit about its release source and candidate:
+
+```bash
+scripts/install_sedna_release_asset \
+  --repository sednalabs/codex \
+  --release-tag TAG
+```
+
+Manual prerelease verification adds `--allow-prerelease`. Intel macOS preview
+verification requires both `--allow-prerelease` and `--macos-preview`; neither
+flag changes automatic update discovery.
+
 ### GitHub Actions
 
 Use the `sedna-release` workflow for fork-owned GitHub releases.
@@ -97,7 +143,7 @@ Use the `sedna-release` workflow for fork-owned GitHub releases.
 Current workflow characteristics:
 
 - Native GitHub-hosted Linux `x86_64` and Arm64 release builds, with Intel macOS `x86_64` assets selected
-  explicitly as `off`, `preview`, or `notarized`
+  explicitly as `off`, `preview`, `unnotarized`, or `notarized`
 - Release builds and GitHub Release publication are separate jobs: the build job keeps a read-only
   repository token while the small publication job owns the release environment and write-scoped
   publishing permissions.
@@ -130,7 +176,7 @@ The workflow checks that these are configured before starting the release build,
 short-lived installation token only after the assets are staged so the publication token is fresh
 for GitHub Release creation and verifier dispatch.
 
-Intel macOS publication has three explicit modes:
+Intel macOS publication has four explicit modes:
 
 - `off` is the default, including automatic tag and release-marker events. It publishes no macOS
   asset and never reads the `codesigning` environment.
@@ -138,12 +184,22 @@ Intel macOS publication has three explicit modes:
   metadata identify it as an unnotarized preview. The binaries are ad-hoc signed, architecture and
   signature checked, checksummed, and executed on an Intel macOS runner. They are not Developer ID
   signed, may be blocked by Gatekeeper, and are not an official supported macOS distribution.
+- `unnotarized` is an explicit ad-hoc assurance mode for stable or prerelease releases. It publishes
+  an Intel x64 tarball whose filename and metadata identify it as unnotarized. The binaries are
+  architecture and signature checked, checksummed, and executed on an Intel macOS runner, but carry
+  no Apple signing identity, are not Developer ID signed or notarized, and may be blocked by Gatekeeper.
+- Intel macOS release executables are built with `MACOSX_DEPLOYMENT_TARGET=12.0` and hosted artifact
+  checks require each shipped executable's Mach-O `LC_BUILD_VERSION` minimum version to be exactly
+  12.0 and require an x86_64 slice.
+  The hosted macOS runner is newer than Monterey; this metadata check does not claim a Monterey runtime
+  smoke test. No Monterey-hosted runner is currently part of this workflow, so Monterey runtime proof
+  remains an explicit validation gap.
 - `notarized` is fail-closed. It publishes Intel x64 binaries and a DMG only after Developer ID
   signing, Apple notarization, stapling, and a final Intel-runner verification pass.
 
 Apple provides Developer ID and notarization through the paid Apple Developer Program. This is a
 product prerequisite for the `notarized` mode, not merely a CI configuration detail. The free
-`preview` mode cannot provide the same Gatekeeper experience. See Apple's
+`preview` and `unnotarized` modes cannot provide the same Gatekeeper experience. See Apple's
 [membership comparison](https://developer.apple.com/support/compare-memberships/) and
 [notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
 
@@ -174,6 +230,14 @@ For a zero-credential Intel preview, dispatch a prerelease explicitly:
 python3 .github/scripts/dispatch_sedna_release.py \
   --channel prerelease \
   --macos-release-mode preview
+```
+
+For an explicitly labelled ad-hoc Intel asset on either a stable or prerelease release, use:
+
+```bash
+python3 .github/scripts/dispatch_sedna_release.py \
+  --channel stable \
+  --macos-release-mode unnotarized
 ```
 
 Omit `--macos-release-mode` to publish without macOS assets. Use `notarized` only after the

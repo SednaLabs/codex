@@ -75,11 +75,15 @@ jobs:
             comm -3 refs.txt remote-refs.txt | awk 'NR <= 5 {print}' >&2
             exit 1
           fi
+          specs=()
           while read -r oid ref; do
-            if ! git -C source.git fetch --no-tags source "+$ref:$ref"; then
-              printf 'recovery snapshot: fetch failed ref=%s stage=fetch\n' "$ref" >&2
-              exit 1
-            fi
+            specs+=("+$oid:$ref")
+          done < remote-map.txt
+          if ! git -C source.git fetch --atomic --no-tags source "${specs[@]}"; then
+            echo 'recovery snapshot: fetch failed stage=fetch' >&2
+            exit 1
+          fi
+          while read -r oid ref; do
             if ! actual_oid=$(git -C source.git rev-parse "$ref"); then
               printf 'recovery snapshot: oid readback failed ref=%s stage=rev-parse\n' "$ref" >&2
               exit 1

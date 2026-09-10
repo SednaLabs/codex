@@ -1,6 +1,7 @@
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::deserialize_model_infos_with_legacy_base;
 use serde::Deserialize;
 use serde::Serialize;
 use std::io;
@@ -165,6 +166,7 @@ pub(crate) struct ModelsCache {
     pub(crate) etag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) client_version: Option<String>,
+    #[serde(deserialize_with = "deserialize_model_infos_with_legacy_base")]
     pub(crate) models: Vec<ModelInfo>,
 }
 
@@ -179,5 +181,83 @@ impl ModelsCache {
         };
         let age = Utc::now().signed_duration_since(self.fetched_at);
         age <= ttl_duration
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModelsCache;
+    use serde_json::json;
+
+    #[test]
+    fn cache_deserializer_accepts_catalog_without_legacy_base() {
+        let mut payload = json!({
+            "fetched_at": "2026-09-07T00:00:00Z",
+            "models": [{
+                "slug": "astra",
+                "display_name": "Astra",
+                "description": null,
+                "supported_reasoning_levels": [],
+                "shell_type": "shell_command",
+                "visibility": "list",
+                "supported_in_api": true,
+                "priority": 1,
+                "availability_nux": null,
+                "upgrade": null,
+                "model_messages": {
+                    "instructions_template": "template",
+                    "instructions_variables": null
+                },
+                "support_verbosity": false,
+                "default_verbosity": null,
+                "apply_patch_tool_type": null,
+                "truncation_policy": {"mode": "bytes", "limit": 10000},
+                "supports_parallel_tool_calls": false,
+                "experimental_supported_tools": []
+            }]
+        });
+        let cache: ModelsCache =
+            serde_json::from_value(payload.clone()).expect("cache catalog should deserialize");
+
+        assert_eq!(cache.models[0].base_instructions, "template");
+
+        payload["models"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("model_messages");
+        let error = serde_json::from_value::<ModelsCache>(payload)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing both"));
+
+        let mut whitespace = json!({
+            "fetched_at": "2026-09-07T00:00:00Z",
+            "models": [{
+                "slug": "astra",
+                "display_name": "Astra",
+                "description": null,
+                "supported_reasoning_levels": [],
+                "shell_type": "shell_command",
+                "visibility": "list",
+                "supported_in_api": true,
+                "priority": 1,
+                "availability_nux": null,
+                "upgrade": null,
+                "model_messages": {
+                    "instructions_template": " \n\t",
+                    "instructions_variables": null
+                },
+                "support_verbosity": false,
+                "default_verbosity": null,
+                "apply_patch_tool_type": null,
+                "truncation_policy": {"mode": "bytes", "limit": 10000},
+                "supports_parallel_tool_calls": false,
+                "experimental_supported_tools": []
+            }]
+        });
+        let error = serde_json::from_value::<ModelsCache>(whitespace.take())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing both"));
     }
 }

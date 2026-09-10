@@ -39,6 +39,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::items::AgentNotificationContent;
+use codex_protocol::items::AgentNotificationOrigin;
+use codex_protocol::items::AgentNotificationSummary;
 use codex_protocol::items::CollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallStatus;
 use codex_protocol::models::BaseInstructions;
@@ -1152,7 +1155,7 @@ async fn multi_agent_v2_spawn_rejects_child_model_from_different_backend() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Unknown model `v1-only-model` for spawn_agent. Available models: gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.2".to_string()
+            "Unknown model `v1-only-model` for spawn_agent. Available models: gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5".to_string()
         )
     );
 }
@@ -2459,7 +2462,9 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
             "spawn_agent",
             function_payload(json!({
                 "message": "encrypted-spawn-message",
-                "task_name": "test_process"
+                "task_name": "test_process",
+                "reasoning_effort": "xhigh",
+                "expected_reasoning_effort": "xhigh"
             })),
         ))
         .await
@@ -2485,6 +2490,10 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
     assert_eq!(
         child_snapshot.session_source.get_agent_path().as_deref(),
         Some("/root/test_process")
+    );
+    assert_ne!(
+        turn.config.model_reasoning_effort,
+        child_snapshot.reasoning_effort
     );
     assert!(manager.captured_ops().iter().any(|(id, op)| {
         *id == child_thread_id
@@ -2519,6 +2528,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         receipt,
         json!({
             "task_name": "/root/test_process",
+            "recipient_task_name": "/root/test_process",
+            "effective_identity_scope": "recipient",
             "handoff_state": "queued",
             "effective_model": child_snapshot.model,
             "effective_model_provider_id": child_snapshot.model_provider_id,
@@ -2613,6 +2624,8 @@ async fn multi_agent_v2_send_message_keeps_cold_target_unloaded() {
         receipt,
         json!({
             "task_name": "/root/cold_worker",
+            "recipient_task_name": "/root/cold_worker",
+            "effective_identity_scope": "recipient",
             "handoff_state": "queued",
             "effective_model": null,
             "effective_model_provider_id": null,
@@ -3487,7 +3500,9 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
             "spawn_agent",
             function_payload(json!({
                 "message": "boot worker",
-                "task_name": "worker"
+                "task_name": "worker",
+                "reasoning_effort": "xhigh",
+                "expected_reasoning_effort": "xhigh"
             })),
         ))
         .await
@@ -3503,6 +3518,10 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .await
         .expect("worker thread should exist");
     let worker_config = thread.config_snapshot().await;
+    assert_ne!(
+        turn.config.model_reasoning_effort,
+        worker_config.reasoning_effort
+    );
     let worker_path = AgentPath::try_from("/root/worker").expect("worker path");
 
     let first_turn = thread.session.new_default_turn().await;
@@ -3545,6 +3564,8 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         followup_receipt,
         json!({
             "task_name": "/root/worker",
+            "recipient_task_name": "/root/worker",
+            "effective_identity_scope": "recipient",
             "effective_model": worker_config.model,
             "effective_model_provider_id": worker_config.model_provider_id,
             "effective_reasoning_effort": worker_config.reasoning_effort,
@@ -5194,7 +5215,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
     session
         .input_queue
         .enqueue_mailbox_communication(InterAgentCommunication::new(
-            worker_path,
+            worker_path.clone(),
             AgentPath::root(),
             Vec::new(),
             "mailbox update".to_string(),
@@ -5217,6 +5238,17 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
             pending_ids: Vec::new(),
             completion_reason: CollabWaitingCompletionReason::Mailbox,
             timed_out: false,
+            wake_notifications: Some(vec![AgentNotificationSummary {
+                communication_id: None,
+                sequence: 0,
+                origin: AgentNotificationOrigin::ExplicitMessage,
+                sender_agent_path: worker_path,
+                sender_thread_id: Some(agent_id),
+                content: AgentNotificationContent::PlaintextPreview {
+                    text: "mailbox update".to_string(),
+                    truncated: false,
+                },
+            }]),
         }
     );
     assert_eq!(success, None);
@@ -5270,7 +5302,7 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
     session
         .input_queue
         .enqueue_mailbox_communication(InterAgentCommunication::new(
-            worker_path,
+            worker_path.clone(),
             AgentPath::root(),
             Vec::new(),
             "already queued".to_string(),
@@ -5304,6 +5336,17 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
             pending_ids: vec![agent_id],
             completion_reason: CollabWaitingCompletionReason::Mailbox,
             timed_out: false,
+            wake_notifications: Some(vec![AgentNotificationSummary {
+                communication_id: None,
+                sequence: 0,
+                origin: AgentNotificationOrigin::ExplicitMessage,
+                sender_agent_path: worker_path,
+                sender_thread_id: Some(agent_id),
+                content: AgentNotificationContent::PlaintextPreview {
+                    text: "already queued".to_string(),
+                    truncated: false,
+                },
+            }]),
         }
     );
     assert_eq!(success, None);
@@ -5594,7 +5637,7 @@ fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
         session
             .input_queue
             .enqueue_mailbox_communication(InterAgentCommunication::new(
-                worker_path,
+                worker_path.clone(),
                 AgentPath::root(),
                 Vec::new(),
                 "sensitive child output".to_string(),
@@ -5615,7 +5658,28 @@ fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
             CollabWaitingCompletionReason::Mailbox
         );
         assert!(!result.timed_out);
-        assert!(!content.contains("sensitive child output"));
+        let notifications = result
+            .wake_notifications
+            .expect("mailbox wake should include a safe notification summary");
+        assert_eq!(notifications.len(), 1);
+        let notification = &notifications[0];
+        assert_eq!(notification.communication_id, None);
+        assert_eq!(notification.sequence, 0);
+        assert_eq!(
+            notification.origin,
+            AgentNotificationOrigin::ExplicitMessage
+        );
+        assert_eq!(notification.sender_agent_path, worker_path);
+        assert_eq!(notification.sender_thread_id, Some(agent_id));
+        assert_eq!(
+            notification.content,
+            AgentNotificationContent::PlaintextPreview {
+                text: "sensitive child output".to_string(),
+                truncated: false,
+            }
+        );
+        assert!(!content.contains("encrypted_content"));
+        assert!(!content.contains("internal_chat_message_metadata_passthrough"));
         assert_eq!(success, None);
     });
 }

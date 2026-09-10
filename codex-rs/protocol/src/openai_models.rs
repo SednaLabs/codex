@@ -19,7 +19,6 @@ use serde::de::DeserializeOwned;
 use serde::de::Error;
 use strum_macros::Display;
 use strum_macros::EnumIter;
-use tracing::trace;
 use ts_rs::TS;
 
 use crate::config_types::Personality;
@@ -468,27 +467,21 @@ impl ModelInfo {
 
     pub fn get_model_instructions(&self, personality: Option<Personality>) -> String {
         if let Some(model_messages) = &self.model_messages
-            && let Some(template) = &model_messages.instructions_template
+            && let Some(template) =
+                usable_instruction(model_messages.instructions_template.as_deref())
         {
-            // if we have a template, always use it
             let personality_message = model_messages
                 .get_personality_message(personality)
                 .unwrap_or_default();
             template.replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())
         } else {
-            match personality {
-                Some(personality @ (Personality::Friendly | Personality::Pragmatic)) => {
-                    trace!(
-                        model = %self.slug,
-                        %personality,
-                        "Model personality requested but model_messages is missing, falling back to base instructions."
-                    );
-                }
-                Some(Personality::None) | None => {}
-            }
             self.base_instructions.clone()
         }
     }
+}
+
+fn usable_instruction(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.trim().is_empty())
 }
 
 /// A strongly-typed template for assembling model instructions and developer messages. If
@@ -591,7 +584,58 @@ impl From<&ModelUpgrade> for ModelInfoUpgrade {
 /// Response wrapper for `/models`.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema, Default)]
 pub struct ModelsResponse {
+    #[serde(deserialize_with = "deserialize_model_infos_with_legacy_base")]
     pub models: Vec<ModelInfo>,
+}
+
+/// Deserializes model lists while accepting catalogs that omit the legacy instruction field.
+///
+/// The legacy field remains part of `ModelInfo` for downstream overlay/config consumers. A
+/// canonical template wins when both fields are present; legacy-only entries retain their legacy
+/// field as the effective fallback, while entries with neither usable source are rejected.
+#[doc(hidden)]
+pub fn deserialize_model_infos_with_legacy_base<'de, D>(
+    deserializer: D,
+) -> Result<Vec<ModelInfo>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let models = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    models
+        .into_iter()
+        .map(|mut value| {
+            let object = value
+                .as_object_mut()
+                .ok_or_else(|| D::Error::custom("model entry must be an object"))?;
+            let legacy_base = object
+                .get("base_instructions")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned);
+            let template = object
+                .get("model_messages")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|messages| messages.get("instructions_template"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned);
+            let Some(base_instructions) = legacy_base.or(template) else {
+                let slug = object
+                    .get("slug")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("<unknown>");
+                return Err(D::Error::custom(format!(
+                    "model `{slug}` is missing both `base_instructions` and \
+                     `model_messages.instructions_template`"
+                )));
+            };
+            object.insert(
+                "base_instructions".to_string(),
+                serde_json::Value::String(base_instructions),
+            );
+            serde_json::from_value(value).map_err(D::Error::custom)
+        })
+        .collect()
 }
 
 // convert ModelInfo to ModelPreset
@@ -749,6 +793,92 @@ mod tests {
 
         assert_eq!(messages.approvals, None);
         assert_eq!(messages.permissions, None);
+    }
+
+    #[test]
+    fn model_catalog_deserializer_accepts_template_only_and_legacy_only_entries() {
+        let mut template_only = serde_json::to_value(test_model(/*spec*/ None)).unwrap();
+        let template = "template instructions";
+        template_only
+            .as_object_mut()
+            .unwrap()
+            .remove("base_instructions");
+        template_only["model_messages"] = serde_json::json!({
+            "instructions_template": template,
+            "instructions_variables": null,
+        });
+
+        let mut legacy_only = serde_json::to_value(test_model(/*spec*/ None)).unwrap();
+        legacy_only
+            .as_object_mut()
+            .unwrap()
+            .remove("model_messages");
+
+        let response: ModelsResponse = serde_json::from_value(serde_json::json!({
+            "models": [template_only, legacy_only]
+        }))
+        .unwrap();
+
+        assert_eq!(response.models[0].base_instructions, template);
+        assert_eq!(
+            response.models[0].get_model_instructions(/*personality*/ None),
+            template
+        );
+        assert_eq!(response.models[1].base_instructions, "base");
+        assert_eq!(
+            response.models[1].get_model_instructions(/*personality*/ None),
+            "base"
+        );
+    }
+
+    #[test]
+    fn model_catalog_deserializer_prefers_template_and_rejects_missing_sources() {
+        let mut both = serde_json::to_value(test_model(/*spec*/ None)).unwrap();
+        both["model_messages"] = serde_json::json!({
+            "instructions_template": "canonical",
+            "instructions_variables": null,
+        });
+        let response: ModelsResponse = serde_json::from_value(serde_json::json!({
+            "models": [both]
+        }))
+        .unwrap();
+        assert_eq!(response.models[0].base_instructions, "base");
+        assert_eq!(
+            response.models[0].get_model_instructions(/*personality*/ None),
+            "canonical"
+        );
+
+        let mut fallback = serde_json::to_value(test_model(/*spec*/ None)).unwrap();
+        fallback["model_messages"] = serde_json::json!({
+            "instructions_template": " \n\t",
+            "instructions_variables": null,
+        });
+        let fallback_response: ModelsResponse = serde_json::from_value(serde_json::json!({
+            "models": [fallback]
+        }))
+        .unwrap();
+        assert_eq!(fallback_response.models[0].base_instructions, "base");
+        assert_eq!(
+            fallback_response.models[0].get_model_instructions(/*personality*/ None),
+            "base"
+        );
+
+        let mut invalid = serde_json::to_value(test_model(/*spec*/ None)).unwrap();
+        let invalid_object = invalid.as_object_mut().unwrap();
+        invalid_object.remove("base_instructions");
+        invalid_object.insert(
+            "model_messages".to_string(),
+            serde_json::json!({
+                "instructions_template": " \n\t",
+                "instructions_variables": null,
+            }),
+        );
+        let error = serde_json::from_value::<ModelsResponse>(serde_json::json!({
+            "models": [invalid]
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("missing both"));
     }
 
     #[test]

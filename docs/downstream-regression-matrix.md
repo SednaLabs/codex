@@ -47,6 +47,16 @@ Fast lanes used by `core-test-smoke` locally and by the remote smoke matrix:
 
 Focused targeted lanes for iterative work on the current carry seams:
 
+- `codex.agent-workflow-sanity`
+  - Runs `test_gh_pr_watch.py` and compiles `gh_pr_watch.py`. The source
+    contract covers exact-head decision and wake receipts, BLOCKED-versus-CLEAN
+    readiness, pending checks, published/ignored review evidence, and active
+    merge-queue cadence. QUEUED/AWAITING_CHECKS entries, including unreadable
+    pending heads, stay on base cadence; queue identity changes reset cadence;
+    ordinary green PRs without an active queue entry retain bounded backoff.
+    An unexplained BLOCKED merge state must remain action-required and must not
+    trigger green-state polling backoff.
+
 - `codex.core-startup-sync-targeted`
 - `codex.core-subagent-surface-targeted`
 - `codex.core-subagent-notification-contract-targeted`
@@ -99,6 +109,23 @@ Focused targeted lanes for iterative work on the current carry seams:
 - `codex.downstream-divergence-audit`
   - Explicit full-history registry/code audit against the checked-out head and
     current upstream mirror.
+
+## Sedna release update routing
+
+The installer and update surfaces share one boundary: automatic discovery is
+limited to stable, strictly newer releases on Linux `x86_64` and `aarch64`.
+Unsupported targets, prereleases, and macOS are automatic no-ops. The
+`--require-newer-than` rejection happens before asset downloads or `current`
+activation. Manual `--allow-prerelease` and `--macos-preview` are explicit
+operator modes and do not broaden automatic discovery.
+
+Focused references:
+
+- `scripts/install/test_sedna_release_lower_bound.py`
+- `scripts/install/test_sedna_release_installer.py`
+- TUI update-version and prompt tests
+- `codex doctor` release diagnostics
+- hosted `sedna.update-installer-contract`
 
 Validation workflow reference:
 

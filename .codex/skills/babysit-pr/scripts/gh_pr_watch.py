@@ -30,6 +30,8 @@ PENDING_CHECK_STATES = {
     "WAITING",
     "REQUESTED",
 }
+MERGE_QUEUE_WAITING_STATES = {"AWAITING_CHECKS", "LOCKED", "MERGEABLE", "QUEUED"}
+MERGE_QUEUE_FAILED_STATES = {"FAILED", "CANCELLED", "REMOVED", "UNMERGEABLE"}
 REVIEW_BOT_LOGIN_KEYWORDS = {
     "codex",
 }
@@ -51,10 +53,17 @@ MERGE_CONFLICT_OR_BLOCKING_STATES = {
 COMMAND_ONLY_ISSUE_COMMENT_MAX_TOKENS = 4
 GREEN_STATE_MAX_POLL_SECONDS = 60 * 60
 WATCH_UNTIL_ACTION_MAX_POLL_SECONDS = 20 * 60
+ACTION_REQUIRED_MERGE_POLICY_BLOCKED = "action_required_merge_policy_blocked"
+STOP_MERGE_QUEUE_FAILED = "stop_merge_queue_failed"
+STOP_MERGE_QUEUE_REMOVED = "stop_merge_queue_removed"
+STOP_MERGE_QUEUE_READ_ERROR = "stop_merge_queue_read_error"
 STOP_ACTIONS = {
     "stop_pr_closed",
     "stop_exhausted_retries",
     "stop_ready_to_merge",
+    STOP_MERGE_QUEUE_FAILED,
+    STOP_MERGE_QUEUE_REMOVED,
+    STOP_MERGE_QUEUE_READ_ERROR,
 }
 SEEN_FEEDBACK_STATE_KEYS = (
     "seen_issue_comment_ids",
@@ -368,6 +377,65 @@ def pr_view_fields():
     )
 
 
+def normalize_merge_queue_entry(raw_entry, field_present=True):
+    if not field_present:
+        return {"read_state": "error", "status": "unknown", "id": "", "state": "", "position": None, "head_sha": "", "source": "github", "details": "GitHub did not return merge-queue evidence."}
+    if raw_entry is None:
+        return {"read_state": "observed_absent", "status": "absent", "id": "", "state": "", "position": None, "head_sha": "", "source": "github", "details": "GitHub reports no active merge-queue entry."}
+    if not isinstance(raw_entry, dict):
+        return {"read_state": "error", "status": "unknown", "id": "", "state": "", "position": None, "head_sha": "", "source": "github", "details": "GitHub returned an invalid merge-queue entry."}
+    state = str(raw_entry.get("state") or "").upper()
+    status = "waiting" if state in MERGE_QUEUE_WAITING_STATES else "failed" if state in MERGE_QUEUE_FAILED_STATES else "unknown"
+    head_commit = raw_entry.get("headCommit") or {}
+    return {
+        "read_state": "observed",
+        "status": status,
+        "id": str(raw_entry.get("id") or ""),
+        "state": state,
+        "position": raw_entry.get("position"),
+        "head_sha": str(head_commit.get("oid") or "") if isinstance(head_commit, dict) else "",
+        "source": "github",
+        "details": "GitHub returned merge-queue evidence.",
+    }
+
+
+def get_merge_queue_entry(repo, pr_number):
+    owner, separator, name = str(repo or "").partition("/")
+    if not separator or not owner or not name:
+        return normalize_merge_queue_entry(None, field_present=False)
+    query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){mergeQueueEntry{id state position headCommit{oid}}}}}"
+    try:
+        payload = gh_json(["api", "graphql", "-f", f"query={query}", "-F", f"owner={owner}", "-F", f"name={name}", "-F", f"number={int(pr_number)}"])
+    except (GhCommandError, ValueError):
+        return normalize_merge_queue_entry(None, field_present=False)
+    if not isinstance(payload, dict) or payload.get("errors"):
+        return normalize_merge_queue_entry(None, field_present=False)
+    data = payload.get("data")
+    repository = data.get("repository") if isinstance(data, dict) else None
+    pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
+    if not isinstance(pull_request, dict):
+        return normalize_merge_queue_entry(None, field_present=False)
+    return normalize_merge_queue_entry(pull_request.get("mergeQueueEntry"), "mergeQueueEntry" in pull_request)
+
+
+def reconcile_merge_queue_entry(pr, state):
+    current = pr.get("merge_queue") or normalize_merge_queue_entry(None, field_present=False)
+    previous = state.get("last_merge_queue_entry")
+    same_head = str(state.get("last_merge_queue_pr_head_sha") or "") == str(pr.get("head_sha") or "")
+    if current.get("status") == "absent" and isinstance(previous, dict) and same_head:
+        if previous.get("status") == "waiting":
+            current = {**current, "status": "removed", "id": str(previous.get("id") or ""), "state": str(previous.get("state") or ""), "head_sha": str(previous.get("head_sha") or "")}
+        elif previous.get("status") in {"failed", "removed"}:
+            current = dict(previous)
+    if current.get("status") == "waiting":
+        state["last_merge_queue_entry"] = current
+        state["last_merge_queue_pr_head_sha"] = str(pr.get("head_sha") or "")
+    elif current.get("status") in {"failed", "removed"}:
+        state["last_merge_queue_entry"] = current
+        state["last_merge_queue_pr_head_sha"] = str(pr.get("head_sha") or "")
+    return current
+
+
 def checks_fields():
     return "name,state,bucket,link,workflow,event,startedAt,completedAt"
 
@@ -598,6 +666,60 @@ def save_state(path, state):
         except OSError:
             pass
         raise
+
+
+def build_watch_decision(snapshot, recorded_at=None):
+    """Build a compact decision receipt bound to the observed PR head."""
+    pr = snapshot.get("pr") or {}
+    checks = snapshot.get("checks") or {}
+    review_state = snapshot.get("review_state") or {}
+    actions = [str(action) for action in snapshot.get("actions") or []]
+    if recorded_at is None:
+        recorded_at = int(time.time())
+    return {
+        "schema_version": 1,
+        "recorded_at": int(recorded_at),
+        "repo": str(pr.get("repo") or ""),
+        "number": pr.get("number"),
+        "head_sha": str(pr.get("head_sha") or ""),
+        "decision": (
+            "action_required" if any(action != "idle" for action in actions) else "idle"
+        ),
+        "primary_action": actions[0] if actions else "idle",
+        "actions": actions,
+        "check_counts": {
+            "total": int(checks.get("total_count") or 0),
+            "passed": int(checks.get("passed_count") or 0),
+            "failed": int(checks.get("failed_count") or 0),
+            "pending": int(checks.get("pending_count") or 0),
+        },
+        "review_counts": {
+            "active_unresolved": int(review_state.get("active_unresolved_thread_count") or 0),
+            "ignored_unresolved": int(review_state.get("ignored_unresolved_thread_count") or 0),
+        },
+    }
+
+
+def persist_watch_schedule(
+    state_path, snapshot, mode, next_poll_seconds, scheduled_at=None
+):
+    """Persist the next wake, bound to the exact head observed by this snapshot."""
+    state, _ = load_state(state_path)
+    pr = snapshot.get("pr") or {}
+    if scheduled_at is None:
+        scheduled_at = int(time.time())
+    delay = max(int(next_poll_seconds), 0)
+    state["watch_schedule"] = {
+        "schema_version": 1,
+        "mode": str(mode),
+        "repo": str(pr.get("repo") or ""),
+        "number": pr.get("number"),
+        "head_sha": str(pr.get("head_sha") or ""),
+        "poll_seconds": delay,
+        "scheduled_at": int(scheduled_at),
+        "wake_at": int(scheduled_at) + delay,
+    }
+    save_state(state_path, state)
 
 
 def safe_state_file_name(name):
@@ -1563,6 +1685,8 @@ def is_pr_ready_to_merge(pr, checks_summary, actionable_review_items, review_sta
         return False
     if str(pr.get("review_decision") or "") in MERGE_BLOCKING_REVIEW_DECISIONS:
         return False
+    if str((pr.get("merge_queue") or {}).get("status") or "") not in {"", "absent"}:
+        return False
     return True
 
 
@@ -1584,12 +1708,39 @@ def recommend_actions(
         actions.append("stop_pr_closed")
         return unique_actions(actions)
 
+    queue_status = str((pr.get("merge_queue") or {}).get("status") or "")
+    if queue_status == "failed":
+        actions.append(STOP_MERGE_QUEUE_FAILED)
+    elif queue_status == "removed":
+        actions.append(STOP_MERGE_QUEUE_REMOVED)
+    elif queue_status == "unknown":
+        actions.append(STOP_MERGE_QUEUE_READ_ERROR)
+
     if is_pr_ready_to_merge(pr, checks_summary, actionable_review_items, review_state):
         actions.append("stop_ready_to_merge")
         return unique_actions(actions)
 
     if actionable_review_items:
         actions.append("process_review_comment")
+
+    # A BLOCKED merge state is actionable only when current check/review
+    # evidence does not already explain why the PR cannot proceed.
+    has_explaining_blocker = bool(
+        str(pr.get("mergeable") or "") != "MERGEABLE"
+        or not checks_summary.get("all_terminal")
+        or checks_summary.get("pending_count")
+        or checks_summary.get("failed_count")
+        or failed_jobs
+        or actionable_review_items
+        or int(review_state.get("active_unresolved_thread_count") or 0) > 0
+        or str(pr.get("review_decision") or "") in MERGE_BLOCKING_REVIEW_DECISIONS
+        or str((pr.get("merge_queue") or {}).get("status") or "") == "waiting"
+    )
+    if (
+        str(pr.get("merge_state_status") or "").upper() == "BLOCKED"
+        and not has_explaining_blocker
+    ):
+        actions.append(ACTION_REQUIRED_MERGE_POLICY_BLOCKED)
 
     has_failed_pr_checks = checks_summary["failed_count"] > 0 or bool(failed_jobs)
     if has_failed_pr_checks:
@@ -1617,6 +1768,9 @@ def collect_snapshot(args, cache=None):
     validate_pr_resolution(args.pr, args.repo, pr, local_git_context)
     state_path = state_file_for(args, pr)
     state, fresh_state = load_state(state_path)
+    pr["merge_queue"] = reconcile_merge_queue_entry(
+        {**pr, "merge_queue": get_merge_queue_entry(pr["repo"], pr["number"])}, state
+    )
     maybe_reset_seen_feedback(args, state)
 
     if not state.get("started_at"):
@@ -1712,6 +1866,12 @@ def collect_snapshot(args, cache=None):
             "max_flaky_retries": args.max_flaky_retries,
         },
     }
+    observed_at = int(time.time())
+    state, _ = load_state(state_path)
+    watch_decision = build_watch_decision(snapshot, recorded_at=observed_at)
+    state["last_watch_decision"] = watch_decision
+    save_state(state_path, state)
+    snapshot["watch_decision"] = watch_decision
     return snapshot, state_path
 
 
@@ -1936,6 +2096,16 @@ def snapshot_change_key(snapshot):
     checks = snapshot.get("checks") or {}
     review_state = snapshot.get("review_state") or {}
     review_items = snapshot.get("actionable_review_items") or []
+    merge_queue = pr.get("merge_queue") or {}
+    # Queue identity is part of the lifecycle, even when the check rollup is
+    # unchanged. A replacement or removal must not retain stale backoff.
+    queue_identity = (
+        str(merge_queue.get("read_state") or ""),
+        str(merge_queue.get("status") or ""),
+        str(merge_queue.get("id") or ""),
+        str(merge_queue.get("state") or ""),
+        str(merge_queue.get("head_sha") or ""),
+    )
     return (
         str(pr.get("head_sha") or ""),
         str(pr.get("state") or ""),
@@ -1951,12 +2121,30 @@ def snapshot_change_key(snapshot):
             for item in review_items
             if isinstance(item, dict)
         ),
+        queue_identity,
         tuple(snapshot.get("actions") or []),
     )
 
 
 def has_non_idle_actions(snapshot):
     return any(action != "idle" for action in (snapshot.get("actions") or []))
+
+
+def has_active_merge_queue_wait(snapshot):
+    """Return whether the snapshot is waiting on a live merge-queue entry.
+
+    Queue evidence is deliberately interpreted fail-closed for cadence: a
+    waiting entry with an unreadable/missing pending head still gets the base
+    cadence, while queue failures, removals, and unrelated blockers do not.
+    This prevents a stale green snapshot from sleeping for many minutes while
+    queue lifecycle evidence is incomplete or changing.
+    """
+    merge_queue = (snapshot.get("pr") or {}).get("merge_queue") or {}
+    return (
+        str(merge_queue.get("status") or "").lower() == "waiting"
+        and str(merge_queue.get("state") or "").upper()
+        in MERGE_QUEUE_WAITING_STATES
+    )
 
 
 def _compact_review_item(item):
@@ -2004,6 +2192,7 @@ def compact_wait_snapshot(snapshot):
     }
     return {
         "pr": compact_pr,
+        "watch_decision": snapshot.get("watch_decision"),
         "watch_context": snapshot.get("watch_context"),
         "checks": snapshot.get("checks"),
         "checks_source": snapshot.get("checks_source"),
@@ -2045,8 +2234,11 @@ def next_watch_poll_seconds(
     current_change_key = snapshot_change_key(snapshot)
     changed = current_change_key != last_change_key
     green = is_ci_green(snapshot)
+    queue_waiting = has_active_merge_queue_wait(snapshot)
 
-    if not green:
+    actions = set(snapshot.get("actions") or [])
+    policy_blocked = ACTION_REQUIRED_MERGE_POLICY_BLOCKED in actions
+    if not green or policy_blocked or queue_waiting:
         next_poll_seconds = args.poll_seconds
     elif changed or last_change_key is None:
         next_poll_seconds = args.poll_seconds
@@ -2072,6 +2264,7 @@ def run_watch(args):
         )
         actions = set(snapshot.get("actions") or [])
         if actions & STOP_ACTIONS:
+            persist_watch_schedule(state_path, snapshot, "watch", 0)
             print_event(
                 "stop", {"actions": snapshot.get("actions"), "pr": snapshot.get("pr")}
             )
@@ -2084,6 +2277,7 @@ def run_watch(args):
             poll_seconds,
             GREEN_STATE_MAX_POLL_SECONDS,
         )
+        persist_watch_schedule(state_path, snapshot, "watch", poll_seconds)
         time.sleep(poll_seconds)
 
 
@@ -2110,6 +2304,7 @@ def run_watch_until_action(args):
                 if getattr(args, "verbose_details", False)
                 else compact_wait_snapshot(snapshot)
             )
+            persist_watch_schedule(state_path, snapshot, "watch-until-action", 0)
             print_json(
                 {
                     "elapsed_seconds": int(max(time.time() - started_at, 0)),
@@ -2128,6 +2323,7 @@ def run_watch_until_action(args):
             poll_seconds,
             WATCH_UNTIL_ACTION_MAX_POLL_SECONDS,
         )
+        persist_watch_schedule(state_path, snapshot, "watch-until-action", poll_seconds)
         if getattr(args, "progress", False):
             print_status(
                 "gh_pr_watch.py waiting: "

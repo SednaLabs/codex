@@ -51,6 +51,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
+use codex_utils_version::SednaReleaseChannel;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -471,6 +472,11 @@ pub struct ConfigToml {
     /// Set to `false` only if your Codex updates are centrally managed.
     /// Defaults to `true`.
     pub check_for_update_on_startup: Option<bool>,
+
+    /// The published Sedna release stream used by update notices. `stable`
+    /// includes only GitHub Releases whose `prerelease` flag is false.
+    /// Defaults to `stable`.
+    pub sedna_release_channel: Option<SednaReleaseChannel>,
 
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering

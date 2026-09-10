@@ -135,6 +135,8 @@ pub(crate) struct AssignTaskArgs {
 #[derive(Debug, Serialize)]
 struct FollowupTaskResult {
     task_name: String,
+    recipient_task_name: String,
+    effective_identity_scope: &'static str,
     effective_model: String,
     effective_model_provider_id: String,
     effective_reasoning_effort: Option<ReasoningEffort>,
@@ -144,6 +146,8 @@ struct FollowupTaskResult {
 #[derive(Debug, Serialize)]
 struct SendMessageReceipt {
     task_name: String,
+    recipient_task_name: String,
+    effective_identity_scope: &'static str,
     handoff_state: &'static str,
     effective_model: Option<String>,
     effective_model_provider_id: Option<String>,
@@ -341,6 +345,8 @@ async fn handle_message_submission_inner(
         MessageDeliveryMode::QueueOnly => {
             let receipt = SendMessageReceipt {
                 task_name: receiver_agent_path.to_string(),
+                recipient_task_name: receiver_agent_path.to_string(),
+                effective_identity_scope: "recipient",
                 handoff_state: "queued",
                 effective_model: receiver_config.as_ref().map(|config| config.model.clone()),
                 effective_model_provider_id: receiver_config
@@ -364,6 +370,8 @@ async fn handle_message_submission_inner(
             tool_output_json_text(
                 &FollowupTaskResult {
                     task_name: receiver_agent_path.to_string(),
+                    recipient_task_name: receiver_agent_path.to_string(),
+                    effective_identity_scope: "recipient",
                     effective_model: receiver_config.model,
                     effective_model_provider_id: receiver_config.model_provider_id,
                     effective_reasoning_effort: receiver_config.reasoning_effort,

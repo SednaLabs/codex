@@ -19,6 +19,7 @@ on:
         options:
           - all
           - core-compile-smoke
+          - codex.model-catalog-compat-targeted
           - core-carry-core-smoke
           - codex.nextest-archive-core-carry-pilot
           - core-carry-ui-smoke

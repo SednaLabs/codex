@@ -24,6 +24,11 @@ on:
           - auto
           - stable
           - prerelease
+      allow_markerless_prerelease:
+        description: Explicitly allow a markerless prerelease from the selected protected main tip.
+        required: false
+        default: false
+        type: boolean
       release_tag:
         description: Optional expected Sedna release tag. The resolver must compute the same tag.
         required: false
@@ -34,13 +39,14 @@ on:
         default: false
         type: boolean
       macos_release_mode:
-        description: "Intel macOS assets: omit, publish an ad-hoc signed preview, or require Developer ID notarization."
+        description: "Intel macOS assets: omit, publish an ad-hoc unnotarized asset, or require Developer ID notarization."
         required: true
         default: "off"
         type: choice
         options:
           - "off"
           - preview
+          - unnotarized
           - notarized
 
 permissions: {}
@@ -230,6 +236,7 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           INPUT_TARGET_SHA: ${{ inputs.target_sha }}
           INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_ALLOW_MARKERLESS_PRERELEASE: ${{ inputs.allow_markerless_prerelease }}
           INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
           INPUT_DRAFT: ${{ inputs.draft }}
           INPUT_MACOS_RELEASE_MODE: ${{ inputs.macos_release_mode }}
@@ -255,6 +262,8 @@ jobs:
             args+=(--target-sha "${target_sha}" --channel "${INPUT_CHANNEL}")
             if [[ -n "${INPUT_RELEASE_TAG}" ]]; then
               args+=(--release-tag "${INPUT_RELEASE_TAG}")
+            elif [[ "${INPUT_CHANNEL}" == "prerelease" && "${INPUT_ALLOW_MARKERLESS_PRERELEASE}" == "true" ]]; then
+              : # Explicit prerelease-main opt-in permits automatic markerless tag allocation.
             else
               args+=(--require-marker --missing-marker error)
             fi
@@ -289,6 +298,13 @@ jobs:
           if [[ "${EVENT_NAME}" != "workflow_dispatch" ]]; then
             macos_release_mode="off"
           fi
+          case "${macos_release_mode}" in
+            off|preview|unnotarized|notarized) ;;
+            *)
+              echo "Unsupported Intel macOS release mode: ${macos_release_mode}" >&2
+              exit 1
+              ;;
+          esac
           if [[ "${macos_release_mode}" == "preview" ]] && [[ "$(jq -r '.github_prerelease' "${meta_json}")" != "true" ]]; then
             echo "Ad-hoc signed Intel macOS assets may only be attached to prereleases." >&2
             exit 1
@@ -428,7 +444,7 @@ jobs:
           key: sedna-release-cargo-home-linux-rust-${{ matrix.target }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
 
       - name: Install sccache
-        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
         with:
           tool: sccache
 
@@ -646,7 +662,7 @@ jobs:
           PY
 
       - name: Generate SPDX SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           path: codex-rs/stage/${{ matrix.target }}
           format: spdx-json
@@ -760,6 +776,7 @@ jobs:
         needs.resolve.outputs.macos_release_mode != 'off' &&
         (
           needs.resolve.outputs.macos_release_mode == 'preview' ||
+          needs.resolve.outputs.macos_release_mode == 'unnotarized' ||
           needs.release-macos-signing-preflight.result == 'success'
         )
       }}
@@ -779,6 +796,7 @@ jobs:
       CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: packed
       SCCACHE_CACHE_SIZE: 2G
       TARGET: x86_64-apple-darwin
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
 
     steps:
       - uses: actions/checkout@v7
@@ -820,7 +838,7 @@ jobs:
             sedna-release-cargo-home-macos-15-intel-x86_64-apple-darwin-
 
       - name: Install sccache
-        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
         with:
           tool: sccache
 
@@ -922,17 +940,29 @@ jobs:
           key: sedna-release-sccache-macos-15-intel-x86_64-apple-darwin-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}-${{ github.run_id }}
 
   release-macos-preview-package:
-    name: Package Intel macOS prerelease preview
+    name: Package Intel macOS ad-hoc unnotarized asset
     needs:
       - resolve
       - release-macos-build
-    if: ${{ needs.resolve.outputs.macos_release_mode == 'preview' }}
+    if: >-
+      ${{
+        always() &&
+        needs.resolve.result == 'success' &&
+        needs.resolve.outputs.release_requested == 'true' &&
+        needs.resolve.outputs.release_build_required == 'true' &&
+        needs.release-macos-build.result == 'success' &&
+        (
+          needs.resolve.outputs.macos_release_mode == 'preview' ||
+          needs.resolve.outputs.macos_release_mode == 'unnotarized'
+        )
+      }}
     runs-on: macos-15-intel
     timeout-minutes: 30
     permissions:
       contents: read
     env:
       TARGET: x86_64-apple-darwin
+      MACOS_RELEASE_MODE: ${{ needs.resolve.outputs.macos_release_mode }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -954,11 +984,19 @@ jobs:
         run: |
           set -euo pipefail
           input_dir="${RUNNER_TEMP}/unsigned-macos"
-          stage_dir="${RUNNER_TEMP}/sedna-release-preview/${TARGET}"
-          dist_dir="${GITHUB_WORKSPACE}/dist-macos-preview"
-          archive_name="codex-sedna-${RELEASE_VERSION}-${TARGET}-UNNOTARIZED-PREVIEW.tar.gz"
-          metadata_name="RELEASE-METADATA-${TARGET}-UNNOTARIZED-PREVIEW.json"
-          checksum_name="SHA256SUMS-${TARGET}-UNNOTARIZED-PREVIEW.txt"
+          suffix="UNNOTARIZED"
+          distribution="unnotarized"
+          if [[ "${MACOS_RELEASE_MODE}" == "preview" ]]; then
+            suffix="UNNOTARIZED-PREVIEW"
+            distribution="preview"
+          fi
+          # Compatibility labels retained for preview consumers: dist-macos-preview,
+          # "distribution": "preview", and the UNNOTARIZED-PREVIEW suffix.
+          stage_dir="${RUNNER_TEMP}/sedna-release-${distribution}/${TARGET}"
+          dist_dir="${GITHUB_WORKSPACE}/dist-macos-${distribution}"
+          archive_name="codex-sedna-${RELEASE_VERSION}-${TARGET}-${suffix}.tar.gz"
+          metadata_name="RELEASE-METADATA-${TARGET}-${suffix}.json"
+          checksum_name="SHA256SUMS-${TARGET}-${suffix}.txt"
           rm -rf "${stage_dir}" "${dist_dir}"
           mkdir -p "${stage_dir}" "${dist_dir}"
 
@@ -976,6 +1014,12 @@ jobs:
               --timestamp none \
               --entitlements "${entitlements}"
             lipo "${staged_path}" -verify_arch x86_64
+            minos="$(otool -l "${staged_path}" | awk '/LC_BUILD_VERSION/{found=1; next} found && $1 == "minos" {print $2; exit}')"
+            if [[ -z "${minos}" ]]; then
+              echo "error: missing LC_BUILD_VERSION minos load command" >&2
+              exit 1
+            fi
+            python3 .github/scripts/validate_macos_minimum.py "${minos}"
             codesign --verify --strict --verbose=2 "${staged_path}"
             codesign -dvvv "${staged_path}" 2>&1 | grep -F "Signature=adhoc"
           done
@@ -989,6 +1033,8 @@ jobs:
           import os
           import sys
 
+          distribution = os.environ["MACOS_RELEASE_MODE"]
+
           json.dump(
               {
                   "release_tag": os.environ["RELEASE_TAG"],
@@ -996,7 +1042,7 @@ jobs:
                   "repository": os.environ["REPOSITORY"],
                   "target_commit": os.environ["TARGET_COMMIT"],
                   "target": os.environ["TARGET"],
-                  "distribution": "preview",
+                  "distribution": distribution,
                   "signing": "ad-hoc",
                   "notarized": False,
                   "gatekeeper_ready": False,
@@ -1013,11 +1059,11 @@ jobs:
             shasum -a 256 "${archive_name}" "${metadata_name}" > "${checksum_name}"
           )
 
-      - name: Upload Intel macOS preview assets
+      - name: Upload Intel macOS ad-hoc unnotarized assets
         uses: actions/upload-artifact@v7
         with:
-          name: sedna-release-macos-x64-preview
-          path: dist-macos-preview/*
+          name: ${{ needs.resolve.outputs.macos_release_mode == 'preview' && 'sedna-release-macos-x64-preview' || 'sedna-release-macos-x64-unnotarized' }}
+          path: dist-macos-${{ needs.resolve.outputs.macos_release_mode == 'preview' && 'preview' || 'unnotarized' }}/*
           if-no-files-found: error
           retention-days: 3
 
@@ -1322,6 +1368,12 @@ jobs:
 
             chmod 0755 "${path}"
             lipo "${path}" -verify_arch x86_64
+            minos="$(otool -l "${path}" | awk '/LC_BUILD_VERSION/{found=1; next} found && $1 == "minos" {print $2; exit}')"
+            if [[ -z "${minos}" ]]; then
+              echo "error: missing LC_BUILD_VERSION minos load command" >&2
+              exit 1
+            fi
+            python3 .github/scripts/validate_macos_minimum.py "${minos}"
             codesign --verify --strict --verbose=2 "${path}"
             expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/${binary}.entitlements.plist"
             test -f "${expected_entitlements}"
@@ -1396,6 +1448,10 @@ jobs:
             needs.release-macos-preview-package.result == 'success'
           ) ||
           (
+            needs.resolve.outputs.macos_release_mode == 'unnotarized' &&
+            needs.release-macos-preview-package.result == 'success'
+          ) ||
+          (
             needs.resolve.outputs.macos_release_mode == 'notarized' &&
             needs.release-macos-finalize.result == 'success'
           )
@@ -1434,6 +1490,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: sedna-release-macos-x64-preview
+          path: dist
+      - name: Download Intel macOS unnotarized artifacts
+        if: ${{ needs.resolve.outputs.macos_release_mode == 'unnotarized' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: sedna-release-macos-x64-unnotarized
           path: dist
 
       - name: Check release publisher app configuration
@@ -1508,6 +1570,11 @@ jobs:
             preview_notes+="The Intel macOS asset is ad-hoc signed and **not Developer ID signed or notarized by Apple**. "
             preview_notes+="It is a preview artifact, may be blocked by Gatekeeper, and is not an official supported macOS distribution."
             notes_flag+=(--notes "${preview_notes}")
+          elif [[ "${MACOS_RELEASE_MODE}" == "unnotarized" ]]; then
+            unnotarized_notes="### Intel macOS unnotarized asset"$'\n\n'
+            unnotarized_notes+="The Intel macOS asset is ad-hoc signed and **not Developer ID signed or notarized by Apple**. "
+            unnotarized_notes+="It is provided without an Apple identity and may be blocked by Gatekeeper."
+            notes_flag+=(--notes "${unnotarized_notes}")
           fi
 
           gh release create "${RELEASE_TAG}" "${assets[@]}" \

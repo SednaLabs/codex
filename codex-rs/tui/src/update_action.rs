@@ -1,24 +1,31 @@
+#![cfg_attr(test, allow(dead_code))]
+
 #[cfg(any(not(debug_assertions), test))]
 use codex_install_context::InstallContext;
 #[cfg(any(not(debug_assertions), test))]
 use codex_install_context::InstallMethod;
 #[cfg(any(not(debug_assertions), test))]
 use codex_install_context::StandalonePlatform;
+use codex_utils_version::SednaReleaseChannel;
 
 /// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAction {
     /// Update via the fork-owned standalone release installer.
-    StandaloneUnix,
+    StandaloneUnix(SednaReleaseChannel),
 }
 
 impl UpdateAction {
-    #[cfg(not(debug_assertions))]
-    pub(crate) fn from_install_context(context: &InstallContext) -> Option<Self> {
-        Self::from_install_context_for_sedna_release(
+    #[cfg(any(not(debug_assertions), test))]
+    pub(crate) fn from_install_context(
+        context: &InstallContext,
+        release_channel: SednaReleaseChannel,
+    ) -> Option<Self> {
+        Self::from_install_context_for_sedna_release_with_channel(
             context,
             crate::version::is_sedna_release_channel(),
             crate::version::CODEX_CLI_VERSION,
+            release_channel,
         )
     }
 
@@ -28,12 +35,28 @@ impl UpdateAction {
         has_sedna_identity: bool,
         running_release_version: &str,
     ) -> Option<Self> {
-        Self::from_install_context_for_sedna_release_on_target(
+        Self::from_install_context_for_sedna_release_with_channel(
+            context,
+            has_sedna_identity,
+            running_release_version,
+            SednaReleaseChannel::Stable,
+        )
+    }
+
+    #[cfg(any(not(debug_assertions), test))]
+    fn from_install_context_for_sedna_release_with_channel(
+        context: &InstallContext,
+        has_sedna_identity: bool,
+        running_release_version: &str,
+        release_channel: SednaReleaseChannel,
+    ) -> Option<Self> {
+        Self::from_install_context_for_sedna_release_on_target_with_channel(
             context,
             has_sedna_identity,
             running_release_version,
             std::env::consts::OS,
             std::env::consts::ARCH,
+            release_channel,
         )
     }
 
@@ -45,11 +68,31 @@ impl UpdateAction {
         target_os: &str,
         target_arch: &str,
     ) -> Option<Self> {
+        Self::from_install_context_for_sedna_release_on_target_with_channel(
+            context,
+            has_sedna_identity,
+            running_release_version,
+            target_os,
+            target_arch,
+            SednaReleaseChannel::Stable,
+        )
+    }
+
+    #[cfg(any(not(debug_assertions), test))]
+    fn from_install_context_for_sedna_release_on_target_with_channel(
+        context: &InstallContext,
+        has_sedna_identity: bool,
+        running_release_version: &str,
+        target_os: &str,
+        target_arch: &str,
+        release_channel: SednaReleaseChannel,
+    ) -> Option<Self> {
         if !has_sedna_identity
-            || !codex_utils_version::is_sedna_automatic_update_eligible(
+            || !codex_utils_version::is_sedna_automatic_update_eligible_for_channel(
                 running_release_version,
                 target_os,
                 target_arch,
+                release_channel,
             )
         {
             return None;
@@ -59,7 +102,7 @@ impl UpdateAction {
                 None
             }
             InstallMethod::Standalone { platform, .. } => Some(match platform {
-                StandalonePlatform::Unix => UpdateAction::StandaloneUnix,
+                StandalonePlatform::Unix => UpdateAction::StandaloneUnix(release_channel),
                 StandalonePlatform::Windows => return None,
             }),
             InstallMethod::Other => None,
@@ -68,17 +111,27 @@ impl UpdateAction {
 
     /// Returns the list of command-line arguments for invoking the update.
     pub fn command_args(self) -> (&'static str, Vec<String>) {
-        Self::sedna_standalone_unix_command_args()
+        Self::sedna_standalone_unix_command_args(match self {
+            Self::StandaloneUnix(channel) => channel,
+        })
     }
 
-    fn sedna_standalone_unix_command_args() -> (&'static str, Vec<String>) {
+    fn sedna_standalone_unix_command_args(
+        release_channel: SednaReleaseChannel,
+    ) -> (&'static str, Vec<String>) {
+        let allow_prerelease = if release_channel == SednaReleaseChannel::Prerelease {
+            " --allow-prerelease"
+        } else {
+            ""
+        };
         (
             "bash",
             vec![
                 "-c".to_string(),
                 format!(
-                    "curl -fsSL https://raw.githubusercontent.com/sednalabs/codex/main/scripts/install_sedna_release_asset | CODEX_NON_INTERACTIVE=1 bash -s -- --repository sednalabs/codex --release-tag latest --require-newer-than {}",
+                    "curl -fsSL https://raw.githubusercontent.com/sednalabs/codex/main/scripts/install_sedna_release_asset | CODEX_NON_INTERACTIVE=1 bash -s -- --repository sednalabs/codex --release-tag latest --require-newer-than {}{}",
                     crate::version::CODEX_CLI_VERSION,
+                    allow_prerelease,
                 ),
             ],
         )
@@ -92,9 +145,9 @@ impl UpdateAction {
     }
 }
 
-#[cfg(not(debug_assertions))]
-pub fn get_update_action() -> Option<UpdateAction> {
-    UpdateAction::from_install_context(InstallContext::current())
+#[cfg(any(not(debug_assertions), test))]
+pub fn get_update_action(release_channel: SednaReleaseChannel) -> Option<UpdateAction> {
+    UpdateAction::from_install_context(InstallContext::current(), release_channel)
 }
 
 #[cfg(test)]
@@ -179,7 +232,7 @@ mod tests {
                 "linux",
                 "x86_64",
             ),
-            Some(UpdateAction::StandaloneUnix)
+            Some(UpdateAction::StandaloneUnix(SednaReleaseChannel::Stable))
         );
         assert_eq!(
             UpdateAction::from_install_context_for_sedna_release(
@@ -257,7 +310,7 @@ mod tests {
                 "linux",
                 "x86_64",
             ),
-            Some(UpdateAction::StandaloneUnix)
+            Some(UpdateAction::StandaloneUnix(SednaReleaseChannel::Stable))
         );
         for target in [
             ("macos", "x86_64"),
@@ -292,14 +345,14 @@ mod tests {
                 "linux",
                 "x86_64",
             ),
-            None
+            Some(UpdateAction::StandaloneUnix(SednaReleaseChannel::Stable))
         );
     }
 
     #[test]
     fn standalone_unix_update_uses_the_fork_installer() {
         assert_eq!(
-            UpdateAction::StandaloneUnix.command_args(),
+            UpdateAction::StandaloneUnix(SednaReleaseChannel::Stable).command_args(),
             (
                 "bash",
                 vec![
@@ -310,6 +363,44 @@ mod tests {
                     ),
                 ],
             )
+        );
+    }
+
+    #[test]
+    fn prerelease_channel_selects_prerelease_eligibility_and_installer_argument() {
+        let native_release_dir =
+            AbsolutePathBuf::from_absolute_path(std::env::temp_dir().join("native-release"))
+                .expect("temp dir path should be absolute");
+        let context = InstallContext {
+            method: InstallMethod::Standalone {
+                platform: StandalonePlatform::Unix,
+                release_dir: native_release_dir,
+                resources_dir: None,
+            },
+            package_layout: None,
+        };
+
+        let action = UpdateAction::from_install_context_for_sedna_release_on_target_with_channel(
+            &context,
+            /*has_sedna_identity*/ true,
+            "1.2.3-alpha.1-sedna.1",
+            "linux",
+            "x86_64",
+            SednaReleaseChannel::Prerelease,
+        );
+        assert_eq!(
+            action,
+            Some(UpdateAction::StandaloneUnix(
+                SednaReleaseChannel::Prerelease
+            ))
+        );
+        assert!(
+            action
+                .expect("prerelease action")
+                .command_args()
+                .1
+                .join(" ")
+                .contains("--allow-prerelease")
         );
     }
 }
