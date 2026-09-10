@@ -138,6 +138,27 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
+      - name: Materialize exact frozen classifier reference
+        env:
+          REFERENCE_SHA: bc95757b43a5c293de98cfef210baed11da205e3
+          REFERENCE_TREE: 6a57e87d801fcdcdef3aca98e75116b6bb1a13c7
+          REFERENCE_BLOB: 6395bdc602ecf02cf15d7b37db4b8d40fb44b1b8
+          REFERENCE_FILE_SHA256: 5b04c3c6cf0ca510a7cce17e27038fe4a5ef92a9ca26d90936be81c4ed73663e
+        run: |
+          set -euo pipefail; umask 077
+          reference_root="$RUNNER_TEMP/history-rewrite-reference"
+          reference_repo="$reference_root/repo.git"
+          reference_script="$reference_root/classify-bc95757.py"
+          mkdir -m 700 "$reference_root"
+          git init --bare "$reference_repo" >/dev/null
+          git -C "$reference_repo" fetch --no-tags --no-write-fetch-head \
+            "https://github.com/$GITHUB_REPOSITORY.git" \
+            "$REFERENCE_SHA:refs/testing/history-rewrite-reference/$REFERENCE_SHA"
+          test "$(git -C "$reference_repo" rev-parse "$REFERENCE_SHA^{tree}")" = "$REFERENCE_TREE"
+          test "$(git -C "$reference_repo" rev-parse "$REFERENCE_SHA:scripts/history-rewrite/classify.py")" = "$REFERENCE_BLOB"
+          git -C "$reference_repo" show "$REFERENCE_SHA:scripts/history-rewrite/classify.py" > "$reference_script"
+          test "$(sha256sum "$reference_script" | cut -d' ' -f1)" = "$REFERENCE_FILE_SHA256"
+          printf 'HISTORY_REWRITE_REFERENCE_CLASSIFIER=%s\n' "$reference_script" >> "$GITHUB_ENV"
       - name: Verify frozen inputs and reviewed adapter policy
         run: |
           set -euo pipefail; umask 077
