@@ -149,6 +149,7 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
     matches!(
         notification,
         ServerNotification::TurnCompleted(_)
+            | ServerNotification::ThreadClosed(_)
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ItemCompleted(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
@@ -1332,6 +1333,21 @@ mod tests {
                 delta: delta.to_string(),
             },
         )
+    }
+
+    fn remote_thread_closed_notification(thread_id: &str) -> ServerNotification {
+        ServerNotification::ThreadClosed(codex_app_server_protocol::ThreadClosedNotification {
+            thread_id: thread_id.to_string(),
+        })
+    }
+
+    fn remote_get_account_request(request_id: i64) -> ClientRequest {
+        ClientRequest::GetAccount {
+            request_id: RequestId::Integer(request_id),
+            params: codex_app_server_protocol::GetAccountParams {
+                refresh_token: false,
+            },
+        }
     }
 
     fn agent_message_delta_notification(delta: &str) -> ServerNotification {
@@ -2671,6 +2687,226 @@ mod tests {
             .await
             .expect("disconnect event should arrive");
         assert!(matches!(event, AppServerEvent::Disconnected { .. }));
+    }
+
+    #[tokio::test]
+    async fn remote_pending_required_event_keeps_request_control_responsive() {
+        let (done_tx, done_rx) = oneshot::channel();
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            for thread_id in ["queued", "pending"] {
+                let notification = remote_thread_closed_notification(thread_id);
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Notification(
+                        serde_json::from_value(serde_json::to_value(notification).unwrap())
+                            .unwrap(),
+                    ),
+                )
+                .await;
+            }
+            let request = read_websocket_message(&mut websocket).await;
+            let JSONRPCMessage::Request(request) = request else {
+                panic!("expected account request");
+            };
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(GetAccountResponse {
+                        account: None,
+                        requires_openai_auth: false,
+                    })
+                    .unwrap(),
+                }),
+            )
+            .await;
+            let _ = done_rx.await;
+        })
+        .await;
+        let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            channel_capacity: 1,
+            ..test_remote_connect_args(websocket_url)
+        })
+        .await
+        .unwrap();
+        timeout(
+            Duration::from_secs(1),
+            client._test_pending_required_event.notified(),
+        )
+        .await
+        .expect("second required event should enter custody");
+        let request_handle = client.request_handle();
+        let request_task = tokio::spawn(async move {
+            request_handle
+                .request_typed::<GetAccountResponse>(remote_get_account_request(
+                    /*request_id*/ 92,
+                ))
+                .await
+        });
+        let request = timeout(Duration::from_secs(1), request_task)
+            .await
+            .expect("request control should remain responsive while events are unread")
+            .expect("request task should join")
+            .unwrap();
+        assert!(!request.requires_openai_auth);
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued")
+        );
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "pending")
+        );
+        done_tx.send(()).unwrap();
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remote_shutdown_preserves_pending_required_event_order() {
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            for thread_id in ["queued", "pending"] {
+                let notification = remote_thread_closed_notification(thread_id);
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Notification(
+                        serde_json::from_value(serde_json::to_value(notification).unwrap())
+                            .unwrap(),
+                    ),
+                )
+                .await;
+            }
+            let _ = websocket.next().await;
+        })
+        .await;
+        let client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            channel_capacity: 1,
+            ..test_remote_connect_args(websocket_url)
+        })
+        .await
+        .unwrap();
+        timeout(
+            Duration::from_secs(1),
+            client._test_pending_required_event.notified(),
+        )
+        .await
+        .expect("second required event should enter custody");
+        timeout(Duration::from_secs(1), client.shutdown())
+            .await
+            .expect("shutdown should not wait for pending event")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn remote_write_failure_preserves_pending_required_before_disconnect() {
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            for thread_id in ["queued", "pending"] {
+                let notification = remote_thread_closed_notification(thread_id);
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Notification(
+                        serde_json::from_value(serde_json::to_value(notification).unwrap())
+                            .unwrap(),
+                    ),
+                )
+                .await;
+            }
+            let _ = websocket.next().await;
+        })
+        .await;
+        let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            channel_capacity: 1,
+            ..test_remote_connect_args(websocket_url)
+        })
+        .await
+        .unwrap();
+        timeout(
+            Duration::from_secs(1),
+            client._test_pending_required_event.notified(),
+        )
+        .await
+        .expect("second required event should enter custody");
+        client.close_stream_for_test().await.unwrap();
+        let request_error = timeout(
+            Duration::from_secs(1),
+            client.request(remote_get_account_request(/*request_id*/ 93)),
+        )
+        .await
+        .expect("failed request write should settle promptly")
+        .expect_err("request should receive terminal transport error");
+        assert_eq!(request_error.kind(), ErrorKind::BrokenPipe);
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued")
+        );
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "pending")
+        );
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::Disconnected { message }) if message.contains("write failed"))
+        );
+        client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn remote_write_failure_delivers_lag_before_disconnect() {
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Notification(
+                    serde_json::from_value(
+                        serde_json::to_value(remote_thread_closed_notification("queued")).unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .await;
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Notification(
+                    serde_json::from_value(
+                        serde_json::to_value(command_execution_output_delta_notification(
+                            "dropped",
+                        ))
+                        .unwrap(),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .await;
+            let _ = websocket.next().await;
+        })
+        .await;
+        let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            channel_capacity: 1,
+            ..test_remote_connect_args(websocket_url)
+        })
+        .await
+        .unwrap();
+        timeout(Duration::from_secs(1), client._test_pending_lag.notified())
+            .await
+            .expect("best-effort event should establish pending lag");
+        client.close_stream_for_test().await.unwrap();
+        let request_error = timeout(
+            Duration::from_secs(1),
+            client.request(remote_get_account_request(/*request_id*/ 94)),
+        )
+        .await
+        .expect("failed request write should settle promptly")
+        .expect_err("request should receive terminal transport error");
+        assert_eq!(request_error.kind(), ErrorKind::BrokenPipe);
+        assert!(
+            matches!(client.next_event().await, Some(AppServerEvent::ServerNotification(ServerNotification::ThreadClosed(n))) if n.thread_id == "queued")
+        );
+        assert!(matches!(
+            client.next_event().await,
+            Some(AppServerEvent::Lagged { skipped: 1 })
+        ));
+        assert!(matches!(
+            client.next_event().await,
+            Some(AppServerEvent::Disconnected { .. })
+        ));
+        client.shutdown().await.unwrap();
     }
 
     #[test]
