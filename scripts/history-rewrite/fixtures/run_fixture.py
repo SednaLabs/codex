@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Hosted-only synthetic execution of the production rewrite candidate."""
+import csv
 import hashlib
 import json
 import os
@@ -12,6 +13,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from tag_proof import signature_presence
+
 DRIVER = ROOT / "rewrite_candidate.py"
 CLASSIFIER = ROOT / "classify.py"
 ADAPTER = ROOT / "adapt_review_packet.py"
@@ -60,6 +64,16 @@ def make_repo(root: Path, *, shared_target_unrelated: bool = False, collision: b
     command(repo, "add", "."); command(repo, "commit", "-qm", "old subject")
     old_blob = command(repo, "rev-parse", "HEAD:canonical.txt").strip()
     base = command(repo, "rev-parse", "HEAD").strip(); command(repo, "tag", "lightweight"); command(repo, "tag", "-a", "annotated", "-m", "annotated", base)
+    signed_tag = run(
+        "git", "-C", str(repo), "hash-object", "-t", "tag", "-w", "--stdin",
+        input=(
+            f"object {base}\ntype commit\ntag annotated-signed\n"
+            "tagger fixture <fixture@example.invalid> 1 +0000\n\n"
+            "syntactically signed but deliberately unvalidated\n"
+            "-----BEGIN PGP SIGNATURE-----\n\nZmFrZQ==\n-----END PGP SIGNATURE-----\n"
+        ).encode(),
+    ).strip()
+    command(repo, "update-ref", "refs/tags/annotated-signed", signed_tag)
     command(repo, "checkout", "-qb", "side"); (repo / "side.txt").write_bytes(b"side\n"); command(repo, "add", "."); command(repo, "commit", "-qm", "side")
     command(repo, "checkout", "-q", "main"); (repo / "target.txt").write_bytes(b"target old value main\n"); command(repo, "add", "target.txt"); command(repo, "commit", "-qm", "old main")
     command(repo, "merge", "--no-ff", "-m", "old merge", "side")
@@ -82,16 +96,20 @@ def make_bare_mirror(root: Path, source: Path) -> tuple[Path, str, str]:
     return repo, command(repo, "rev-parse", "HEAD").strip(), "master"
 
 
-def make_isolated_mirror(root: Path, source: Path, source_sha: str) -> Path:
+def make_isolated_mirror(root: Path, source: Path, source_sha: str) -> tuple[Path, Path]:
     repo = root / "repo.git"
     run("git", "clone", "--mirror", "--no-local", str(source), str(repo))
+    mapping = {}
     for line in command(repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags").splitlines():
         name, object_id = line.split()
         isolated = "refs/rewrites/selected/" + hashlib.sha256(name.encode()).hexdigest()
+        mapping[name] = isolated
         command(repo, "update-ref", isolated, object_id)
         command(repo, "update-ref", "-d", name)
     command(repo, "update-ref", "refs/rewrites/source", source_sha)
-    return repo
+    mapping_path = root / "original-to-isolated-ref-map.json"
+    mapping_path.write_text(json.dumps(mapping, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    return repo, mapping_path
 
 
 def base_rules(old_blob: str, new_blob: str) -> list[dict]:
@@ -103,7 +121,7 @@ def base_rules(old_blob: str, new_blob: str) -> list[dict]:
     ]
 
 
-def invoke(repo: Path, source: str, policy: Path, root: Path, mode: str = "apply", commit_map: Path | None = None, ref_map: Path | None = None, *, relative_paths: bool = False) -> subprocess.CompletedProcess[str]:
+def invoke(repo: Path, source: str, policy: Path, root: Path, mode: str = "apply", commit_map: Path | None = None, ref_map: Path | None = None, *, relative_paths: bool = False, original_to_isolated_ref_map: Path | None = None) -> subprocess.CompletedProcess[str]:
     preimage = root / "preimage.git"
     if not preimage.exists():
         run("git", "clone", "--mirror", "--no-local", str(repo), str(preimage))
@@ -113,7 +131,27 @@ def invoke(repo: Path, source: str, policy: Path, root: Path, mode: str = "apply
     args = ["python3", str(DRIVER), mode, "--repo", argument_path(repo), "--preimage", argument_path(preimage), "--policy", argument_path(policy), "--source-sha", source, "--work", argument_path(work), "--output", argument_path(output)]
     if mode == "verify":
         args += ["--commit-map", argument_path(commit_map), "--ref-map", argument_path(ref_map)]
+    if original_to_isolated_ref_map is not None:
+        args += ["--original-to-isolated-ref-map", argument_path(original_to_isolated_ref_map)]
     return subprocess.run(args, cwd=invocation_root, text=True, capture_output=True)
+
+
+def signature_parser_fixture() -> str:
+    unsigned = b"object " + b"1" * 40 + b"\ntype commit\ntag unsigned\n\nmessage\n"
+    signed = unsigned + b"-----BEGIN PGP SIGNATURE-----\n\nZmFrZQ==\n-----END PGP SIGNATURE-----\n"
+    if signature_presence(unsigned) != "absent" or signature_presence(signed) != "present-openpgp":
+        raise SystemExit("raw tag signature presence fixture mismatch")
+    failures = (
+        signed.removesuffix(b"-----END PGP SIGNATURE-----\n"),
+        unsigned + b"-----BEGIN FUTURE SIGNATURE-----\nvalue\n-----END FUTURE SIGNATURE-----\n",
+    )
+    for raw in failures:
+        try:
+            signature_presence(raw)
+        except SystemExit:
+            continue
+        raise SystemExit("malformed or unknown tag signature armor unexpectedly passed")
+    return hashlib.sha256(unsigned + signed + b"".join(failures)).hexdigest()
 
 
 def expect_failure(name: str, result: subprocess.CompletedProcess[str], expected_diagnostic: str | None = None) -> str:
@@ -567,6 +605,7 @@ def main() -> None:
         adapter_check = subprocess.run(["python3", str(ADAPTER), "check-policy", "--policy", str(ROOT / "policy.json")], text=True, capture_output=True)
         require_driver_success("review_packet_adapter_policy", adapter_check)
         evidence.append(("review_packet_non_executable_adapter", hashlib.sha256((ROOT / "policy.json").read_bytes()).hexdigest()))
+        evidence.append(("raw_tag_signature_presence_parser", signature_parser_fixture()))
         root = Path(temporary) / "positive"; root.mkdir(); repo, source, branch, canonical_source, old_blob, new_blob, merge_source = make_repo(root); policy = root / "policy.json"; write_policy(policy, base_rules(old_blob, new_blob), canonical_source)
         remote_before = command(root / "synthetic-source.git", "show-ref")
         positive = invoke(repo, source, policy, root, relative_paths=True)
@@ -595,12 +634,30 @@ def main() -> None:
             raise SystemExit("unmatched exact-path variants were not retained as review-required residuals")
         evidence.append(("guarded_canonical_replacement_residual", hashlib.sha256((root / "output/residual-review.json").read_bytes()).hexdigest()))
         isolated_root = Path(temporary) / "positive-isolated"; isolated_root.mkdir()
-        isolated_repo = make_isolated_mirror(isolated_root, root / "preimage.git", source)
-        isolated_positive = invoke(isolated_repo, source, policy, isolated_root)
+        isolated_repo, original_to_isolated = make_isolated_mirror(isolated_root, root / "preimage.git", source)
+        isolated_positive = invoke(isolated_repo, source, policy, isolated_root, original_to_isolated_ref_map=original_to_isolated)
         require_driver_success("positive_isolated_main_input", isolated_positive)
         isolated_refs = command(isolated_repo, "for-each-ref", "--format=%(refname)").splitlines()
         if not isolated_refs or any(not name.startswith("refs/rewrites/") for name in isolated_refs):
             raise SystemExit("original main input escaped the isolated rewrite namespace")
+        tag_summary = json.loads((isolated_root / "output/tag-proof-summary.json").read_text())
+        if tag_summary != {
+            "annotated_count": 2,
+            "cryptographic_validity": "not-assessed",
+            "lightweight_count": 1,
+            "new_recognized_signature_count": 0,
+            "old_recognized_signature_count": 1,
+            "schema": "history-rewrite-tag-proof-v1",
+            "tag_count": 3,
+        }:
+            raise SystemExit("isolated tag proof summary mismatch")
+        with (isolated_root / "output/tag-proof.tsv").open(newline="") as stream:
+            tag_rows = list(csv.DictReader(stream, delimiter="\t"))
+        if len(tag_rows) != 3 or {row["kind"] for row in tag_rows} != {"annotated", "lightweight"}:
+            raise SystemExit("isolated tag proof is not one row per original tag")
+        if any(row["cryptographic_validity"] != "not-assessed" for row in tag_rows):
+            raise SystemExit("isolated tag proof claimed cryptographic validity")
+        evidence.append(("isolated_original_tag_join_and_signature_presence", hashlib.sha256((isolated_root / "output/tag-proof.tsv").read_bytes()).hexdigest()))
         evidence.append(("positive_original_main_isolated_under_rewrites", hashlib.sha256("\n".join(isolated_refs).encode()).hexdigest()))
         guarded_policy = json.loads(policy.read_text()); guarded_policy["rules"][0]["old_blob"] = "9" * 40; write_json(root / "guarded-policy.json", guarded_policy)
         guarded_root = root / "guarded-negative"; guarded_root.mkdir()

@@ -292,7 +292,8 @@ jobs:
           selected_has_tags=$(python3 -c 'import json; print(str(any(k.startswith("refs/tags/") for k in json.load(open("selected-refs.json")))).lower())')
           if test "$selected_has_tags" = true && test "$TAG_SIGNATURE_ACK" != true; then echo 'tag rewrite requires explicit signature acknowledgement' >&2; exit 1; fi
           git clone --mirror --no-local work/repo.git work/preimage.git >/dev/null
-          python3 scripts/history-rewrite/rewrite_candidate.py apply --repo work/repo.git --preimage work/preimage.git --policy "$POLICY" --source-sha "$SOURCE_SHA" --work work --output output
+          python3 scripts/history-rewrite/rewrite_candidate.py apply --repo work/repo.git --preimage work/preimage.git --policy "$POLICY" --source-sha "$SOURCE_SHA" --work work --output output \
+            --original-to-isolated-ref-map output/original-to-isolated-ref-map.json
           test -z "$(git -C work/repo.git for-each-ref --format='%(refname)' | awk '$0 !~ /^refs\/rewrites\// {print}')"
           python3 scripts/history-rewrite/classify.py work/repo.git "$POLICY" output/classification-after.tsv
           python3 - "$POLICY" output/classification.tsv output/classification-after.tsv <<'PY'

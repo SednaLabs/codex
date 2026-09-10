@@ -1,0 +1,233 @@
+name: History rewrite supplemental proof (w13828)
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_harness_sha:
+        description: "Exact supplemental workflow commit"
+        required: true
+        type: string
+      workflow_harness_tree:
+        description: "Exact supplemental workflow tree"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: history-rewrite-supplemental-proof-w13828
+  cancel-in-progress: false
+
+jobs:
+  supplemental:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SUPPLEMENTAL_SHA: ${{ inputs.workflow_harness_sha }}
+      SUPPLEMENTAL_TREE: ${{ inputs.workflow_harness_tree }}
+      PRIOR_RUN_ID: "34433719341"
+      PRIOR_ARTIFACT_ID: "10135894755"
+      PRIOR_ARTIFACT_SIZE: "7153261"
+      PRIOR_ARTIFACT_SHA256: aacdb5766e1c5abe7890e022bb0b52ed30b57399a7640006174e87cc71a9abb4
+      PRIOR_HARNESS_SHA: 26d5e326bd954ce4a6bc62e20f6fbcf01e20667c
+      PRIOR_HARNESS_TREE: 7dfeffed40b766bf5ac4891a81ee649573a51545
+      SOURCE_SHA: 62478e166840e711bdc6c9b4ca5371d939b04657
+      BACKUP_RUN_ID: "34433429269"
+      SELECTED_REFS_SHA256: 7aba3d6830615a9a90699e60bbd5ebc325e791ee3d4bc36a2879d1e87dd354c8
+      SELECTED_REFS_COUNT: "1088"
+      SELECTED_REFS_BYTES: "94025"
+      POLICY_SHA256: ef990f55821bb301192a42160b442ff83992b003e4751186394f8150198abc8c
+      REPO_URL: https://github.com/sednalabs/codex.git
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact supplemental harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Bind current harness and prior successful proof
+        run: |
+          set -euo pipefail; umask 077
+          [[ "$SUPPLEMENTAL_SHA" =~ ^[0-9a-f]{40}$ && "$SUPPLEMENTAL_TREE" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$SUPPLEMENTAL_SHA"
+          test "$(git rev-parse "$GITHUB_SHA^{tree}")" = "$SUPPLEMENTAL_TREE"
+          mkdir -m 700 work supplemental
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PRIOR_RUN_ID" > work/prior-run.json
+          jq -e --arg sha "$PRIOR_HARNESS_SHA" --argjson id "$PRIOR_RUN_ID" \
+            '.id == $id and .status == "completed" and .conclusion == "success" and .event == "workflow_dispatch" and .head_sha == $sha and .head_repository.full_name == "sednalabs/codex"' \
+            work/prior-run.json >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PRIOR_RUN_ID/artifacts?per_page=100" > work/prior-artifacts.json
+          jq -e --argjson id "$PRIOR_ARTIFACT_ID" --argjson size "$PRIOR_ARTIFACT_SIZE" --arg digest "sha256:$PRIOR_ARTIFACT_SHA256" \
+            '[.artifacts[] | select(.name == "history-rewrite-rewrite-34433719341")] | length == 1 and .[0].id == $id and .[0].size_in_bytes == $size and .[0].digest == $digest and .[0].expired == false' \
+            work/prior-artifacts.json >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$PRIOR_ARTIFACT_ID/zip" > work/prior-proof.zip
+          test "$(stat -c '%s' work/prior-proof.zip)" = "$PRIOR_ARTIFACT_SIZE"
+          test "$(sha256sum work/prior-proof.zip | cut -d' ' -f1)" = "$PRIOR_ARTIFACT_SHA256"
+          mkdir -m 700 work/prior
+          for file in binding.txt candidate-object-identity.json commit-map.txt ref-map.txt refs-final.txt original-to-isolated-ref-map.json map-proof.tsv untouched-proof.tsv equivalence.txt policy.digest residual-review.json manifest.sha256; do
+            unzip -p work/prior-proof.zip "$file" > "work/prior/$file"
+          done
+          python3 - <<'PY'
+          import hashlib, pathlib
+          root = pathlib.Path("work/prior")
+          manifest = {line.split()[1].removeprefix("output/"): line.split()[0] for line in (root / "manifest.sha256").read_text().splitlines()}
+          for path in root.iterdir():
+              if path.name == "manifest.sha256": continue
+              if hashlib.sha256(path.read_bytes()).hexdigest() != manifest.get(path.name):
+                  raise SystemExit(f"prior proof manifest mismatch: {path.name}")
+          PY
+          grep -Fx "workflow_harness_sha=$PRIOR_HARNESS_SHA" work/prior/binding.txt
+          grep -Fx "workflow_harness_tree=$PRIOR_HARNESS_TREE" work/prior/binding.txt
+          grep -Fx "source_sha=$SOURCE_SHA" work/prior/binding.txt
+          grep -Fx "selected_refs_sha256=$SELECTED_REFS_SHA256" work/prior/binding.txt
+          grep -Fx "selected_refs_count=$SELECTED_REFS_COUNT" work/prior/binding.txt
+          grep -Fx "selected_refs_bytes=$SELECTED_REFS_BYTES" work/prior/binding.txt
+          grep -Fx "backup_run_id=$BACKUP_RUN_ID" work/prior/binding.txt
+          test "$(cut -d' ' -f1 work/prior/policy.digest)" = "$POLICY_SHA256"
+          test "$(sha256sum scripts/history-rewrite/policy.json | cut -d' ' -f1)" = "$POLICY_SHA256"
+      - name: Materialize exact prior transformation harness
+        run: |
+          set -euo pipefail; umask 077
+          git init --bare work/prior-harness.git >/dev/null
+          git -C work/prior-harness.git fetch --no-tags --no-write-fetch-head "$REPO_URL" \
+            "$PRIOR_HARNESS_SHA:refs/testing/prior-harness/$PRIOR_HARNESS_SHA"
+          test "$(git -C work/prior-harness.git rev-parse "$PRIOR_HARNESS_SHA^{tree}")" = "$PRIOR_HARNESS_TREE"
+          mkdir -m 700 work/frozen
+          for file in scripts/history-rewrite/rewrite_candidate.py scripts/history-rewrite/object_index.py scripts/history-rewrite/policy.json scripts/recovery-snapshot/receipt.py; do
+            destination="work/frozen/$file"
+            mkdir -p "$(dirname "$destination")"
+            git -C work/prior-harness.git show "$PRIOR_HARNESS_SHA:$file" > "$destination"
+          done
+          test "$(sha256sum work/frozen/scripts/history-rewrite/policy.json | cut -d' ' -f1)" = "$POLICY_SHA256"
+      - name: Independently verify backup receipt and exact selected map
+        run: |
+          set -euo pipefail; umask 077
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BACKUP_RUN_ID" > work/backup-run.json
+          workflow_id=$(jq -r .workflow_id work/backup-run.json)
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id" > work/backup-workflow.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BACKUP_RUN_ID/artifacts?per_page=100" > work/backup-artifacts.json
+          receipt_id=$(jq -er '[.artifacts[] | select(.name == "recovery-snapshot-receipt")] | if length == 1 then .[0].id else error("receipt artifact count mismatch") end' work/backup-artifacts.json)
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$receipt_id/zip" > work/backup-receipt.zip
+          python3 work/frozen/scripts/recovery-snapshot/receipt.py verify --repository "$GITHUB_REPOSITORY" --run-id "$BACKUP_RUN_ID" \
+            --harness-sha "$PRIOR_HARNESS_SHA" --source-sha "$SOURCE_SHA" --selected-refs-sha256 "$SELECTED_REFS_SHA256" \
+            --selected-refs-count "$SELECTED_REFS_COUNT" --selected-refs-bytes "$SELECTED_REFS_BYTES" --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --run-json work/backup-run.json --workflow-json work/backup-workflow.json --artifacts-json work/backup-artifacts.json \
+            --receipt-zip work/backup-receipt.zip --output supplemental/verified-backup.json --selected-refs-output work/selected-refs.json
+      - name: Install pinned git-filter-repo
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, pathlib, urllib.request
+          url = "https://files.pythonhosted.org/packages/60/60/d3943f0880ebcb7e0bdf79254d10dddd39c7b656eeecae32b8806ff66dec/git_filter_repo-2.47.0-py3-none-any.whl"
+          expected = "2cd04929b9024e83e65db571cbe36aec65ead0cb5f9ec5abe42158654af5ad83"
+          data = urllib.request.urlopen(url).read()
+          if hashlib.sha256(data).hexdigest() != expected: raise SystemExit("pinned git-filter-repo digest mismatch")
+          pathlib.Path("work/git_filter_repo-2.47.0-py3-none-any.whl").write_bytes(data)
+          PY
+          python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps work/git_filter_repo-2.47.0-py3-none-any.whl
+      - name: Exercise current proof parser and isolated fixtures
+        env:
+          HISTORY_REWRITE_REFERENCE_CLASSIFIER: work/reference-classifier.py
+        run: |
+          set -euo pipefail
+          git -C work/prior-harness.git show bc95757b43a5c293de98cfef210baed11da205e3:scripts/history-rewrite/classify.py > work/reference-classifier.py
+          test "$(sha256sum work/reference-classifier.py | cut -d' ' -f1)" = 5b04c3c6cf0ca510a7cce17e27038fe4a5ef92a9ca26d90936be81c4ed73663e
+          scripts/history-rewrite/fixtures/run_fixture.sh > supplemental/fixture-evidence.txt
+      - name: Fetch exact frozen ref domain and verify bijection
+        run: |
+          set -euo pipefail; umask 077
+          git init --bare work/repo.git >/dev/null
+          git -C work/repo.git remote add source "$REPO_URL"
+          python3 - <<'PY'
+          import hashlib, json
+          refs = json.load(open("work/selected-refs.json", encoding="utf-8"))
+          isolated = {name: "refs/rewrites/selected/" + hashlib.sha256(name.encode()).hexdigest() for name in sorted(refs)}
+          if len(refs) != 1088 or len(isolated) != len(set(isolated.values())): raise SystemExit("selected-ref bijection mismatch")
+          if sum(name.startswith("refs/heads/") for name in refs) != 433 or sum(name.startswith("refs/tags/") for name in refs) != 655: raise SystemExit("selected original ref kind counts changed")
+          raw = json.dumps(isolated, sort_keys=True, separators=(",", ":")) + "\n"
+          open("work/original-to-isolated-ref-map.json", "w", encoding="utf-8").write(raw)
+          with open("work/frozen-refspecs.txt", "w", encoding="ascii") as stream:
+              for name, target in isolated.items(): stream.write(f"{refs[name]}:{target}\n")
+          PY
+          cmp -s work/original-to-isolated-ref-map.json work/prior/original-to-isolated-ref-map.json
+          git -C work/repo.git fetch --atomic --no-tags --no-write-fetch-head --stdin source < work/frozen-refspecs.txt
+          git -C work/repo.git update-ref refs/rewrites/source "$SOURCE_SHA"
+          python3 - <<'PY'
+          import json, subprocess
+          selected = json.load(open("work/selected-refs.json", encoding="utf-8"))
+          isolated = json.load(open("work/original-to-isolated-ref-map.json", encoding="utf-8"))
+          actual = {}
+          for line in subprocess.check_output(["git", "-C", "work/repo.git", "for-each-ref", "--format=%(refname) %(objectname)"], text=True).splitlines():
+              name, oid = line.split(); actual[name] = oid
+          expected = {isolated[name]: oid for name, oid in selected.items()} | {"refs/rewrites/source": selected["refs/heads/main"]}
+          if actual != expected: raise SystemExit("frozen internal ref domain or object mismatch")
+          prior_names = {line.split()[2] for line in open("work/prior/ref-map.txt", encoding="utf-8") if line.split() and line.split()[0].lower() not in {"old", "old_object"}}
+          if prior_names != set(expected): raise SystemExit("prior ref-map domain is not the exact selected bijection plus source anchor")
+          PY
+          git clone --mirror --no-local work/repo.git work/preimage.git >/dev/null
+      - name: Reconstruct exact prior candidate and compare immutable maps
+        run: |
+          set -euo pipefail; umask 077
+          python3 work/frozen/scripts/history-rewrite/rewrite_candidate.py apply \
+            --repo work/repo.git --preimage work/preimage.git \
+            --policy work/frozen/scripts/history-rewrite/policy.json --source-sha "$SOURCE_SHA" \
+            --work work/frozen-work --output work/reconstructed
+          for file in commit-map.txt ref-map.txt refs-final.txt map-proof.tsv untouched-proof.tsv equivalence.txt residual-review.json; do
+            cmp -s "work/reconstructed/$file" "work/prior/$file" || { echo "prior candidate mismatch: $file" >&2; exit 1; }
+          done
+          python3 - <<'PY'
+          import hashlib, json
+          refs = {}
+          for line in open("work/reconstructed/refs-final.txt", encoding="utf-8"):
+              name, oid = line.split(); refs[name] = oid
+          raw = json.dumps(refs, sort_keys=True, separators=(",", ":")).encode()
+          expected = json.load(open("work/prior/candidate-object-identity.json", encoding="utf-8"))
+          if len(refs) != expected["ref_count"] or hashlib.sha256(raw).hexdigest() != expected["ref_map_sha256"]:
+              raise SystemExit("reconstructed candidate object identity mismatch")
+          PY
+      - name: Emit supplemental tag and residual evidence
+        run: |
+          set -euo pipefail; umask 077
+          python3 scripts/history-rewrite/tag_proof.py \
+            --preimage work/preimage.git --repo work/repo.git \
+            --commit-map work/reconstructed/commit-map.txt --ref-map work/reconstructed/ref-map.txt \
+            --original-to-isolated-ref-map work/original-to-isolated-ref-map.json \
+            --output supplemental/tag-proof.tsv --summary-output supplemental/tag-proof-summary.json
+          jq -e '.tag_count == 655 and .annotated_count == 568 and .lightweight_count == 87 and .cryptographic_validity == "not-assessed"' supplemental/tag-proof-summary.json >/dev/null
+          python3 scripts/history-rewrite/residual_context.py --repo work/preimage.git \
+            --policy work/frozen/scripts/history-rewrite/policy.json --output supplemental/residual-context.json
+          python3 - <<'PY'
+          import json
+          prior = json.load(open("work/prior/residual-review.json", encoding="utf-8"))
+          current = json.load(open("supplemental/residual-context.json", encoding="utf-8"))["rules"]
+          for rule, expected in prior.items():
+              actual = current.get(rule, {})
+              if actual.get("residual_count") != expected["count"] or actual.get("oid_set_sha256") != expected["oid_set_sha256"]:
+                  raise SystemExit(f"residual identity mismatch: {rule}")
+          if set(current) != set(prior): raise SystemExit("residual rule domain mismatch")
+          PY
+          printf '%s\n' \
+            "schema=history-rewrite-supplemental-binding-v1" \
+            "supplemental_harness_sha=$SUPPLEMENTAL_SHA" \
+            "supplemental_harness_tree=$SUPPLEMENTAL_TREE" \
+            "prior_run_id=$PRIOR_RUN_ID" \
+            "prior_artifact_id=$PRIOR_ARTIFACT_ID" \
+            "prior_artifact_sha256=$PRIOR_ARTIFACT_SHA256" \
+            "prior_harness_sha=$PRIOR_HARNESS_SHA" \
+            "prior_harness_tree=$PRIOR_HARNESS_TREE" \
+            "source_sha=$SOURCE_SHA" \
+            "backup_run_id=$BACKUP_RUN_ID" \
+            "selected_refs_sha256=$SELECTED_REFS_SHA256" > supplemental/binding.txt
+          sha256sum supplemental/* > supplemental/manifest.sha256
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: history-rewrite-supplemental-proof-${{ github.run_id }}
+          path: supplemental
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove supplemental staging
+        if: ${{ always() }}
+        run: rm -rf work supplemental

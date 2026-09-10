@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from object_index import GitObjectIndex, TreeEntry
+from tag_proof import load_original_to_isolated, write_tag_proof
 
 HEX = re.compile(r"[0-9a-f]{40}\Z")
 ZERO = "0" * 40
@@ -372,6 +373,7 @@ def verify(
     commit_map: Path,
     ref_map: Path,
     preflight_context: dict | None = None,
+    original_to_isolated_ref_map: Path | None = None,
 ) -> None:
     policy = load_policy(policy_path)
     rules = policy["rules"]
@@ -392,29 +394,31 @@ def verify(
                 fail("ordered parent topology mismatch")
             map_rows.append((old, new, ",".join(old_record.parents), ",".join(new_record.parents), "verified"))
             tree_pairs.append((old_record.tree, new_record.tree))
-        tag_rows = []
         for old, new, name in ref_rows:
             old_type = old_index.object_kind(old).decode("ascii")
             new_type = new_index.object_kind(new).decode("ascii")
             if old_type == new_type == "commit":
                 if mapping.get(old) != new:
                     fail("lightweight tag or branch is not commit-map bound")
-                kind = "lightweight" if name.startswith("refs/tags/") else "branch"
             elif old_type == new_type == "tag":
                 old_peeled = git(preimage, "rev-parse", f"{old}^{{commit}}").strip()
                 new_peeled = git(repo, "rev-parse", f"{new}^{{commit}}").strip()
                 if mapping.get(old_peeled) != new_peeled:
                     fail("annotated tag peeled identity is not commit-map bound")
-                kind = "annotated"
             else:
                 fail("ref object type changed")
-            if name.startswith("refs/tags/"):
-                old_status = "verified" if subprocess.run(["git", "-C", str(preimage), "verify-tag", name], capture_output=True).returncode == 0 else "unsigned-or-unverified"
-                new_status = "verified" if subprocess.run(["git", "-C", str(repo), "verify-tag", name], capture_output=True).returncode == 0 else "unsigned-or-unverified"
-                tag_rows.append((name, kind, old, new, old_status, new_status, "rewritten-commits-require-signature-reassessment"))
         proof = output / "map-proof.tsv"
         proof.write_text("old_commit\tnew_commit\told_parents\tnew_parents\tstatus\n" + "".join("\t".join(row) + "\n" for row in map_rows), encoding="utf-8")
-        (output / "tag-proof.tsv").write_text("ref\tkind\told_object\tnew_object\told_signature\tnew_signature\tconsequence\n" + "".join("\t".join(row) + "\n" for row in tag_rows), encoding="utf-8")
+        original_to_isolated = load_original_to_isolated(original_to_isolated_ref_map, ref_rows)
+        write_tag_proof(
+            preimage,
+            repo,
+            mapping,
+            ref_rows,
+            original_to_isolated,
+            output / "tag-proof.tsv",
+            output / "tag-proof-summary.json",
+        )
 
         unique_tree_pairs = tuple(dict.fromkeys(tree_pairs))
         new_objects = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-path", "objects").strip())
@@ -567,6 +571,7 @@ def apply(args: argparse.Namespace) -> None:
         args.output / "commit-map.txt",
         args.output / "ref-map.txt",
         context,
+        args.original_to_isolated_ref_map,
     )
 
 
@@ -577,13 +582,24 @@ def main() -> None:
     parser.add_argument("--policy", type=Path, required=True); parser.add_argument("--source-sha", required=True)
     parser.add_argument("--work", type=Path, required=True); parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--commit-map", type=Path); parser.add_argument("--ref-map", type=Path)
+    parser.add_argument("--original-to-isolated-ref-map", type=Path)
     args = parser.parse_args()
     if args.mode == "apply":
         apply(args)
     else:
         if not args.commit_map or not args.ref_map:
             fail("verify requires --commit-map and --ref-map")
-        verify(args.repo, args.preimage, args.policy, args.source_sha, args.work, args.output, args.commit_map, args.ref_map)
+        verify(
+            args.repo,
+            args.preimage,
+            args.policy,
+            args.source_sha,
+            args.work,
+            args.output,
+            args.commit_map,
+            args.ref_map,
+            original_to_isolated_ref_map=args.original_to_isolated_ref_map,
+        )
 
 
 if __name__ == "__main__":

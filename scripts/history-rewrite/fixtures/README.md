@@ -24,7 +24,9 @@ small but exercises the invariants that the candidate proves:
   mode, and type changes, zero IDs, missing map domains, ordered-parent
   changes, and changed refs;
 * lightweight and annotated tags, including peeled commit mapping and an
-  explicit signature-consequence record;
+  explicit signature-consequence record, original-to-isolated ref joining,
+  and raw tag-object signature-presence fixtures for unsigned, syntactically
+  signed-but-unvalidated, malformed, and unknown-armored tag objects;
 * a remote-ref snapshot taken before and after candidate execution, proving
   that source refs were not changed.
 
