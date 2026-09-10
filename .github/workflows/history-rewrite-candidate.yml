@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "synthetic, inventory, or rewrite"
+        description: "synthetic, inventory, rewrite, or supplemental"
         required: true
         default: synthetic
         type: choice
-        options: [synthetic, inventory, rewrite]
+        options: [synthetic, inventory, rewrite, supplemental]
       source_sha:
         description: "Exact source main commit from the frozen selected-ref map"
         required: false
@@ -113,7 +113,7 @@ jobs:
           retention-days: 7
 
   candidate:
-    if: inputs.mode != 'synthetic'
+    if: inputs.mode == 'inventory' || inputs.mode == 'rewrite'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -401,3 +401,13 @@ jobs:
           set -euo pipefail
           rm -f history-rewrite-candidate.age selected-refs.json
           rm -rf work output
+
+  supplemental:
+    if: inputs.mode == 'supplemental'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/history-rewrite-supplemental-proof.yml
+    with:
+      workflow_harness_sha: ${{ inputs.workflow_harness_sha }}
+      workflow_harness_tree: ${{ inputs.workflow_harness_tree }}

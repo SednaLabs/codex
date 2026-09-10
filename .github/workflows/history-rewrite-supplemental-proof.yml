@@ -1,6 +1,16 @@
 name: History rewrite supplemental proof (w13828)
 
 on:
+  workflow_call:
+    inputs:
+      workflow_harness_sha:
+        description: "Exact supplemental workflow commit"
+        required: true
+        type: string
+      workflow_harness_tree:
+        description: "Exact supplemental workflow tree"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       workflow_harness_sha:
