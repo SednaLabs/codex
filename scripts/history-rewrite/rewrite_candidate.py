@@ -428,8 +428,16 @@ def verify(
         for old, new in sorted(mapping.items()):
             old_record, new_record = old_index.commit(old), new_index.commit(new)
             diffs = tree_diffs[(old_record.tree, new_record.tree)]
-            if any(diff.path not in allowed_paths for diff in diffs):
-                fail("tree path domain changed outside approved exact transformations")
+            for diff in diffs:
+                if diff.path in allowed_paths:
+                    continue
+                if b"000000" in {diff.old_mode, diff.new_mode}:
+                    fail("tree path domain changed outside approved exact transformations")
+                if diff.old_mode != diff.new_mode:
+                    fail("path mode or type changed")
+                if diff.old_mode != b"160000":
+                    fail("target bytes do not equal the approved transformation or non-target bytes changed")
+                fail("non-target path, mode, type, or bytes changed")
             expected: dict[bytes, tuple[bytes, TreeEntry]] = {}
             excluded_from_untouched: set[bytes] = set()
             for path in allowed_paths:
