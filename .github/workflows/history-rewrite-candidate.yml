@@ -131,7 +131,6 @@ jobs:
       POLICY: scripts/history-rewrite/policy.json
       REPO_URL: https://github.com/${{ github.repository }}.git
       GH_TOKEN: ${{ github.token }}
-      TIMING_DIR: ${{ runner.temp }}/history-rewrite-timing
     steps:
       - name: Checkout frozen harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -142,7 +141,7 @@ jobs:
       - name: Verify frozen inputs and reviewed adapter policy
         run: |
           set -euo pipefail; umask 077
-          mkdir -m 700 "$TIMING_DIR"
+          mkdir -m 700 "$RUNNER_TEMP/history-rewrite-timing"
           [[ "$GITHUB_REPOSITORY" == sednalabs/codex && "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$HARNESS_SHA" =~ ^[0-9a-f]{40}$ && "$HARNESS_TREE" =~ ^[0-9a-f]{40}$ ]]
           test "$GITHUB_SHA" = "$HARNESS_SHA"
@@ -209,7 +208,7 @@ jobs:
         run: |
           set -euo pipefail; umask 077
           step_started=$(date +%s)
-          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=fetch-frozen-objects status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$TIMING_DIR/stages.tsv"; exit "$rc"; }
+          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=fetch-frozen-objects status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$RUNNER_TEMP/history-rewrite-timing/stages.tsv"; exit "$rc"; }
           trap finish_timing EXIT
           rm -rf work/repo.git
           git init --bare work/repo.git >/dev/null
@@ -242,8 +241,8 @@ jobs:
         run: |
           set -euo pipefail
           step_started=$(date +%s)
-          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=inventory-bounded-identities status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$TIMING_DIR/stages.tsv"; exit "$rc"; }
-          record_timing() { label=$1; started=$2; finished=$(date +%s); printf 'stage=%s status=0 duration_seconds=%s\n' "$label" "$((finished-started))" >> "$TIMING_DIR/stages.tsv"; }
+          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=inventory-bounded-identities status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$RUNNER_TEMP/history-rewrite-timing/stages.tsv"; exit "$rc"; }
+          record_timing() { label=$1; started=$2; finished=$(date +%s); printf 'stage=%s status=0 duration_seconds=%s\n' "$label" "$((finished-started))" >> "$RUNNER_TEMP/history-rewrite-timing/stages.tsv"; }
           trap finish_timing EXIT
           repo=work/repo.git
           command_started=$(date +%s)
@@ -267,7 +266,7 @@ jobs:
         run: |
           set -euo pipefail
           step_started=$(date +%s)
-          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=apply-and-verify status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$TIMING_DIR/stages.tsv"; exit "$rc"; }
+          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=apply-and-verify status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$RUNNER_TEMP/history-rewrite-timing/stages.tsv"; exit "$rc"; }
           trap finish_timing EXIT
           selected_has_tags=$(python3 -c 'import json; print(str(any(k.startswith("refs/tags/") for k in json.load(open("selected-refs.json")))).lower())')
           if test "$selected_has_tags" = true && test "$TAG_SIGNATURE_ACK" != true; then echo 'tag rewrite requires explicit signature acknowledgement' >&2; exit 1; fi
@@ -305,7 +304,7 @@ jobs:
         run: |
           set -euo pipefail; umask 077
           step_started=$(date +%s)
-          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=encrypt-and-restore-check status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$TIMING_DIR/stages.tsv"; exit "$rc"; }
+          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=encrypt-and-restore-check status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$RUNNER_TEMP/history-rewrite-timing/stages.tsv"; exit "$rc"; }
           trap finish_timing EXIT
           git -C work/repo.git bundle create "$GITHUB_WORKSPACE/work/history-rewrite-candidate.bundle" --all
           BUNDLE_HEADS=$(git bundle list-heads work/history-rewrite-candidate.bundle)
