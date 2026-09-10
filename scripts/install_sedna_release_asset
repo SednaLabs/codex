@@ -614,7 +614,24 @@ import re
 import sys
 from pathlib import Path
 
-work_dir, release_json, archive_name, checksum_name, metadata_name, release_tag, release_version, target, macos_preview, macos_unnotarized, sbom_name, attestation_bundle_name, codex_sigstore_name, proxy_sigstore_name, require_linux_signatures, require_linux_provenance = sys.argv[1:]
+(
+    work_dir,
+    release_json,
+    archive_name,
+    checksum_name,
+    metadata_name,
+    release_tag,
+    release_version,
+    target,
+    macos_preview,
+    macos_unnotarized,
+    sbom_name,
+    attestation_bundle_name,
+    codex_sigstore_name,
+    proxy_sigstore_name,
+    require_linux_signatures,
+    require_linux_provenance,
+) = sys.argv[1:]
 root = Path(work_dir)
 metadata = json.loads((root / metadata_name).read_text(encoding="utf-8"))
 release = json.loads(Path(release_json).read_text(encoding="utf-8"))
