@@ -519,7 +519,26 @@ def apply(args: argparse.Namespace) -> None:
     write_refs(args.output / "refs-before.txt", before)
     staged_before = stage_annotated_tags(args.repo, before, transports)
     write_refs(args.output / "refs-before-staged.txt", staged_before)
-    subprocess.run(["git", "-C", str(args.repo), "filter-repo", "--force", "--commit-callback", str(callbacks[0]), "--filename-callback", str(callbacks[1]), "--blob-callback", str(callbacks[2])], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(args.repo),
+            "filter-repo",
+            "--force",
+            "--prune-empty",
+            "never",
+            "--prune-degenerate",
+            "never",
+            "--commit-callback",
+            str(callbacks[0]),
+            "--filename-callback",
+            str(callbacks[1]),
+            "--blob-callback",
+            str(callbacks[2]),
+        ],
+        check=True,
+    )
     filter_repo_dir = git_path(args.repo, "filter-repo")
     commit_map = filter_repo_dir / "commit-map"; ref_map = filter_repo_dir / "ref-map"
     if not commit_map.is_file() or not ref_map.is_file():

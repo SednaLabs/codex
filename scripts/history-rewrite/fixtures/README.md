@@ -16,6 +16,8 @@ small but exercises the invariants that the candidate proves:
   trees;
 * a target path rename and target content substitution, with mode/type and
   every untouched entry preserved exactly;
+* a commit whose sole tree change collapses under an approved replacement,
+  retained one-to-one with its ordered parent instead of being pruned;
 * workflow-shaped relative repository, work, output, policy, and preimage
   arguments, including callback-file resolution across `git -C`;
 * negative cases for path collisions, selected shared blobs, non-target byte,

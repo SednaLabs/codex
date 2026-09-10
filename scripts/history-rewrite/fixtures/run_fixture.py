@@ -68,6 +68,7 @@ def make_repo(root: Path, *, shared_target_unrelated: bool = False, collision: b
     (repo / "canonical.txt").write_bytes(b"reviewed canonical replacement\n"); command(repo, "add", "canonical.txt"); command(repo, "commit", "-qm", "canonical source")
     canonical_source = command(repo, "rev-parse", "HEAD").strip()
     new_blob = command(repo, "rev-parse", "HEAD:canonical.txt").strip()
+    (repo / "canonical.txt").write_bytes(b"unsupported historical variant\n"); command(repo, "add", "canonical.txt"); command(repo, "commit", "-qm", "collapse candidate")
     remote = root / "synthetic-source.git"
     run("git", "clone", "--bare", "--no-local", str(repo), str(remote))
     command(repo, "remote", "add", "synthetic-source", str(remote))
@@ -570,6 +571,15 @@ def main() -> None:
         remote_before = command(root / "synthetic-source.git", "show-ref")
         positive = invoke(repo, source, policy, root, relative_paths=True)
         require_driver_success("positive_apply_and_verify", positive)
+        mapping = read_commit_map(root / "output/commit-map.txt")
+        collapse_parent = command(root / "preimage.git", "rev-parse", source + "^").strip()
+        if source not in mapping or collapse_parent not in mapping:
+            raise SystemExit("synthetic empty-collapse commit was pruned from the exact commit map")
+        if command(repo, "rev-parse", mapping[source] + "^").strip() != mapping[collapse_parent]:
+            raise SystemExit("synthetic empty-collapse commit parent topology changed")
+        if command(repo, "rev-parse", mapping[source] + "^{tree}").strip() != command(repo, "rev-parse", mapping[collapse_parent] + "^{tree}").strip():
+            raise SystemExit("synthetic empty-collapse commit did not exercise a rewritten empty tree delta")
+        evidence.append(("rewritten_empty_commit_preserved_one_to_one", hashlib.sha256((source + mapping[source]).encode()).hexdigest()))
         evidence.append(("classifier_path_rename_before_after", classifier_path_rename_fixture(root, repo, source, policy)))
         evidence.append(("classifier_exact_bc957_differential_nul_and_raw_paths", classifier_exact_differential_fixture(Path(temporary) / "classifier-differential")))
         bare_root = Path(temporary) / "positive-bare"; bare_root.mkdir()
