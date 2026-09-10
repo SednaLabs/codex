@@ -36,6 +36,7 @@ def manifest():
     proofs = {"map": "7" * 40}
     return {"repository": "sednalabs/codex", "harness_sha": "5" * 40, "harness_tree": "6" * 40,
             "approval_identity": "operator-61235", "tag_signature_ack": True,
+            "expected_controls": {"branch_allowlist": "repair/history-rewrite-publication-w13828", "workflow_states": {"rust-release": "paused", "sedna-release": "paused"}, "active_writers": []},
             "selected_refs": selected, "output_refs": output,
             "selected_refs_sha256": digest(selected), "output_refs_sha256": digest(output),
             "proof_digests": proofs, "proof_digests_sha256": digest(proofs), "backup": {"run_id": 42, "artifact_sha256": "8" * 64}}

@@ -72,6 +72,9 @@ def validate_manifest(manifest: Mapping[str, object], *, frozen_sha: str, frozen
         raise PublicationError("manifest approval identity mismatch")
     if manifest.get("tag_signature_ack") is not True:
         raise PublicationError("tag signature acknowledgement is required")
+    controls = manifest.get("expected_controls")
+    if not isinstance(controls, dict) or any(key not in controls for key in ("branch_allowlist", "workflow_states", "active_writers")):
+        raise PublicationError("expected control snapshots are incomplete")
     if environment != expected_environment:
         raise PublicationError("required reviewer environment missing or mismatched")
     selected = _ref_map(manifest.get("selected_refs"), "selected_refs")
