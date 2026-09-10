@@ -338,6 +338,7 @@ impl RemoteAppServerClient {
             let mut terminal_state = None::<RemoteTerminalState>;
             let mut event_delivery_enabled = true;
             let mut skipped_events = 0usize;
+            let mut post_pending_skipped_events = 0usize;
             let mut pending_required_event = None::<AppServerEvent>;
             loop {
                 tokio::select! {
@@ -356,6 +357,9 @@ impl RemoteAppServerClient {
                                     });
                                 } else if let Some(event) = pending_required_event.take() {
                                     permit.send(event);
+                                    skipped_events = skipped_events.saturating_add(
+                                        std::mem::take(&mut post_pending_skipped_events),
+                                    );
                                 } else if let Some(state) = terminal_state.as_mut() {
                                     permit.send(AppServerEvent::Disconnected {
                                         message: state.message.clone(),
@@ -365,6 +369,7 @@ impl RemoteAppServerClient {
                             }
                             Err(_) => {
                                 skipped_events = 0;
+                                post_pending_skipped_events = 0;
                                 pending_required_event = None;
                                 disable_remote_event_delivery(
                                     &mut terminal_state,
@@ -519,7 +524,8 @@ impl RemoteAppServerClient {
                         }
                     }
                     message = stream.next(), if event_delivery_enabled
-                        && terminal_state.is_none() => {
+                        && terminal_state.is_none()
+                        && (pending_required_event.is_none() || !pending_requests.is_empty()) => {
                         match message {
                             Some(Ok(Message::Text(text))) => {
                                 match serde_json::from_str::<JSONRPCMessage>(&text) {
@@ -538,6 +544,7 @@ impl RemoteAppServerClient {
                                             let delivery = try_deliver_event(
                                                 &event_tx,
                                                 &mut skipped_events,
+                                                &mut post_pending_skipped_events,
                                                 &mut pending_required_event,
                                                 event,
                                             );
@@ -585,6 +592,7 @@ impl RemoteAppServerClient {
                                                 let delivery = try_deliver_event(
                                                     &event_tx,
                                                     &mut skipped_events,
+                                                    &mut post_pending_skipped_events,
                                                     &mut pending_required_event,
                                                     AppServerEvent::ServerRequest(request),
                                                 );
@@ -1326,16 +1334,24 @@ fn finish_remote_control_write(
 ///
 /// The worker retains at most one required event in `pending_event`. Best-effort
 /// notification loss is represented by `skipped_events`; response messages remain
-/// readable while required-event custody is pending. A second pending required
-/// event terminalizes the connection instead of evicting or overwriting custody.
+/// readable while required-event custody is pending. Loss after a pending
+/// required event is kept in a separate counter so it cannot overtake that
+/// event. A second pending required event terminalizes the connection instead
+/// of evicting or overwriting custody.
 fn try_deliver_event(
     event_tx: &mpsc::Sender<AppServerEvent>,
     skipped_events: &mut usize,
+    post_pending_skipped_events: &mut usize,
     pending_event: &mut Option<AppServerEvent>,
     event: AppServerEvent,
 ) -> RemoteEventForwardResult {
-    if remote_event_requires_delivery(&event) && pending_event.is_some() {
-        return RemoteEventForwardResult::RequiredOverflow;
+    if pending_event.is_some() {
+        if remote_event_requires_delivery(&event) {
+            return RemoteEventForwardResult::RequiredOverflow;
+        }
+        *post_pending_skipped_events = post_pending_skipped_events.saturating_add(1);
+        warn!("dropping remote app-server event because required event custody is pending");
+        return RemoteEventForwardResult::DroppedBestEffort;
     }
 
     // A lag marker is a FIFO barrier: events decoded after a dropped
@@ -1468,6 +1484,7 @@ mod tests {
     async fn lag_barrier_prevents_required_event_overtake_after_consumer_drain() {
         let (event_tx, mut event_rx) = mpsc::channel(1);
         let mut skipped_events = 0;
+        let mut post_pending_skipped_events = 0;
         let mut pending_event = None;
 
         event_tx
@@ -1477,6 +1494,7 @@ mod tests {
             try_deliver_event(
                 &event_tx,
                 &mut skipped_events,
+                &mut post_pending_skipped_events,
                 &mut pending_event,
                 AppServerEvent::Lagged { skipped: 1 },
             ),
@@ -1492,6 +1510,7 @@ mod tests {
             try_deliver_event(
                 &event_tx,
                 &mut skipped_events,
+                &mut post_pending_skipped_events,
                 &mut pending_event,
                 AppServerEvent::Disconnected {
                     message: "required".to_string(),
@@ -1519,6 +1538,126 @@ mod tests {
         assert!(matches!(
             event_rx.recv().await,
             Some(AppServerEvent::Disconnected { message }) if message == "required"
+        ));
+    }
+
+    #[tokio::test]
+    async fn pending_required_event_keeps_best_effort_loss_after_it_when_slot_frees() {
+        let (event_tx, mut event_rx) = mpsc::channel(1);
+        let mut skipped_events = 0usize;
+        let mut post_pending_skipped_events = 0;
+        let mut pending_event = Some(AppServerEvent::Disconnected {
+            message: "required".to_string(),
+        });
+
+        event_tx
+            .try_send(AppServerEvent::Lagged { skipped: 1 })
+            .expect("test queue should start full");
+        assert_eq!(
+            try_deliver_event(
+                &event_tx,
+                &mut skipped_events,
+                &mut post_pending_skipped_events,
+                &mut pending_event,
+                AppServerEvent::Lagged { skipped: 1 },
+            ),
+            RemoteEventForwardResult::DroppedBestEffort
+        );
+        assert_eq!(skipped_events, 0);
+        assert_eq!(post_pending_skipped_events, 1);
+
+        let _ = event_rx.recv().await;
+        assert_eq!(
+            try_deliver_event(
+                &event_tx,
+                &mut skipped_events,
+                &mut post_pending_skipped_events,
+                &mut pending_event,
+                AppServerEvent::Lagged { skipped: 1 },
+            ),
+            RemoteEventForwardResult::DroppedBestEffort
+        );
+        assert_eq!(post_pending_skipped_events, 2);
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn post_pending_loss_barrier_precedes_later_required_event() {
+        let (event_tx, mut event_rx) = mpsc::channel(1);
+        let mut skipped_events = 0usize;
+        let mut post_pending_skipped_events = 2;
+        let mut pending_event = Some(AppServerEvent::Disconnected {
+            message: "first".to_string(),
+        });
+
+        event_tx
+            .try_send(pending_event.take().expect("pending event should exist"))
+            .expect("required event should fit after consumer drain");
+        skipped_events =
+            skipped_events.saturating_add(std::mem::take(&mut post_pending_skipped_events));
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(AppServerEvent::Disconnected { message }) if message == "first"
+        ));
+
+        assert_eq!(
+            try_deliver_event(
+                &event_tx,
+                &mut skipped_events,
+                &mut post_pending_skipped_events,
+                &mut pending_event,
+                AppServerEvent::Disconnected {
+                    message: "second".to_string(),
+                },
+            ),
+            RemoteEventForwardResult::Pending
+        );
+        event_tx
+            .try_send(AppServerEvent::Lagged {
+                skipped: std::mem::take(&mut skipped_events),
+            })
+            .expect("post-pending lag should precede required event");
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(AppServerEvent::Lagged { skipped: 2 })
+        ));
+        event_tx
+            .try_send(
+                pending_event
+                    .take()
+                    .expect("later required event should remain"),
+            )
+            .expect("later required event should follow post-pending lag");
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(AppServerEvent::Disconnected { message }) if message == "second"
+        ));
+    }
+
+    #[test]
+    fn pending_required_event_overflow_preserves_original_custody() {
+        let (event_tx, _event_rx) = mpsc::channel(1);
+        let mut skipped_events = 0;
+        let mut post_pending_skipped_events = 0;
+        let mut pending_event = Some(AppServerEvent::Disconnected {
+            message: "original".to_string(),
+        });
+
+        assert_eq!(
+            try_deliver_event(
+                &event_tx,
+                &mut skipped_events,
+                &mut post_pending_skipped_events,
+                &mut pending_event,
+                AppServerEvent::Disconnected {
+                    message: "overflow".to_string(),
+                },
+            ),
+            RemoteEventForwardResult::RequiredOverflow
+        );
+        assert!(matches!(
+            pending_event,
+            Some(AppServerEvent::Disconnected { message }) if message == "original"
         ));
     }
 
