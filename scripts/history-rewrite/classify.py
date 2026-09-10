@@ -6,10 +6,12 @@ import atexit
 import gzip
 import os
 import re
-import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+
+from object_index import GitObjectIndex
 
 REPO, POLICY, OUTPUT = map(Path, sys.argv[1:])
 policy = json.loads(POLICY.read_text(encoding="utf-8"))
@@ -40,57 +42,6 @@ for rule in policy.get("rules", []):
 ACCEPTED_PATTERN_COUNT = len(base_patterns) + len(rewrite_patterns)
 if ACCEPTED_PATTERN_COUNT == 0:
     raise SystemExit("pattern family is required")
-
-def git(*args):
-    return subprocess.check_output(["git", "-C", str(REPO), *args], text=True, errors="replace")
-
-class GitCatFileBatch:
-    def __init__(self):
-        self.process = subprocess.Popen(
-            ["git", "-C", str(REPO), "cat-file", "--batch"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-
-    def read(self, identity):
-        self.process.stdin.write((identity + "\n").encode("ascii"))
-        self.process.stdin.flush()
-        header = self.process.stdout.readline()
-        if not header:
-            raise RuntimeError("git cat-file --batch terminated unexpectedly")
-        fields = header.rstrip(b"\n").split()
-        if len(fields) == 2 and fields[1] == b"missing":
-            return None
-        if len(fields) != 3:
-            raise RuntimeError("malformed git cat-file --batch response")
-        try:
-            size = int(fields[2])
-        except ValueError as exc:
-            raise RuntimeError("malformed git cat-file --batch object size") from exc
-        value = self.process.stdout.read(size)
-        if len(value) != size or self.process.stdout.read(1) != b"\n":
-            raise RuntimeError("truncated git cat-file --batch response")
-        return value
-
-    def close(self):
-        if self.process.stdin is not None:
-            try:
-                self.process.stdin.close()
-            except OSError:
-                pass
-        if self.process.poll() is None:
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-                    self.process.wait()
-        if self.process.stdout is not None:
-            self.process.stdout.close()
 
 class OutputWriter:
     """Write complete metadata rows to plain and deterministic gzip streams."""
@@ -305,6 +256,119 @@ def account_scan(kind, byte_count):
     per_kind.setdefault(kind, {"scanned_fields": 0, "admitted_fields": 0, "rows": 0, "matches": 0})
     per_kind[kind]["scanned_fields"] += 1
 
+def account_scans(kind, field_count, byte_count):
+    global scanned_fields, scanned_utf8_bytes
+    scanned_fields += field_count
+    scanned_utf8_bytes += byte_count
+    per_kind.setdefault(kind, {"scanned_fields": 0, "admitted_fields": 0, "rows": 0, "matches": 0})
+    per_kind[kind]["scanned_fields"] += field_count
+
+@dataclass(frozen=True)
+class AdmittedField:
+    kind: str
+    identity: str
+    path: str
+    proof: str
+    metadata: tuple
+
+@dataclass(frozen=True)
+class TreeSummary:
+    path_fields: int
+    path_bytes: int
+    blob_fields: int
+    blob_bytes: int
+    admitted: tuple[AdmittedField, ...]
+
+@dataclass(frozen=True)
+class BlobAnalysis:
+    byte_count: int
+    proof: str
+    rewrite: tuple
+    context: tuple
+
+path_analysis_cache = {}
+blob_analysis_cache = {}
+tree_summary_cache = {}
+
+def analyze_blob(index, identity):
+    cached = blob_analysis_cache.get(identity)
+    if cached is not None:
+        return cached
+    normalized = index.blob(identity).decode("utf-8", "replace")
+    encoded = normalized.encode("utf-8", "replace")
+    rewrite = []
+    for pid, rx, classification, rationale, _priority, scopes, target_paths in rewrite_patterns:
+        if "blob" in scopes and rx.search(normalized):
+            rewrite.append((pid, classification, hashlib.sha256(rationale.encode()).hexdigest(), match_count(rx, normalized, pid), frozenset(target_paths)))
+    matches = [(pid, rx, classification, rationale, priority) for pid, rx, classification, rationale, priority, scopes in base_patterns if "blob" in scopes and rx.search(normalized)]
+    context = []
+    if matches:
+        top = max(item[4] for item in matches)
+        winners = [item for item in matches if item[4] == top]
+        if len({item[2] for item in winners}) > 1:
+            raise SystemExit("overlapping classification patterns require explicit priority")
+        for pid, rx, classification, rationale, _priority in winners:
+            context.append((pid, classification, hashlib.sha256(rationale.encode()).hexdigest(), match_count(rx, normalized, pid)))
+    result = BlobAnalysis(
+        byte_count=len(encoded),
+        proof=hashlib.sha256(encoded).hexdigest() if rewrite or context else "",
+        rewrite=tuple(rewrite),
+        context=tuple(context),
+    )
+    blob_analysis_cache[identity] = result
+    return result
+
+def summarize_tree(index, tree_identity, prefix=b""):
+    key = (tree_identity, prefix)
+    cached = tree_summary_cache.get(key)
+    if cached is not None:
+        return cached
+    path_fields = 0
+    path_bytes = 0
+    blob_fields = 0
+    blob_bytes = 0
+    admitted = []
+    for entry in index.tree(tree_identity):
+        raw_path = prefix + entry.name
+        if entry.kind == b"tree":
+            child = summarize_tree(index, entry.identity.decode("ascii"), raw_path + b"/")
+            path_fields += child.path_fields
+            path_bytes += child.path_bytes
+            blob_fields += child.blob_fields
+            blob_bytes += child.blob_bytes
+            admitted.extend(child.admitted)
+            continue
+        path = raw_path.decode("utf-8", "replace")
+        identity = entry.identity.decode("ascii")
+        encoded_path = path.encode("utf-8", "replace")
+        path_fields += 1
+        path_bytes += len(encoded_path)
+        path_result = path_analysis_cache.get(path)
+        if path_result is None:
+            path_result = match_metadata("path", path, path)
+            path_analysis_cache[path] = path_result
+        proof, metadata = path_result
+        if metadata:
+            admitted.append(AdmittedField("path", identity, path, proof, tuple(metadata)))
+        if entry.kind != b"blob":
+            continue
+        blob = analyze_blob(index, identity)
+        blob_fields += 1
+        blob_bytes += blob.byte_count
+        rewrite_metadata = [item[:4] for item in blob.rewrite if not item[4] or path in item[4]]
+        metadata = tuple(rewrite_metadata) + blob.context
+        if metadata:
+            admitted.append(AdmittedField("blob", identity, path, blob.proof, metadata))
+    result = TreeSummary(path_fields, path_bytes, blob_fields, blob_bytes, tuple(admitted))
+    tree_summary_cache[key] = result
+    return result
+
+def replay_tree(summary):
+    account_scans("path", summary.path_fields, summary.path_bytes)
+    account_scans("blob", summary.blob_fields, summary.blob_bytes)
+    for field in summary.admitted:
+        emit(field.kind, field.identity, field.path, field.proof, field.metadata)
+
 OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 writer = OutputWriter(OUTPUT)
 atexit.register(writer.cleanup)
@@ -314,38 +378,16 @@ except BaseException:
     writer.cleanup()
     raise
 
-for identity in git("rev-list", "--all").splitlines():
-    record = git("show", "-s", "--format=%H%x00%s%x00%b", identity)
-    fields = record.split("\x00", 2)
-    if len(fields) == 3:
-        scan("commit_subject", fields[0], fields[1])
-        scan("commit_body", fields[0], fields[2])
-
-blob_match_cache = {}
-batch = GitCatFileBatch()
+index = GitObjectIndex(REPO)
 try:
-    for commit in git("rev-list", "--all").splitlines():
-        for record in subprocess.check_output(["git", "-C", str(REPO), "ls-tree", "-r", "-z", commit], text=False).split(b"\0"):
-            if not record: continue
-            head, path_bytes = record.split(b"\t", 1)
-            mode, typ, identity = head.split()
-            path = path_bytes.decode("utf-8", "replace")
-            identity = identity.decode()
-            scan("path", identity, path, path)
-            if typ.decode() != "blob": continue
-            cached = blob_match_cache.get(identity)
-            if cached is None:
-                blob = batch.read(identity)
-                if blob is None:
-                    raise RuntimeError(f"git cat-file --batch missing blob {identity}")
-                normalized = blob.decode("utf-8", "replace")
-                cached = (normalized, len(normalized.encode("utf-8", "replace")))
-                blob_match_cache[identity] = cached
-            account_scan("blob", cached[1])
-            proof, metadata = match_metadata("blob", cached[0], path)
-            emit("blob", identity, path, proof, metadata)
+    commits = index.commits()
+    for commit in commits:
+        scan("commit_subject", commit.identity, commit.subject)
+        scan("commit_body", commit.identity, commit.body)
+    for commit in commits:
+        replay_tree(summarize_tree(index, commit.tree))
 finally:
-    batch.close()
+    index.close()
 
 try:
     for pid in sorted(per_pattern):

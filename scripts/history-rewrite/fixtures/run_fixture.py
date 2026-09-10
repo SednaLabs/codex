@@ -2,6 +2,7 @@
 """Hosted-only synthetic execution of the production rewrite candidate."""
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,7 @@ def command(repo: Path, *args: str) -> str:
     return run("git", "-C", str(repo), *args)
 
 
-def write_policy(path: Path, rules: list[dict], canonical_source: str) -> None:
+def write_policy(path: Path, rules: list[dict], canonical_source: str, patterns: list[dict] | None = None) -> None:
     path.write_text(
         json.dumps(
             {
@@ -34,6 +35,7 @@ def write_policy(path: Path, rules: list[dict], canonical_source: str) -> None:
                 "canonical_source_commit": canonical_source,
                 "review_packet": {"schema": "review-packet-v1", "executable": False},
                 "rules": rules,
+                "patterns": patterns or [],
             },
             sort_keys=True,
         ),
@@ -196,6 +198,84 @@ def classifier_path_rename_fixture(root: Path, repo: Path, source: str, policy: 
         "occurrences": occurrences,
     }
     return hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def classifier_exact_differential_fixture(root: Path) -> str:
+    reference = os.environ.get("HISTORY_REWRITE_REFERENCE_CLASSIFIER")
+    if not reference or not Path(reference).is_file():
+        raise SystemExit("exact frozen classifier reference is unavailable")
+
+    root.mkdir()
+    repo, _, _, canonical_source, old_blob, new_blob, _ = make_repo(root)
+    repo_bytes = os.fsencode(repo)
+    raw_paths = [
+        b"order-tab\tname.txt",
+        b"order-newline\nname.txt",
+        b"order-nonutf8-\xff.txt",
+        b"nested-order/a-file.txt",
+        b"nested-order/a-file.txt.child",
+    ]
+    os.makedirs(repo_bytes + b"/nested-order", exist_ok=True)
+    for position, relative in enumerate(raw_paths):
+        descriptor = os.open(repo_bytes + b"/" + relative, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        try:
+            os.write(descriptor, f"raw-path-{position}\n".encode())
+        finally:
+            os.close(descriptor)
+    command(repo, "add", "-A")
+    command(repo, "commit", "-qm", "raw path ordering")
+    for position in range(16):
+        command(repo, "commit", "--allow-empty", "-qm", f"repeated root tree {position}")
+
+    raw_commit = command_bytes(repo, "cat-file", "commit", "HEAD")
+    headers, separator, _ = raw_commit.partition(b"\n\n")
+    if separator != b"\n\n":
+        raise SystemExit("synthetic NUL commit lacks a header separator")
+    nul_commit = run(
+        "git", "-C", str(repo), "hash-object", "--literally", "-t", "commit", "-w", "--stdin",
+        input=headers + separator + b"old nul subject\n\nbefore-nul\x00after-nul\n",
+    ).strip()
+    if len(nul_commit) != 40:
+        raise SystemExit("synthetic NUL commit object identity is malformed")
+    command(repo, "update-ref", "refs/heads/nul-body", nul_commit)
+
+    policy = root / "differential-policy.json"
+    write_policy(
+        policy,
+        base_rules(old_blob, new_blob),
+        canonical_source,
+        patterns=[
+            {
+                "id": "all-nonempty-fields",
+                "pattern": "(?s).",
+                "classification": "fixture_context",
+                "rationale": "exercise exact field order and occurrence accounting",
+                "priority": 200,
+            }
+        ],
+    )
+    reference_output = root / "reference" / "classification.tsv"
+    candidate_output = root / "candidate" / "classification.tsv"
+    reference_output.parent.mkdir()
+    candidate_output.parent.mkdir()
+    for phase, classifier, output in (
+        ("classifier_exact_reference", Path(reference), reference_output),
+        ("classifier_exact_candidate", CLASSIFIER, candidate_output),
+    ):
+        result = subprocess.run(
+            ["python3", str(classifier), str(repo), str(policy), str(output)],
+            text=True,
+            capture_output=True,
+        )
+        require_driver_success(phase, result)
+    compared = {}
+    for suffix in ("", ".gz", ".metadata.json"):
+        expected = Path(str(reference_output) + suffix).read_bytes()
+        actual = Path(str(candidate_output) + suffix).read_bytes()
+        if actual != expected:
+            raise SystemExit(f"exact classifier differential mismatch: {suffix or 'tsv'}")
+        compared[suffix or "tsv"] = hashlib.sha256(actual).hexdigest()
+    return hashlib.sha256(json.dumps(compared, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def corrupt_map(path: Path, kind: str, source: str, branch: str, repo: Path) -> tuple[Path, Path]:
@@ -489,6 +569,7 @@ def main() -> None:
         positive = invoke(repo, source, policy, root)
         require_driver_success("positive_apply_and_verify", positive)
         evidence.append(("classifier_path_rename_before_after", classifier_path_rename_fixture(root, repo, source, policy)))
+        evidence.append(("classifier_exact_bc957_differential_nul_and_raw_paths", classifier_exact_differential_fixture(Path(temporary) / "classifier-differential")))
         bare_root = Path(temporary) / "positive-bare"; bare_root.mkdir()
         bare_repo, bare_source, _ = make_bare_mirror(bare_root, root / "preimage.git")
         bare_positive = invoke(bare_repo, bare_source, policy, bare_root)

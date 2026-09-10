@@ -68,6 +68,29 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Materialize exact frozen classifier reference
+        env:
+          REFERENCE_SHA: bc95757b43a5c293de98cfef210baed11da205e3
+          REFERENCE_TREE: 6a57e87d801fcdcdef3aca98e75116b6bb1a13c7
+          REFERENCE_BLOB: 6395bdc602ecf02cf15d7b37db4b8d40fb44b1b8
+          REFERENCE_FILE_SHA256: 5b04c3c6cf0ca510a7cce17e27038fe4a5ef92a9ca26d90936be81c4ed73663e
+        run: |
+          set -euo pipefail; umask 077
+          reference_root="$RUNNER_TEMP/history-rewrite-reference"
+          reference_repo="$reference_root/repo.git"
+          reference_script="$reference_root/classify-bc95757.py"
+          mkdir -m 700 "$reference_root"
+          git init --bare "$reference_repo" >/dev/null
+          git -C "$reference_repo" fetch --no-tags --no-write-fetch-head \
+            "https://github.com/$GITHUB_REPOSITORY.git" \
+            "$REFERENCE_SHA:refs/testing/history-rewrite-reference/$REFERENCE_SHA"
+          test "$(git -C "$reference_repo" rev-parse "$REFERENCE_SHA^{tree}")" = "$REFERENCE_TREE"
+          test "$(git -C "$reference_repo" rev-parse "$REFERENCE_SHA:scripts/history-rewrite/classify.py")" = "$REFERENCE_BLOB"
+          git -C "$reference_repo" show "$REFERENCE_SHA:scripts/history-rewrite/classify.py" > "$reference_script"
+          test "$(sha256sum "$reference_script" | cut -d' ' -f1)" = "$REFERENCE_FILE_SHA256"
+          printf 'HISTORY_REWRITE_REFERENCE_CLASSIFIER=%s\n' "$reference_script" >> "$GITHUB_ENV"
       - name: Install pinned git-filter-repo
         run: |
           set -euo pipefail
@@ -108,6 +131,7 @@ jobs:
       POLICY: scripts/history-rewrite/policy.json
       REPO_URL: https://github.com/${{ github.repository }}.git
       GH_TOKEN: ${{ github.token }}
+      TIMING_DIR: ${{ runner.temp }}/history-rewrite-timing
     steps:
       - name: Checkout frozen harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,6 +142,7 @@ jobs:
       - name: Verify frozen inputs and reviewed adapter policy
         run: |
           set -euo pipefail; umask 077
+          mkdir -m 700 "$TIMING_DIR"
           [[ "$GITHUB_REPOSITORY" == sednalabs/codex && "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$HARNESS_SHA" =~ ^[0-9a-f]{40}$ && "$HARNESS_TREE" =~ ^[0-9a-f]{40}$ ]]
           test "$GITHUB_SHA" = "$HARNESS_SHA"
@@ -183,6 +208,9 @@ jobs:
       - name: Fetch only frozen objects into isolated refs
         run: |
           set -euo pipefail; umask 077
+          step_started=$(date +%s)
+          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=fetch-frozen-objects status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$TIMING_DIR/stages.tsv"; exit "$rc"; }
+          trap finish_timing EXIT
           rm -rf work/repo.git
           git init --bare work/repo.git >/dev/null
           git -C work/repo.git remote add source "$REPO_URL"
@@ -192,32 +220,55 @@ jobs:
           isolated = {}
           for name, oid in sorted(refs.items()):
               target = "refs/rewrites/selected/" + hashlib.sha256(name.encode("utf-8")).hexdigest()
-              subprocess.run(["git", "-C", "work/repo.git", "fetch", "--no-tags", "source", f"{oid}:{target}"], check=True)
-              if subprocess.check_output(["git", "-C", "work/repo.git", "rev-parse", target], text=True).strip() != oid: raise SystemExit(f"frozen object fetch mismatch: {name}")
               isolated[name] = target
-          source_target = "refs/rewrites/source"
-          subprocess.run(["git", "-C", "work/repo.git", "update-ref", source_target, os.environ["SOURCE_SHA"]], check=True)
+          with open("work/frozen-refspecs.txt", "w", encoding="ascii") as stream:
+              for name, target in isolated.items(): stream.write(f"{refs[name]}:{target}\n")
           open("output/original-to-isolated-ref-map.json", "w", encoding="utf-8").write(json.dumps(isolated, sort_keys=True, separators=(",", ":")) + "\n")
           PY
+          git -C work/repo.git fetch --atomic --no-tags --no-write-fetch-head --stdin source < work/frozen-refspecs.txt
+          python3 - <<'PY'
+          import json, subprocess
+          refs = json.load(open("selected-refs.json", encoding="utf-8"))
+          isolated = json.load(open("output/original-to-isolated-ref-map.json", encoding="utf-8"))
+          expected = {target: refs[name] for name, target in isolated.items()}
+          actual = {}
+          for line in subprocess.check_output(["git", "-C", "work/repo.git", "for-each-ref", "--format=%(refname) %(objectname)", "refs/rewrites/selected"], text=True).splitlines():
+              name, oid = line.split(); actual[name] = oid
+          if actual != expected: raise SystemExit("frozen object batch fetch map mismatch")
+          PY
+          git -C work/repo.git update-ref refs/rewrites/source "$SOURCE_SHA"
           test -z "$(git -C work/repo.git for-each-ref --format='%(refname)' | awk '$0 !~ /^refs\/rewrites\// {print}')"
       - name: Inventory bounded identities
         run: |
           set -euo pipefail
+          step_started=$(date +%s)
+          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=inventory-bounded-identities status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$TIMING_DIR/stages.tsv"; exit "$rc"; }
+          record_timing() { label=$1; started=$2; finished=$(date +%s); printf 'stage=%s status=0 duration_seconds=%s\n' "$label" "$((finished-started))" >> "$TIMING_DIR/stages.tsv"; }
+          trap finish_timing EXIT
           repo=work/repo.git
+          command_started=$(date +%s)
           git -C "$repo" for-each-ref --format='%(refname) %(objectname)' | sha256sum > output/refs.digest
           git -C "$repo" for-each-ref --format='%(refname)' | wc -l > output/ref-count
+          record_timing inventory-refs "$command_started"
+          command_started=$(date +%s)
           git -C "$repo" rev-list --all --count > output/commit-count
           git -C "$repo" rev-list --all --format='%H%x09%P%x09%s%x09%b' --no-commit-header | sha256sum > output/commit-metadata.digest
           git -C "$repo" rev-list --all --objects | sha256sum > output/object-paths.digest
           git -C "$repo" cat-file --batch-all-objects --batch-check='%(objectname) %(objecttype) %(objectsize)' | sha256sum > output/object-metadata.digest
+          record_timing inventory-object-digests "$command_started"
           printf '%s\n' 'plaintext object, commit, path, tree, and blob listings are intentionally not retained' > output/content-boundary.txt
           sha256sum "$POLICY" > output/policy.digest
+          command_started=$(date +%s)
           python3 scripts/history-rewrite/classify.py "$repo" "$POLICY" output/classification.tsv
+          record_timing inventory-classifier "$command_started"
           sha256sum output/classification.tsv > output/classification.digest
       - name: Apply reviewed rewrite and prove exact boundaries
         if: inputs.mode == 'rewrite'
         run: |
           set -euo pipefail
+          step_started=$(date +%s)
+          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=apply-and-verify status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$TIMING_DIR/stages.tsv"; exit "$rc"; }
+          trap finish_timing EXIT
           selected_has_tags=$(python3 -c 'import json; print(str(any(k.startswith("refs/tags/") for k in json.load(open("selected-refs.json")))).lower())')
           if test "$selected_has_tags" = true && test "$TAG_SIGNATURE_ACK" != true; then echo 'tag rewrite requires explicit signature acknowledgement' >&2; exit 1; fi
           git clone --mirror --no-local work/repo.git work/preimage.git >/dev/null
@@ -253,6 +304,9 @@ jobs:
         id: encrypt_candidate
         run: |
           set -euo pipefail; umask 077
+          step_started=$(date +%s)
+          finish_timing() { rc=$?; trap - EXIT; step_finished=$(date +%s); printf 'stage=encrypt-and-restore-check status=%s duration_seconds=%s\n' "$rc" "$((step_finished-step_started))" >> "$TIMING_DIR/stages.tsv"; exit "$rc"; }
+          trap finish_timing EXIT
           git -C work/repo.git bundle create "$GITHUB_WORKSPACE/work/history-rewrite-candidate.bundle" --all
           BUNDLE_HEADS=$(git bundle list-heads work/history-rewrite-candidate.bundle)
           test -n "$BUNDLE_HEADS"
@@ -311,6 +365,14 @@ jobs:
           name: history-rewrite-${{ inputs.mode }}-${{ github.run_id }}
           path: output
           if-no-files-found: error
+          retention-days: 7
+      - name: Upload timing-only diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: history-rewrite-timing-${{ github.run_id }}
+          path: ${{ runner.temp }}/history-rewrite-timing
+          if-no-files-found: warn
           retention-days: 7
       - name: Remove all candidate staging
         if: ${{ always() }}

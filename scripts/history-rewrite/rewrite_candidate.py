@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from object_index import GitObjectIndex, TreeEntry
+
 HEX = re.compile(r"[0-9a-f]{40}\Z")
 ZERO = "0" * 40
 TAG_TRANSPORT_PREFIX = "refs/tags/history-rewrite-stage/"
@@ -124,29 +126,6 @@ def restore_annotated_tags(repo: Path, staged: dict[str, str], transports: dict[
     return restored
 
 
-def entries(repo: Path, commit: str) -> dict[bytes, tuple[bytes, bytes, bytes]]:
-    result = {}
-    raw = git(repo, "ls-tree", "-r", "-z", commit, text=False)
-    for row in raw.split(b"\0"):
-        if not row:
-            continue
-        meta, name = row.split(b"\t", 1)
-        mode, kind, blob = meta.split()
-        if name in result:
-            fail("tree contains duplicate paths")
-        result[name] = (mode, kind, blob)
-    return result
-
-
-def blob(repo: Path, identity: bytes) -> bytes:
-    return git(repo, "cat-file", "-p", identity.decode(), text=False)
-
-
-def commit_parents(repo: Path, identity: str) -> list[str]:
-    raw = git(repo, "cat-file", "-p", identity, text=False)
-    return [line[7:].decode() for line in raw.split(b"\n") if line.startswith(b"parent ")]
-
-
 def load_policy(path: Path) -> dict:
     policy = json.loads(path.read_text(encoding="utf-8"))
     if policy.get("schema") != 2 or policy.get("repository") != "sednalabs/codex":
@@ -201,40 +180,48 @@ def changed_path(name: bytes, rules: list[dict]) -> bytes:
     return result
 
 
-def blob_rule_context(repo: Path, rules: list[dict], canonical_source: str) -> dict:
-    all_entries = [entries(repo, commit) for commit in git(repo, "rev-list", "--all").splitlines()]
-    source_entries = entries(repo, canonical_source)
+def blob_rule_context(index: GitObjectIndex, rules: list[dict], canonical_source: str) -> dict:
+    commits = index.commits()
+    source_tree = index.commit(canonical_source).tree
+    roots = tuple(dict.fromkeys(commit.tree for commit in commits))
     selected_by_rule: dict[str, set[bytes]] = {}
     replacement_by_rule: dict[str, bytes] = {}
     residual_by_rule: dict[str, set[bytes]] = {}
+    blob_cache: dict[bytes, bytes] = {}
+
+    def read_blob(identity: bytes) -> bytes:
+        cached = blob_cache.get(identity)
+        if cached is None:
+            cached = index.blob(identity)
+            blob_cache[identity] = cached
+        return cached
+
     for rule in rules:
         if rule["scope"] != "blob":
             continue
         targets = {item.encode() for item in rule["target_paths"]}
+        candidates = {
+            entry.identity
+            for tree in roots
+            for path in targets
+            if (entry := index.lookup_path(tree, path)) is not None and entry.kind == b"blob"
+        }
         if rule["kind"] == "exact_blob_replacement":
             old_blob = rule["old_blob"].encode("ascii")
             new_blob = rule["new_blob"].encode("ascii")
             source_path = rule["source_path"].encode()
-            source_value = source_entries.get(source_path)
-            if source_value is None or source_value[1] != b"blob" or source_value[2] != new_blob:
+            source_value = index.lookup_path(source_tree, source_path)
+            if source_value is None or source_value.kind != b"blob" or source_value.identity != new_blob:
                 fail(f"{rule['id']}: canonical source path does not resolve to the reviewed new blob")
-            replacement_by_rule[rule["id"]] = blob(repo, new_blob)
-            candidates = {value[2] for tree in all_entries for name, value in tree.items() if name in targets and value[1] == b"blob"}
+            replacement_by_rule[rule["id"]] = read_blob(new_blob)
             selected = {identity for identity in candidates if identity == old_blob}
             residual_by_rule[rule["id"]] = candidates - selected - {new_blob}
             if not selected:
                 fail(f"{rule['id']}: guarded old blob is absent from its exact target path")
         else:
             old = rule["old"].encode()
-            candidates = {value[2] for tree in all_entries for name, value in tree.items() if name in targets and value[1] == b"blob"}
-            selected = {identity for identity in candidates if old in blob(repo, identity)}
-        locations = {identity: set() for identity in selected}
-        # Deliberately collect locations only for selected OIDs.  Unrelated
-        # duplicated blobs are allowed; selected blobs may not escape scope.
-        for tree in all_entries:
-            for name, value in tree.items():
-                if value[2] in locations:
-                    locations[value[2]].add(name)
+            selected = {identity for identity in candidates if old in read_blob(identity)}
+        locations = index.paths_for_oids(selected)
         for identity, paths in locations.items():
             if not paths.issubset(targets):
                 fail(f"{rule['id']}: selected shared blob reaches an unrelated exact path")
@@ -242,18 +229,21 @@ def blob_rule_context(repo: Path, rules: list[dict], canonical_source: str) -> d
     return {"selected": selected_by_rule, "replacements": replacement_by_rule, "residuals": residual_by_rule}
 
 
-def preflight(repo: Path, policy: dict) -> dict:
+def preflight(index: GitObjectIndex, policy: dict) -> dict:
     rules = policy["rules"]
-    git(repo, "cat-file", "-e", f"{policy['canonical_source_commit']}^{{commit}}")
-    for rule in rules:
-        if rule["scope"] != "path":
-            continue
-        for commit in git(repo, "rev-list", "--all").splitlines():
-            before = entries(repo, commit)
-            after_names = [changed_path(name, rules) for name in before]
-            if len(after_names) != len(set(after_names)):
-                fail(f"{rule['id']}: exact-path rename collision")
-    return blob_rule_context(repo, rules, policy["canonical_source_commit"])
+    index.commit(policy["canonical_source_commit"])
+    path_rules = [rule for rule in rules if rule["scope"] == "path"]
+    path_domain = {path.encode() for rule in path_rules for path in rule["target_paths"]}
+    path_domain.update(changed_path(path, rules) for path in tuple(path_domain))
+    roots = dict.fromkeys(commit.tree for commit in index.commits())
+    for tree in roots:
+        after_names = []
+        for path in path_domain:
+            if index.lookup_path(tree, path) is not None:
+                after_names.append(changed_path(path, rules))
+        if len(after_names) != len(set(after_names)):
+            fail(f"{path_rules[0]['id']}: exact-path rename collision")
+    return blob_rule_context(index, rules, policy["canonical_source_commit"])
 
 
 def write_callbacks(work: Path, policy: Path, rule_context: dict) -> tuple[Path, Path, Path]:
@@ -372,89 +362,134 @@ def transformed_bytes(data: bytes, identity: bytes, rules: list[dict], context: 
     return data
 
 
-def verify(repo: Path, preimage: Path, policy_path: Path, source_sha: str, work: Path, output: Path, commit_map: Path, ref_map: Path) -> None:
+def verify(
+    repo: Path,
+    preimage: Path,
+    policy_path: Path,
+    source_sha: str,
+    work: Path,
+    output: Path,
+    commit_map: Path,
+    ref_map: Path,
+    preflight_context: dict | None = None,
+) -> None:
     policy = load_policy(policy_path)
     rules = policy["rules"]
-    context = preflight(preimage, policy)
     before, after = refs(preimage), refs(repo)
-    old_domain = set(git(preimage, "rev-list", "--all").splitlines())
-    mapping = parse_commit_map(commit_map, old_domain)
     ref_rows = parse_ref_map(ref_map, before, after)
     output.mkdir(parents=True, exist_ok=True)
-    map_rows = []
-    for old, new in sorted(mapping.items()):
-        old_parents, new_parents = commit_parents(preimage, old), commit_parents(repo, new)
-        if [mapping[parent] for parent in old_parents] != new_parents:
-            fail("ordered parent topology mismatch")
-        map_rows.append((old, new, ",".join(old_parents), ",".join(new_parents), "verified"))
-    tag_rows = []
-    for old, new, name in ref_rows:
-        old_type, new_type = git(preimage, "cat-file", "-t", old).strip(), git(repo, "cat-file", "-t", new).strip()
-        if old_type == new_type == "commit":
-            if mapping.get(old) != new:
-                fail("lightweight tag or branch is not commit-map bound")
-            kind = "lightweight" if name.startswith("refs/tags/") else "branch"
-        elif old_type == new_type == "tag":
-            old_peeled = git(preimage, "rev-parse", f"{old}^{{commit}}").strip()
-            new_peeled = git(repo, "rev-parse", f"{new}^{{commit}}").strip()
-            if mapping.get(old_peeled) != new_peeled:
-                fail("annotated tag peeled identity is not commit-map bound")
-            kind = "annotated"
-        else:
-            fail("ref object type changed")
-        if name.startswith("refs/tags/"):
-            old_status = "verified" if subprocess.run(["git", "-C", str(preimage), "verify-tag", name], capture_output=True).returncode == 0 else "unsigned-or-unverified"
-            new_status = "verified" if subprocess.run(["git", "-C", str(repo), "verify-tag", name], capture_output=True).returncode == 0 else "unsigned-or-unverified"
-            tag_rows.append((name, kind, old, new, old_status, new_status, "rewritten-commits-require-signature-reassessment"))
-    proof = output / "map-proof.tsv"
-    proof.write_text("old_commit\tnew_commit\told_parents\tnew_parents\tstatus\n" + "".join("\t".join(row) + "\n" for row in map_rows), encoding="utf-8")
-    (output / "tag-proof.tsv").write_text("ref\tkind\told_object\tnew_object\told_signature\tnew_signature\tconsequence\n" + "".join("\t".join(row) + "\n" for row in tag_rows), encoding="utf-8")
-    untouched_rows = []
-    for old, new in sorted(mapping.items()):
-        original, rewritten = entries(preimage, old), entries(repo, new)
-        expected_names = {changed_path(name, rules) for name in original}
-        if set(rewritten) != expected_names:
-            fail("tree path domain changed outside approved exact transformations")
-        untouched = 0
-        for name, (mode, kind, identity) in original.items():
-            expected_name = changed_path(name, rules)
-            got = rewritten.get(expected_name)
-            if got is None or got[:2] != (mode, kind):
-                fail("path mode or type changed")
-            expected_data = transformed_bytes(blob(preimage, identity), identity, rules, context) if kind == b"blob" else b""
-            if kind == b"blob" and blob(repo, got[2]) != expected_data:
-                fail("target bytes do not equal the approved transformation or non-target bytes changed")
-            selected_blob = kind == b"blob" and any(identity in values for values in context["selected"].values())
-            if name == expected_name and not selected_blob and got != (mode, kind, identity):
-                fail("non-target path, mode, type, or bytes changed")
-            if name == expected_name and not selected_blob:
-                untouched += 1
-        untouched_rows.append((old, new, str(untouched), "verified"))
-    (output / "untouched-proof.tsv").write_text("old_commit\tnew_commit\tuntouched_entries\tstatus\n" + "".join("\t".join(row) + "\n" for row in untouched_rows), encoding="utf-8")
-    if source_sha not in mapping:
-        fail("source SHA is absent from the exact commit-map domain")
-    (output / "equivalence.txt").write_text(
-        f"source_tree_before={git(preimage, 'rev-parse', source_sha + '^{tree}').strip()}\nsource_tree_after={git(repo, 'rev-parse', mapping[source_sha] + '^{tree}').strip()}\n",
-        encoding="utf-8",
-    )
-    residuals = {
-        rule_id: {
-            "count": len(values),
-            "oid_set_sha256": hashlib.sha256("\n".join(sorted(value.decode("ascii") for value in values)).encode()).hexdigest(),
-            "disposition": "review-required",
+    with GitObjectIndex(preimage) as old_index, GitObjectIndex(repo) as new_index:
+        old_commits = old_index.commits()
+        new_index.commits()
+        context = preflight_context if preflight_context is not None else preflight(old_index, policy)
+        old_domain = {commit.identity for commit in old_commits}
+        mapping = parse_commit_map(commit_map, old_domain)
+        map_rows = []
+        tree_pairs = []
+        for old, new in sorted(mapping.items()):
+            old_record, new_record = old_index.commit(old), new_index.commit(new)
+            if [mapping[parent] for parent in old_record.parents] != list(new_record.parents):
+                fail("ordered parent topology mismatch")
+            map_rows.append((old, new, ",".join(old_record.parents), ",".join(new_record.parents), "verified"))
+            tree_pairs.append((old_record.tree, new_record.tree))
+        tag_rows = []
+        for old, new, name in ref_rows:
+            old_type = old_index.object_kind(old).decode("ascii")
+            new_type = new_index.object_kind(new).decode("ascii")
+            if old_type == new_type == "commit":
+                if mapping.get(old) != new:
+                    fail("lightweight tag or branch is not commit-map bound")
+                kind = "lightweight" if name.startswith("refs/tags/") else "branch"
+            elif old_type == new_type == "tag":
+                old_peeled = git(preimage, "rev-parse", f"{old}^{{commit}}").strip()
+                new_peeled = git(repo, "rev-parse", f"{new}^{{commit}}").strip()
+                if mapping.get(old_peeled) != new_peeled:
+                    fail("annotated tag peeled identity is not commit-map bound")
+                kind = "annotated"
+            else:
+                fail("ref object type changed")
+            if name.startswith("refs/tags/"):
+                old_status = "verified" if subprocess.run(["git", "-C", str(preimage), "verify-tag", name], capture_output=True).returncode == 0 else "unsigned-or-unverified"
+                new_status = "verified" if subprocess.run(["git", "-C", str(repo), "verify-tag", name], capture_output=True).returncode == 0 else "unsigned-or-unverified"
+                tag_rows.append((name, kind, old, new, old_status, new_status, "rewritten-commits-require-signature-reassessment"))
+        proof = output / "map-proof.tsv"
+        proof.write_text("old_commit\tnew_commit\told_parents\tnew_parents\tstatus\n" + "".join("\t".join(row) + "\n" for row in map_rows), encoding="utf-8")
+        (output / "tag-proof.tsv").write_text("ref\tkind\told_object\tnew_object\told_signature\tnew_signature\tconsequence\n" + "".join("\t".join(row) + "\n" for row in tag_rows), encoding="utf-8")
+
+        unique_tree_pairs = tuple(dict.fromkeys(tree_pairs))
+        new_objects = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-path", "objects").strip())
+        tree_diffs = old_index.batch_diff_trees(unique_tree_pairs, alternate_objects=new_objects)
+        target_paths = {path.encode() for rule in rules if rule["scope"] in {"path", "blob"} for path in rule["target_paths"]}
+        allowed_paths = set(target_paths)
+        allowed_paths.update(changed_path(path, rules) for path in tuple(target_paths))
+        selected_blobs = set().union(*context["selected"].values()) if context["selected"] else set()
+        blob_pair_cache: dict[tuple[bytes, bytes], bool] = {}
+        untouched_rows = []
+        for old, new in sorted(mapping.items()):
+            old_record, new_record = old_index.commit(old), new_index.commit(new)
+            diffs = tree_diffs[(old_record.tree, new_record.tree)]
+            if any(diff.path not in allowed_paths for diff in diffs):
+                fail("tree path domain changed outside approved exact transformations")
+            expected: dict[bytes, tuple[bytes, TreeEntry]] = {}
+            excluded_from_untouched: set[bytes] = set()
+            for path in allowed_paths:
+                entry = old_index.lookup_path(old_record.tree, path)
+                if entry is None:
+                    continue
+                expected_path = changed_path(path, rules)
+                if expected_path in expected:
+                    fail("tree path domain changed outside approved exact transformations")
+                expected[expected_path] = (path, entry)
+                if expected_path != path or (entry.kind == b"blob" and entry.identity in selected_blobs):
+                    excluded_from_untouched.add(path)
+            for path in allowed_paths:
+                actual = new_index.lookup_path(new_record.tree, path)
+                expected_item = expected.get(path)
+                if expected_item is None:
+                    if actual is not None:
+                        fail("tree path domain changed outside approved exact transformations")
+                    continue
+                original_path, original = expected_item
+                if actual is None or (actual.mode, actual.kind) != (original.mode, original.kind):
+                    fail("path mode or type changed")
+                selected_blob = original.kind == b"blob" and original.identity in selected_blobs
+                if original.kind == b"blob":
+                    pair = (original.identity, actual.identity)
+                    valid = blob_pair_cache.get(pair)
+                    if valid is None:
+                        expected_data = transformed_bytes(old_index.blob(original.identity), original.identity, rules, context)
+                        valid = new_index.blob(actual.identity) == expected_data
+                        blob_pair_cache[pair] = valid
+                    if not valid:
+                        fail("target bytes do not equal the approved transformation or non-target bytes changed")
+                if original_path == path and not selected_blob and actual != original:
+                    fail("non-target path, mode, type, or bytes changed")
+            untouched = old_index.leaf_count(old_record.tree) - len(excluded_from_untouched)
+            untouched_rows.append((old, new, str(untouched), "verified"))
+        (output / "untouched-proof.tsv").write_text("old_commit\tnew_commit\tuntouched_entries\tstatus\n" + "".join("\t".join(row) + "\n" for row in untouched_rows), encoding="utf-8")
+        if source_sha not in mapping:
+            fail("source SHA is absent from the exact commit-map domain")
+        (output / "equivalence.txt").write_text(
+            f"source_tree_before={old_index.commit(source_sha).tree}\nsource_tree_after={new_index.commit(mapping[source_sha]).tree}\n",
+            encoding="utf-8",
+        )
+        residuals = {
+            rule_id: {
+                "count": len(values),
+                "oid_set_sha256": hashlib.sha256("\n".join(sorted(value.decode("ascii") for value in values)).encode()).hexdigest(),
+                "disposition": "review-required",
+            }
+            for rule_id, values in sorted(context["residuals"].items())
         }
-        for rule_id, values in sorted(context["residuals"].items())
-    }
-    (output / "residual-review.json").write_text(json.dumps(residuals, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
-    if not any(rule["scope"] in {"path", "blob"} for rule in rules):
-        for old, new in mapping.items():
-            if git(preimage, "rev-parse", old + "^{tree}") != git(repo, "rev-parse", new + "^{tree}"):
-                fail("tree changed without an explicit path/blob rule")
+        (output / "residual-review.json").write_text(json.dumps(residuals, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        if not any(rule["scope"] in {"path", "blob"} for rule in rules) and any(tree_diffs.values()):
+            fail("tree changed without an explicit path/blob rule")
 
 
 def apply(args: argparse.Namespace) -> None:
     policy = load_policy(args.policy)
-    context = preflight(args.repo, policy)
+    with GitObjectIndex(args.repo) as index:
+        context = preflight(index, policy)
     before = refs(args.repo)
     if refs(args.preimage) != before:
         fail("logical preimage ref domain or object mismatch")
@@ -495,7 +530,17 @@ def apply(args: argparse.Namespace) -> None:
     write_refs(args.output / "refs-final.txt", after, name_first=True)
     git_run(args.repo, "fsck", "--full", "--no-reflogs")
     (args.output / "tag-signatures.txt").write_text("tag_signature_consequence=rewritten commits require annotated-tag signature reassessment; no tags are created or uploaded\n", encoding="utf-8")
-    verify(args.repo, args.preimage, args.policy, args.source_sha, args.work, args.output, args.output / "commit-map.txt", args.output / "ref-map.txt")
+    verify(
+        args.repo,
+        args.preimage,
+        args.policy,
+        args.source_sha,
+        args.work,
+        args.output,
+        args.output / "commit-map.txt",
+        args.output / "ref-map.txt",
+        context,
+    )
 
 
 def main() -> None:
