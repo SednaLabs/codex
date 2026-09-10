@@ -41,9 +41,101 @@ audit_exit=$?
 set -e
 
 if [[ "${audit_exit}" -ne 0 ]]; then
-  # The producer's stdout/stderr is intentionally left untouched above.  In
-  # particular, do not try to parse a partial or stale report here: its parser
-  # failure must not mask the producer's authoritative exit status.
+  # Project a bounded, escaped diagnostic from this invocation's report without
+  # rerunning the producer or replacing its authoritative exit status.
+  python3 - "${audit_report}" <<'PY' || true
+import json
+import sys
+
+MAX_ITEMS = 32
+MAX_ITEM_BYTES = 256
+MAX_LIST_BYTES = 4096
+
+
+def bounded_strings(values):
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise TypeError("expected a string list")
+    items = []
+    omitted_bytes = 0
+    for value in values:
+        value_bytes = len(value.encode("utf-8"))
+        candidate = items + [value]
+        candidate_bytes = len(
+            json.dumps(candidate, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        )
+        if (
+            len(items) >= MAX_ITEMS
+            or value_bytes > MAX_ITEM_BYTES
+            or candidate_bytes > MAX_LIST_BYTES
+        ):
+            omitted_bytes += value_bytes
+            continue
+        items.append(value)
+    omitted_count = len(values) - len(items)
+    return {
+        "items": items,
+        "count": len(values),
+        "omitted_count": omitted_count,
+        "omitted_bytes": omitted_bytes,
+        "truncated": omitted_count > 0,
+    }
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as audit_file:
+        audit = json.load(audit_file)
+    mirror = audit["mirror"]
+    snapshot = audit["snapshot"]
+    verdict = audit["verdict"]
+    registry = audit["registry_reconciliation"]
+    initial_mirror_sha = snapshot["initial"]["mirror"]["sha"]
+    final_mirror_sha = snapshot["final"]["mirror"]["sha"]
+    if not isinstance(mirror["health"], str):
+        raise TypeError("mirror.health is not a string")
+    if not isinstance(mirror["expected_mirror_sha"], str):
+        raise TypeError("mirror.expected_mirror_sha is not a string")
+    if not isinstance(mirror["expected_mirror_matches"], bool):
+        raise TypeError("mirror.expected_mirror_matches is not boolean")
+    if not isinstance(mirror["usable_as_compare_baseline"], bool):
+        raise TypeError("mirror.usable_as_compare_baseline is not boolean")
+    if not isinstance(snapshot["stable"], bool):
+        raise TypeError("snapshot.stable is not boolean")
+    if not isinstance(initial_mirror_sha, str) or not isinstance(final_mirror_sha, str):
+        raise TypeError("snapshot mirror SHA is not a string")
+    if not isinstance(verdict["exit_code"], int):
+        raise TypeError("verdict.exit_code is not an integer")
+    if not isinstance(verdict["ok"], bool):
+        raise TypeError("verdict.ok is not boolean")
+    diagnostic = {
+        "diagnostic": "downstream-divergence-audit",
+        "snapshot": {
+            "stable": snapshot["stable"],
+            "initial_mirror_sha": initial_mirror_sha,
+            "final_mirror_sha": final_mirror_sha,
+        },
+        "mirror": {
+            "health": mirror["health"],
+            "expected_mirror_sha": mirror["expected_mirror_sha"],
+            "expected_mirror_matches": mirror["expected_mirror_matches"],
+            "usable_as_compare_baseline": mirror["usable_as_compare_baseline"],
+        },
+        "verdict": {
+            "exit_code": verdict["exit_code"],
+            "ok": verdict["ok"],
+            "reasons": bounded_strings(verdict["reasons"]),
+        },
+        "registry_reconciliation": {
+            "uncovered_code_paths": bounded_strings(registry["uncovered_code_paths"]),
+            "stale_entry_ids": bounded_strings(registry["stale_entry_ids"]),
+        },
+    }
+except (OSError, UnicodeError, ValueError, TypeError, KeyError):
+    diagnostic = {
+        "diagnostic": "downstream-divergence-audit",
+        "error": "missing or malformed report",
+    }
+print(json.dumps(diagnostic, ensure_ascii=True, separators=(",", ":"), sort_keys=True), file=sys.stderr)
+PY
   exit "${audit_exit}"
 fi
 
