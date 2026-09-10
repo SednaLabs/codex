@@ -1,1 +1,3 @@
-| codex-rs/android-computer-use/src/lib.rs:5:1:8:1 | fn observe | 1 |\n| codex-rs/android-computer-use/src/lib.rs:10:1:13:1 | fn install_build_from_run | 1 |\n| codex-rs/browser-computer-use/src/lib.rs:5:1:7:1 | fn handle_with_provider | 0 |\n
+| codex-rs/android-computer-use/src/lib.rs:5:1:8:1 | fn observe | 1 |
+| codex-rs/android-computer-use/src/lib.rs:10:1:13:1 | fn install_build_from_run | 1 |
+| codex-rs/browser-computer-use/src/lib.rs:5:1:7:1 | fn handle_with_provider | 0 |
