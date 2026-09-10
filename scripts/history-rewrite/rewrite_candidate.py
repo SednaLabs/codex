@@ -288,7 +288,7 @@ def write_callbacks(work: Path, policy: Path, rule_context: dict) -> tuple[Path,
         "    else: blob.data=blob.data.replace(rule['old'].encode(),rule['new'].encode())\n",
         encoding="utf-8",
     )
-    return commit, filename, blob_cb
+    return commit.resolve(), filename.resolve(), blob_cb.resolve()
 
 
 def parse_commit_map(path: Path, old_domain: set[str]) -> dict[str, str]:

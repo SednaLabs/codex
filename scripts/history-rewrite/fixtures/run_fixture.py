@@ -102,15 +102,17 @@ def base_rules(old_blob: str, new_blob: str) -> list[dict]:
     ]
 
 
-def invoke(repo: Path, source: str, policy: Path, root: Path, mode: str = "apply", commit_map: Path | None = None, ref_map: Path | None = None) -> subprocess.CompletedProcess[str]:
+def invoke(repo: Path, source: str, policy: Path, root: Path, mode: str = "apply", commit_map: Path | None = None, ref_map: Path | None = None, *, relative_paths: bool = False) -> subprocess.CompletedProcess[str]:
     preimage = root / "preimage.git"
     if not preimage.exists():
         run("git", "clone", "--mirror", "--no-local", str(repo), str(preimage))
     output, work = root / "output", root / "work"
-    args = ["python3", str(DRIVER), mode, "--repo", str(repo), "--preimage", str(preimage), "--policy", str(policy), "--source-sha", source, "--work", str(work), "--output", str(output)]
+    invocation_root = root if relative_paths else None
+    argument_path = (lambda path: os.path.relpath(path, root)) if relative_paths else str
+    args = ["python3", str(DRIVER), mode, "--repo", argument_path(repo), "--preimage", argument_path(preimage), "--policy", argument_path(policy), "--source-sha", source, "--work", argument_path(work), "--output", argument_path(output)]
     if mode == "verify":
-        args += ["--commit-map", str(commit_map), "--ref-map", str(ref_map)]
-    return subprocess.run(args, text=True, capture_output=True)
+        args += ["--commit-map", argument_path(commit_map), "--ref-map", argument_path(ref_map)]
+    return subprocess.run(args, cwd=invocation_root, text=True, capture_output=True)
 
 
 def expect_failure(name: str, result: subprocess.CompletedProcess[str], expected_diagnostic: str | None = None) -> str:
@@ -566,7 +568,7 @@ def main() -> None:
         evidence.append(("review_packet_non_executable_adapter", hashlib.sha256((ROOT / "policy.json").read_bytes()).hexdigest()))
         root = Path(temporary) / "positive"; root.mkdir(); repo, source, branch, canonical_source, old_blob, new_blob, merge_source = make_repo(root); policy = root / "policy.json"; write_policy(policy, base_rules(old_blob, new_blob), canonical_source)
         remote_before = command(root / "synthetic-source.git", "show-ref")
-        positive = invoke(repo, source, policy, root)
+        positive = invoke(repo, source, policy, root, relative_paths=True)
         require_driver_success("positive_apply_and_verify", positive)
         evidence.append(("classifier_path_rename_before_after", classifier_path_rename_fixture(root, repo, source, policy)))
         evidence.append(("classifier_exact_bc957_differential_nul_and_raw_paths", classifier_exact_differential_fixture(Path(temporary) / "classifier-differential")))
