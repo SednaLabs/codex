@@ -38,8 +38,19 @@ digests before the differential case runs. The fixture emits identity-only
 maps/digests and discards temporary repositories and contents. It is a hosted
 validation input, not a local test.
 
-The runner also executes `publication_fixtures.py` against a local mock remote.
-Those fixtures cover immutable manifest and proof binding, empty/extra/missing
-ref rejection, stale backup and environment rejection, credential ordering,
-active-writer draining, atomic push leases, ambiguous transport readback, and
-restoration classification. They never contact GitHub or perform a live push.
+The runner also executes the production `publication.py` CLI against a
+disposable local bare Git remote. It deterministically regenerates the same
+candidate from the frozen synthetic objects, compares the complete approved
+proof set, performs the real `git push --atomic` command with one explicit
+`--force-with-lease=<ref>:<old>` per ref, then verifies the complete advertised
+heads/tags namespace, object types, and a clean isolated fetch. A rejected
+pre-receive hook proves that an atomic failure leaves every ref unchanged.
+
+The companion API-shaped fixtures cover immutable manifest and SHA-256 proof
+binding, empty/extra/missing/zero-ref rejection, stale backup ordering, exact
+environment and approval identities, credential-independent active-writer
+draining, authorised control suppression and restoration, ambiguous transport
+readback, and readback failure. They use no GitHub credential and never contact
+GitHub. Passing these fixtures proves that the same executable CLI used by the
+workflow works against a controlled Git transport; it does not prove that a
+real repository publication or live control mutation occurred.

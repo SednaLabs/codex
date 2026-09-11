@@ -15,11 +15,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tag_proof import signature_presence
+import publication as publication_module
 
 DRIVER = ROOT / "rewrite_candidate.py"
 CLASSIFIER = ROOT / "classify.py"
 ADAPTER = ROOT / "adapt_review_packet.py"
 RECEIPT = ROOT.parent / "recovery-snapshot" / "receipt.py"
+PUBLICATION = ROOT / "publication.py"
 
 
 def run(*args: str, cwd: Path | None = None, input: bytes | None = None) -> str:
@@ -108,7 +110,7 @@ def make_isolated_mirror(root: Path, source: Path, source_sha: str) -> tuple[Pat
         command(repo, "update-ref", "-d", name)
     command(repo, "update-ref", "refs/rewrites/source", source_sha)
     mapping_path = root / "original-to-isolated-ref-map.json"
-    mapping_path.write_text(json.dumps(mapping, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    mapping_path.write_text(json.dumps(mapping, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
     return repo, mapping_path
 
 
@@ -599,6 +601,85 @@ def receipt_fixture(root: Path) -> list[tuple[str, str]]:
     return evidence
 
 
+def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewritten: Path,
+                                 original_to_isolated: Path, policy: Path, proof_output: Path) -> str:
+    """Run the production preparation and publisher CLI against a disposable bare remote."""
+    selected = {
+        name: object_id
+        for name, object_id in (
+            line.split() for line in command(remote, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags").splitlines()
+        )
+    }
+    isolated = json.loads(original_to_isolated.read_text(encoding="utf-8"))
+    output = {name: command(rewritten, "rev-parse", isolated[name]).strip() for name in selected}
+    approved = root / "approved-proof"; approved.mkdir()
+    for name in publication_module.PROOF_FILES:
+        shutil.copy2(proof_output / name, approved / name)
+    shutil.copy2(original_to_isolated, approved / "original-to-isolated-ref-map.json")
+    policy_sha256 = hashlib.sha256(policy.read_bytes()).hexdigest()
+    (approved / "policy.digest").write_text(f"{policy_sha256}  scripts/history-rewrite/policy.json\n", encoding="utf-8")
+    write_json(approved / "binding.txt", {"fixture": True})
+    write_json(approved / "verified-backup.json", {"fixture": True})
+    proof_digests = {}
+    for name in publication_module.ARTIFACT_FILES:
+        proof_digests[name] = hashlib.sha256((approved / name).read_bytes()).hexdigest()
+    manifest = {
+        "schema": "history-rewrite-publication-v1",
+        "repository": publication_module.REPOSITORY,
+        "harness_sha": "5" * 40,
+        "harness_tree": "6" * 40,
+        "source_sha": source_sha,
+        "tag_signature_ack": True,
+        "selected_refs": selected,
+        "output_refs": output,
+        "selected_refs_sha256": publication_module.digest(selected),
+        "output_refs_sha256": publication_module.digest(output),
+        "policy": {"path": "scripts/history-rewrite/policy.json", "sha256": policy_sha256},
+        "proof_digests": proof_digests,
+        "proof_digests_sha256": publication_module.digest(proof_digests),
+        "backup": {"run_id": 41, "receipt_artifact_id": 410, "receipt_artifact_api_digest": "8" * 64},
+        "proof": {"run_id": 42, "artifact_id": 420, "artifact_api_digest": "9" * 64},
+        "controls": {
+            "publication_branch": publication_module.PUBLICATION_BRANCH,
+            "environment": publication_module.ENVIRONMENT_NAME,
+            "reviewer_id": publication_module.REVIEWER_ID,
+            "reviewer_login": publication_module.REVIEWER_LOGIN,
+            "suppress_workflows": [".github/workflows/rust-release.yml"],
+            "active_writer_workflows": [101],
+            "mirror_workflow_id": publication_module.MIRROR_WORKFLOW_ID,
+        },
+    }
+    manifest_path = root / "manifest.json"; write_json(manifest_path, manifest)
+    control_plan = {
+        "schema": "history-rewrite-control-plan-v1",
+        "repository": publication_module.REPOSITORY,
+        "manifest_sha256": publication_module.digest(manifest),
+        "suppression": [{"id": 101, "path": ".github/workflows/rust-release.yml", "state": "active"}],
+        "active_writer_workflow_ids": [101],
+        "mirror": {"id": publication_module.MIRROR_WORKFLOW_ID, "path": ".github/workflows/sedna-sync-upstream.yml", "state": "disabled_manually"},
+    }
+    control_path = root / "control-plan.json"; write_json(control_path, control_plan)
+    work = root / "candidate"
+    environment = dict(os.environ); environment["HISTORY_REWRITE_PUBLICATION_FIXTURE"] = "1"
+    prepared = subprocess.run([
+        "python3", str(PUBLICATION), "prepare", str(manifest_path), "--remote-url", str(remote),
+        "--work-root", str(work), "--proof-dir", str(approved), "--control-plan", str(control_path),
+        "--intent", str(root / "intent.json"), "--fixture-policy", str(policy),
+    ], text=True, capture_output=True, env=environment)
+    require_driver_success("production_publication_prepare", prepared)
+    published = subprocess.run([
+        "python3", str(PUBLICATION), "publish", str(manifest_path), "--repo", str(work / "repo.git"),
+        "--remote-url", str(remote), "--receipt", str(root / "publication-receipt.json"),
+    ], text=True, capture_output=True)
+    require_driver_success("production_publication_push", published)
+    if publication_module.advertised_refs(str(remote)) != output:
+        raise SystemExit("production publication CLI did not produce the approved complete remote map")
+    receipt = json.loads((root / "publication-receipt.json").read_text(encoding="utf-8"))
+    if receipt.get("outcome") != "success" or receipt.get("after_refs") != output:
+        raise SystemExit("production publication receipt does not bind the exact disposable after-map")
+    return hashlib.sha256((root / "publication-receipt.json").read_bytes()).hexdigest()
+
+
 def main() -> None:
     evidence: list[tuple[str, str]] = []
     publication = subprocess.run(["python3", str(Path(__file__).with_name("publication_fixtures.py"))], text=True, capture_output=True)
@@ -684,6 +765,12 @@ def main() -> None:
             negative_root = Path(temporary) / name; negative_root.mkdir(); neg_repo, neg_source, _, neg_canonical, neg_old, neg_new, _ = make_repo(negative_root, **kwargs); neg_policy = negative_root / "policy.json"; write_policy(neg_policy, base_rules(neg_old, neg_new), neg_canonical)
             evidence.append((name, expect_failure(name, invoke(neg_repo, neg_source, neg_policy, negative_root))))
         evidence.extend(receipt_fixture(Path(temporary) / "receipt"))
+        publication_root = Path(temporary) / "publication"; publication_root.mkdir()
+        evidence.append((
+            "production_cli_deterministic_regeneration_atomic_leases_full_readback_clean_fetch",
+            publication_pipeline_fixture(publication_root, root / "synthetic-source.git", source, isolated_repo,
+                                         original_to_isolated, policy, isolated_root / "output"),
+        ))
     for name, digest in evidence:
         print(f"fixture_case={name} evidence_sha256={digest}")
 
