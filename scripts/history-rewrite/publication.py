@@ -538,6 +538,18 @@ def plan_maintenance(administrator_before: object, read_token_before: object) ->
 
 def protection_snapshot_from_api(api: Api) -> dict:
     branch_document = api.post_graphql(BRANCH_PROTECTION_QUERY, {"owner": "sednalabs", "name": "codex"})
+    if isinstance(branch_document, dict) and branch_document.get("errors"):
+        # This is a diagnostic probe only. A narrower surface is not silently
+        # promoted to complete rule-inventory evidence if the list is denied.
+        probe = api.post_graphql("""query { repository(owner: "sednalabs", name: "codex") {
+            ref(qualifiedName: "refs/heads/main") { branchProtectionRule {
+                id pattern allowsForcePushes requiresStatusChecks
+            } }
+        } }""", {})
+        diagnostic = "exact-ref protection read also denied"
+        if isinstance(probe, dict) and not probe.get("errors") and probe.get("data", {}).get("repository", {}).get("ref", {}).get("branchProtectionRule"):
+            diagnostic = "exact-ref protection read available; full-list inventory remains denied"
+        raise PublicationError("workflow-token classic protection inventory is unavailable; " + diagnostic)
     listing = api.get(f"/repos/{REPOSITORY}/rulesets?includes_parents=true&per_page=100")
     if not isinstance(listing, list) or len(listing) >= 100:
         raise PublicationError("repository ruleset listing is malformed or incomplete")
