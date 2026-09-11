@@ -7,7 +7,7 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { captureBundle, responseForPage } from "./browser_playwright_review.mjs";
+import { captureBundle, pageResponseAfterFailure, responseForPage } from "./browser_playwright_review.mjs";
 
 test("capture bundle records requested and effective responsive viewport evidence", async () => {
   const { chromium } = createRequire(import.meta.url)("playwright");
@@ -152,4 +152,103 @@ test("provider records selector and wheel settled trail in its manifest", async 
     server.close();
     await fs.rm(stateDir, { recursive: true, force: true });
   }
+});
+
+test("provider lets a first navigate action replace stale persisted state", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-browser-provider-navigate-"));
+  const server = http.createServer((_request, response) => {
+    response.end("<main>healthy destination</main>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const healthyUrl = `http://127.0.0.1:${address.port}/healthy`;
+  await fs.writeFile(path.join(stateDir, "state.json"), JSON.stringify({ url: "http://127.0.0.1:1/stale" }));
+  const request = {
+    tool: "browser_step",
+    arguments: { actions: [{ type: "navigate", url: healthyUrl }] },
+  };
+  const child = spawn(process.execPath, [fileURLToPath(new URL("./browser_playwright_provider.mjs", import.meta.url))], {
+    env: {
+      ...process.env,
+      CODEX_BROWSER_PLAYWRIGHT_STATE_DIR: stateDir,
+      CODEX_BROWSER_PLAYWRIGHT_ISOLATION: "shared",
+    },
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  child.stdin.end(JSON.stringify(request));
+  const output = await new Promise((resolve, reject) => {
+    let text = "";
+    child.stdout.on("data", (chunk) => { text += chunk; });
+    child.on("error", reject);
+    child.on("close", () => resolve(text));
+  });
+  try {
+    const response = JSON.parse(output);
+    assert.equal(response.success, true);
+    assert.match(response.contentItems[0].text, new RegExp(`url: ${healthyUrl}`));
+  } finally {
+    server.close();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("failed page metadata retains a captured native screenshot", async () => {
+  let evaluateCount = 0;
+  const screenshot = Buffer.from("png-fixture");
+  const page = {
+    url: () => "http://fixture.invalid/",
+    title: async () => "Fixture",
+    viewportSize: () => ({ width: 800, height: 600 }),
+    screenshot: async () => screenshot,
+    evaluate: async () => {
+      evaluateCount += 1;
+      if (evaluateCount === 1) {
+        return {
+          effectiveViewport: { width: 800, height: 600 },
+          clientViewport: { width: 800, height: 600 },
+          document: { width: 800, height: 600 },
+          scroll: { x: 0, y: 0 },
+          devicePixelRatio: 1,
+          visualViewportScale: 1,
+        };
+      }
+      throw new Error("metadata evaluation failed");
+    },
+  };
+  const response = await pageResponseAfterFailure(
+    page,
+    [],
+    { label: "test" },
+    { arguments: { interaction_map: { scope: "page", offset: 3 } } },
+    { type: "click" },
+    new Error("click failed"),
+    [],
+    null,
+  );
+  assert.equal(response.success, false);
+  assert.equal(response.contentItems.filter(({ type }) => type === "inputImage").length, 1);
+  assert.match(response.contentItems[0].text, /Page metadata unavailable/);
+});
+
+test("response retains supplied native screenshot when page metadata fails", async () => {
+  const page = {
+    url: () => "http://fixture.invalid/",
+    title: async () => "Fixture",
+    viewportSize: () => ({ width: 800, height: 600 }),
+    evaluate: async () => { throw new Error("metadata evaluation failed"); },
+  };
+  const response = await responseForPage(
+    page,
+    [{
+      label: "failure",
+      screenshot: { buffer: Buffer.from("png-fixture"), method: "fixture" },
+      requestedViewport: { width: 800, height: 600 },
+    }],
+    [],
+    { label: "test" },
+    { request: { arguments: { interaction_map: { scope: "page", offset: 3 } } }, success: false, error: "click failed" },
+  );
+  assert.equal(response.success, false);
+  assert.equal(response.contentItems.filter(({ type }) => type === "inputImage").length, 1);
+  assert.match(response.contentItems[0].text, /Page metadata unavailable/);
 });

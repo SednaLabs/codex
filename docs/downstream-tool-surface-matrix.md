@@ -172,6 +172,12 @@ Notes:
   registries can migrate together without loss.
 - Provider artifact paths are diagnostic evidence only. Screenshots and browser
   viewport captures are model-facing only when returned as native image content.
+- Playwright evidence keeps inspection metadata and ranked interaction maps
+  bounded, records requested/effective capture viewports, and preserves the
+  settled wheel/action trail plus recovery context. A first canonical
+  `navigate` action takes precedence over stale persisted state, and a
+  metadata-evaluation failure retains any screenshot already captured as
+  native image content.
 - Both branches now omit the retired CSV agent-job tools. Legacy
   `enable_fanout` and `job_max_runtime_seconds` configuration remains accepted
   only as no-op compatibility; that removal does not narrow ordinary sub-agent
