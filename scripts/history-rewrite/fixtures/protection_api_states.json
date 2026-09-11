@@ -40,8 +40,7 @@
           {"context": "CI required", "app_id": 15368},
           {"context": "CodeQL required gate", "app_id": 15368}
         ]
-      },
-      "restrictions": null
+      }
     }
   },
   "after": {
@@ -81,7 +80,6 @@
     },
     "rest": {
       "allow_force_pushes": {"enabled": false},
-      "required_status_checks": null,
       "restrictions": {
         "users": [], "teams": [], "apps": [{"id": 3520391, "slug": "sedna-release-publisher"}]
       }

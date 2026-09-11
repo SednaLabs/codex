@@ -175,7 +175,8 @@ See the [REST branch protection contract](https://docs.github.com/en/rest/branch
 and [GraphQL branch protection types](https://docs.github.com/en/graphql/reference/branches).
 
 Required-check strictness is meaningful only while the check requirement is
-enabled. REST represents disabled required checks as `null`. The observed
+enabled. The REST update contract uses `null` to disable checks; the observed
+REST GET response omits `required_status_checks` when disabled. The observed
 GraphQL disabled state reports `requiresStrictStatusChecks: true`, including
 after disabling previously loose checks. The planner predicts that exact raw
 representation; the normalizer does **not** erase strictness or accept either

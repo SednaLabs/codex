@@ -671,10 +671,10 @@ def protection_api_contract_fixtures() -> list[str]:
         if phase == "before":
             if rest["required_status_checks"]["strict"] is not rule["requires_strict_status_checks"]:
                 raise SystemExit("enabled check strictness was not preserved")
-            if rest["restrictions"] is not None or rule["requires_status_checks"] is not True:
+            if "restrictions" in rest or rule["requires_status_checks"] is not True:
                 raise SystemExit("enabled baseline check/restriction representation changed")
         else:
-            if rest["required_status_checks"] is not None or rule["requires_status_checks"] is not False:
+            if "required_status_checks" in rest or rule["requires_status_checks"] is not False:
                 raise SystemExit("disabled required checks were interpreted as an active strict gate")
             restrictions = rest["restrictions"]
             if (restrictions["users"] or restrictions["teams"]

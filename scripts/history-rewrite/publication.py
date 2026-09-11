@@ -550,7 +550,7 @@ def plan_maintenance(administrator_before: object, read_token_before: object) ->
                            for check in rule["required_status_checks"])):
                 raise PublicationError("normal status gate/source differs from the admitted maintenance baseline")
             # GitHub's observed disabled-check representation reports strict=true
-            # (REST has required_status_checks=null). Preserve that raw value:
+            # (REST disables checks with null; GET omits them). Keep the raw value:
             # do not erase it in normalization or accept arbitrary after-state.
             # The exact live apply/read/restore transition must qualify this
             # representation; it is not a guarantee for every provider version.
