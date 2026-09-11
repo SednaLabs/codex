@@ -152,6 +152,17 @@ def load_object(path: Path, label: str = "JSON") -> dict:
     return value
 
 
+def load_writer_responses(path: Path) -> list:
+    """Read the status-filter response array persisted by the protected gate."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublicationError(f"invalid persisted writer responses: {exc}") from exc
+    if not isinstance(value, list):
+        raise PublicationError("persisted writer responses must be an array")
+    return value
+
+
 def write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(canonical_json(value) + b"\n")
@@ -830,7 +841,7 @@ def record_live_preflight(manifest: dict, *, api_dir: Path, output: Path) -> Non
             raise PublicationError("suppressed workflow live state is unavailable or unsupported")
         suppress_plan.append(item)
     writer_check = check_writer_documents(
-        {workflow_id: load_object(api_dir / f"writer-runs-{workflow_id}.json") for workflow_id in WRITER_WORKFLOWS.values()},
+        {workflow_id: load_writer_responses(api_dir / f"writer-runs-{workflow_id}.json") for workflow_id in WRITER_WORKFLOWS.values()},
         current_run_id=0,
     )
     output.mkdir(parents=True, exist_ok=True)

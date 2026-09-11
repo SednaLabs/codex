@@ -125,6 +125,15 @@ qualification is not publication proof. The focused fixtures additionally
 reject extra bundle refs/objects/config, null actors, wrong map/artifact
 bindings, duplicate approval records and expired effect gates.
 
+The protected-handoff fixtures also execute the actual `publication` gate with
+isolated API-shaped responses. Writer status arrays cross the real on-disk
+producer/consumer seam into preflight and recovery-intent creation. Malformed
+files, incomplete or duplicate status domains, inconsistent listings and active
+writers must fail before those receipts are emitted. Publisher credentials,
+writer mutations, ref pushes and external network calls are forbidden in this
+fixture. This covers production preflight behavior that `qualification` omits;
+it is not evidence of an actual publication or real credential acceptance.
+
 If the publication runner is hard-killed after writer suppression, an operator
 can independently restore the captured writer states from the uploaded
 `history-rewrite-publication-intent-<run-id>` artifact. First read the artifact

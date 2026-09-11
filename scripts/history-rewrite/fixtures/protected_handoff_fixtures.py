@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import publication as p
 import protected_handoff as h
-from publication_fixtures import base_manifest, expect_failure
+from publication_fixtures import base_manifest, environment_fixture, expect_failure, observer_fixture_documents
 
 
 def main() -> None:
@@ -200,7 +200,137 @@ def main() -> None:
         h.require_fresh_gate(gate, manifest)
         failures.append(expect_failure("expired_before_effects", lambda: h.require_fresh_gate({**gate, "expires_at": now.isoformat()}, manifest)))
         failures.append(expect_failure("qualification_cannot_publish", lambda: h.require_fresh_gate(qualification_gate, qualification)))
+    # Execute the actual publication gate, not qualification: API-shaped writer
+    # responses must cross the on-disk array seam into preflight and recovery
+    # intent. All authority checks stay real; API responses are isolated fixtures.
+    source_sha = p.git(Path.cwd(), "rev-parse", "HEAD").strip()
+    source_tree = p.git(Path.cwd(), "rev-parse", "HEAD^{tree}").strip()
+    production_manifest = {**manifest, "harness_sha": source_sha, "harness_tree": source_tree}
+    production_artifact = {**artifact, "head_sha": source_sha}
+    production_binding = h.approval_binding(production_manifest, prepared, production_artifact,
+                                            run_id=22, attempt=2, phase="publication")
+    production_records = [approval({**attestation, "binding_sha256": p.digest(production_binding)})]
+    production_run = {**run, "head_sha": source_sha}
+    environment_document, policies = environment_fixture()
+    observer_documents = observer_fixture_documents()
+    workflow_paths = {value: key for key, value in p.WRITER_WORKFLOWS.items()}
+    workflow_paths[p.MIRROR_WORKFLOW_ID] = ".github/workflows/sedna-sync-upstream.yml"
+
+    class ProductionReadApi:
+        def get(self, path):
+            if path.endswith("/approvals"): return production_records
+            if path.endswith("/attempts/2"): return production_run
+            if path.endswith("/deployment-branch-policies?per_page=100"): return policies
+            if path.endswith("/environments/" + p.ENVIRONMENT_NAME): return environment_document
+            prefix = f"/repos/{p.REPOSITORY}/actions/workflows/"
+            assert path.startswith(prefix), path
+            suffix = path.removeprefix(prefix)
+            workflow_id = int(suffix.split("/", 1)[0])
+            assert workflow_id in workflow_paths
+            if "/runs?status=" in suffix:
+                state = suffix.split("/runs?status=", 1)[1].removesuffix("&per_page=100")
+                assert workflow_id != p.MIRROR_WORKFLOW_ID and state in p.ACTIVE_RUN_STATES
+                return {"total_count": 0, "workflow_runs": []}
+            return {"id": workflow_id, "path": workflow_paths[workflow_id],
+                    "state": "disabled_manually" if workflow_id == p.MIRROR_WORKFLOW_ID else "active"}
+
+    class ProductionObserverApi(ObserverApi):
+        def post_graphql(self, query, variables):
+            if query == p.OBSERVER_VIEWER_QUERY: return observer_documents["observer_viewer"]
+            return super().post_graphql(query, variables)
+        def get(self, path):
+            if path == "/apps/" + p.OBSERVER_APP_SLUG: return observer_documents["observer_app"]
+            if path == p.OBSERVER_REPOSITORIES_PATH: return observer_documents["observer_repositories"]
+            return super().get(path)
+
+    def fixture_api(token):
+        assert token in {"fixture-read", "fixture-observer"}, "unexpected credential path"
+        return ProductionReadApi() if token == "fixture-read" else ProductionObserverApi()
+
+    def production_preflight(corruption=None):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            p.write_json(root / "prepared/manifest.json", production_manifest)
+            p.write_json(root / "prepared/prepared.json", prepared)
+            environment = {"GITHUB_RUN_ID": "22", "GITHUB_RUN_ATTEMPT": "2", "MODE": "publication",
+                "GH_TOKEN": "fixture-read", "HARNESS_SHA": source_sha, "HARNESS_TREE": source_tree,
+                "GITHUB_REPOSITORY": p.REPOSITORY, "GITHUB_REF_NAME": p.PUBLICATION_BRANCH, "GITHUB_SHA": source_sha,
+                "MANIFEST_SHA256": p.digest(production_manifest), "PREPARED_ARTIFACT": p.canonical_json(production_artifact).decode(),
+                "HISTORY_REWRITE_OBSERVER_TOKEN": "fixture-observer",
+                "HISTORY_REWRITE_OBSERVER_INSTALLATION_ID": str(p.OBSERVER_INSTALLATION_ID),
+                "HISTORY_REWRITE_OBSERVER_APP_SLUG": p.OBSERVER_APP_SLUG}
+            writer_files = []
+            real_write = p.write_json
+            def persist(path, value):
+                if path.name.startswith("writer-runs-"):
+                    writer_files.append(path)
+                    assert isinstance(value, list) and len(value) == len(p.ACTIVE_RUN_STATES)
+                    if corruption is not None and len(writer_files) == 1:
+                        corruption(path, copy.deepcopy(value))
+                        return
+                real_write(path, value)
+            real_git = p.git
+            def read_only_git(repo, *args, **kwargs):
+                assert args == ("rev-parse", "HEAD^{tree}"), "unexpected Git effect"
+                return real_git(repo, *args, **kwargs)
+            with patch.dict(os.environ, environment), patch.object(h, "datetime", Clock), \
+                    patch.object(p, "GitHubApi", side_effect=fixture_api), patch.object(p, "write_json", side_effect=persist), \
+                    patch.object(p, "git", side_effect=read_only_git), \
+                    patch.object(p, "publisher_api_from_environment", side_effect=AssertionError("publisher forbidden")) as mint, \
+                    patch.object(p, "set_controls", side_effect=AssertionError("writer mutation forbidden")) as controls, \
+                    patch.object(p, "publish_repository", side_effect=AssertionError("push forbidden")) as publish, \
+                    patch.object(p.urllib.request, "urlopen", side_effect=AssertionError("network forbidden")), \
+                    patch.object(sys, "argv", ["protected_handoff.py", "gate", "--root", str(root)]):
+                try:
+                    h.main()
+                except p.PublicationError:
+                    assert (root / "handoff.json").exists(), "failure occurred before the production seam"
+                    assert not (root / "preflight/preflight.json").exists()
+                    assert not (root / "publication-restoration-intent.json").exists()
+                    raise
+                finally:
+                    mint.assert_not_called(); controls.assert_not_called(); publish.assert_not_called()
+            assert len(writer_files) == len(p.WRITER_WORKFLOWS)
+            for path in writer_files:
+                responses = json.loads(path.read_text())
+                assert {row["requested_status"] for row in responses} == p.ACTIVE_RUN_STATES
+            preflight = p.load_object(root / "preflight/preflight.json")
+            assert preflight["status"] == "verified-before-publisher-token"
+            assert preflight["writer_check"] == {"schema": "history-rewrite-writer-check-v1", "active": [], "status": "drained-at-single-read"}
+            p.validate_phase_bindings(production_manifest, frozen_sha=source_sha, frozen_tree=source_tree,
+                manifest_sha256=p.digest(production_manifest), preflight_path=root / "preflight/preflight.json",
+                control_plan=root / "preflight/control-plan.json", intent_path=root / "publication-restoration-intent.json")
+            assert not (root / "publication-receipt.json").exists()
+
+    production_preflight()
+    with patch.object(p, "load_writer_responses", side_effect=p.load_object):
+        failures.append(expect_failure("production_preflight_rejects_previous_object_loader", production_preflight))
+    def transformed(change):
+        def persist(path, rows):
+            change(rows)
+            path.write_bytes(p.canonical_json(rows))
+        return persist
+    def nonempty(rows):
+        rows[0]["response"] = {"total_count": 1, "workflow_runs": [
+            {"id": 9876, "status": rows[0]["requested_status"], "head_sha": source_sha}]}
+    production_negatives = [
+        ("writer_object_instead_of_array", lambda path, rows: path.write_text("{}")),
+        ("writer_invalid_json", lambda path, rows: path.write_text("[")),
+        ("writer_invalid_encoding", lambda path, rows: path.write_bytes(b"\xff")),
+        ("writer_file_missing", lambda path, rows: None),
+        ("writer_status_missing", transformed(lambda rows: rows.pop())),
+        ("writer_status_duplicate", transformed(lambda rows: rows.__setitem__(0, rows[1]))),
+        ("writer_response_malformed", transformed(lambda rows: rows[0].__setitem__("response", None))),
+        ("writer_count_mismatch", transformed(lambda rows: rows[0]["response"].__setitem__("total_count", 1))),
+        ("writer_nonempty", transformed(nonempty)),
+        ("writer_status_mismatch", transformed(lambda rows: rows[0].__setitem__("response", {
+            "total_count": 1, "workflow_runs": [{"id": 9876, "status": "completed"}]}))),
+    ]
+    for label, corruption in production_negatives:
+        failures.append(expect_failure(label, lambda corruption=corruption: production_preflight(corruption)))
     print(json.dumps({"protected_handoff": "passed", "negative_cases": len(failures), "evidence_sha256": p.digest(failures),
+                      "production_preflight": "actual gate and persisted writer arrays through recovery intent; no publisher effects",
+                      "production_preflight_negative_cases": len(production_negatives),
                       "compact_comment_bytes": gate["comment_bytes"], "comment_limit_bytes": h.MAX_COMMENT_BYTES}, sort_keys=True))
 
 
