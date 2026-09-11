@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Guarded, executable publication for the w13828 history rewrite.
 
-The workflow runs ``preflight`` and ``prepare`` without a write credential.  It
-only mints the narrowly scoped publisher App token after those commands have
-bound live GitHub API evidence, a fresh recovery receipt, the operator-approved
-manifest digest, and a deterministic regeneration.  ``publish`` then performs
+The workflow prepares a candidate-only bundle without maintenance or a write
+credential. Its protected handoff then binds actual administrator approval,
+independent observable controls, the recovery receipt and approved manifest
+before minting the narrowly scoped publisher App token. ``publish`` performs
 one atomic push with an explicit lease for every ref and resolves transport
 ambiguity by readback; it never retries a push.
 """
@@ -602,6 +602,9 @@ def validate_observer_identity(api: Api) -> dict:
 
 def protection_snapshot_from_api(api: Api, *, api_dir: Path | None = None) -> dict:
     branch_document = api.post_graphql(BRANCH_PROTECTION_QUERY, {"owner": "sednalabs", "name": "codex"})
+    if api_dir is not None:
+        api_dir.mkdir(parents=True, exist_ok=True)
+        write_json(api_dir / "branch-protection-rules.json", branch_document)
     if isinstance(branch_document, dict) and branch_document.get("errors"):
         # Partial data is not an empty inventory. Do not retry with another
         # principal or promote a narrower query into complete control evidence.
@@ -736,13 +739,11 @@ def check_writer_documents(documents: Mapping[int, object], *, current_run_id: i
     return {"schema": "history-rewrite-writer-check-v1", "active": [], "status": "drained-at-single-read"}
 
 
-def validate_preflight(manifest: dict, *, frozen_sha: str, frozen_tree: str, manifest_sha256: str, api_dir: Path, output: Path) -> None:
+def validate_preparation(manifest: dict, *, frozen_sha: str, frozen_tree: str, manifest_sha256: str, api_dir: Path, output: Path) -> None:
+    """Validate immutable inputs without asserting live maintenance or approval."""
     selected, _ = validate_manifest(manifest, frozen_sha=frozen_sha, frozen_tree=frozen_tree)
     if not HEX64.fullmatch(manifest_sha256) or digest(manifest) != manifest_sha256:
         raise PublicationError("operator-approved manifest digest mismatch")
-    validate_environment(load_object(api_dir / "environment.json"), load_object(api_dir / "branch-policies.json"))
-    approvals = json.loads((api_dir / "approvals.json").read_text(encoding="utf-8"))
-    validate_approval(approvals)
     backup, proof = manifest["backup"], manifest["proof"]
     validate_run(load_object(api_dir / "backup-run.json"), load_object(api_dir / "backup-workflow.json"),
                  run_id=backup["run_id"], harness_sha=frozen_sha, workflow_path=".github/workflows/recovery-snapshot.yml")
@@ -785,9 +786,31 @@ def validate_preflight(manifest: dict, *, frozen_sha: str, frozen_tree: str, man
         raise PublicationError("proof artifact binding differs from the manifest and verified backup")
     if load_object(proof_output / "verified-backup.json") != verified:
         raise PublicationError("proof run and current preflight verified different backup receipts")
+    write_json(output / "preparation.json", preparation_binding(manifest))
+
+
+def preparation_binding(manifest: dict) -> dict:
+    return {"schema": "history-rewrite-preparation-v1", "repository": REPOSITORY,
+            "manifest_sha256": digest(manifest), "harness_sha": manifest["harness_sha"],
+            "harness_tree": manifest["harness_tree"], "selected_refs_sha256": manifest["selected_refs_sha256"],
+            "output_refs_sha256": manifest["output_refs_sha256"], "proof_digests_sha256": digest(manifest["proof_digests"])}
+
+
+def validate_preflight(manifest: dict, *, frozen_sha: str, frozen_tree: str, manifest_sha256: str, api_dir: Path, output: Path) -> None:
+    validate_preparation(manifest, frozen_sha=frozen_sha, frozen_tree=frozen_tree,
+                         manifest_sha256=manifest_sha256, api_dir=api_dir, output=output)
+    validate_environment(load_object(api_dir / "environment.json"), load_object(api_dir / "branch-policies.json"))
+    validate_approval(json.loads((api_dir / "approvals.json").read_text(encoding="utf-8")))
     live_protection = protection_snapshot_from_files(api_dir)
     if live_protection != manifest["controls"]["protection_snapshot"]:
         raise PublicationError("live branch protection, ruleset, or publisher App allowance differs from the approved manifest")
+    record_live_preflight(manifest, api_dir=api_dir, output=output)
+
+
+def record_live_preflight(manifest: dict, *, api_dir: Path, output: Path) -> None:
+    """Called only after a complete protection/approval gate, never by preparation."""
+    manifest_sha256 = digest(manifest)
+    protection_digest = manifest["controls"]["protection_snapshot_sha256"]
     workflow_snapshots = {}
     controls = manifest["controls"]
     expected_ids = set(WRITER_WORKFLOWS.values()) | {MIRROR_WORKFLOW_ID}
@@ -819,21 +842,21 @@ def validate_preflight(manifest: dict, *, frozen_sha: str, frozen_tree: str, man
         "suppression": suppress_plan,
         "writer_workflows": WRITER_WORKFLOWS,
         "mirror": mirror,
-        "protection_snapshot_sha256": digest(live_protection),
+        "protection_snapshot_sha256": protection_digest,
     })
     write_json(output / "preflight.json", {
         "schema": "history-rewrite-publication-preflight-v1",
         "repository": REPOSITORY,
         "manifest_sha256": manifest_sha256,
-        "harness_sha": frozen_sha,
-        "harness_tree": frozen_tree,
+        "harness_sha": manifest["harness_sha"],
+        "harness_tree": manifest["harness_tree"],
         "selected_refs_sha256": manifest["selected_refs_sha256"],
         "output_refs_sha256": manifest["output_refs_sha256"],
-        "backup_run_id": backup["run_id"],
-        "proof_run_id": proof["run_id"],
+        "backup_run_id": manifest["backup"]["run_id"],
+        "proof_run_id": manifest["proof"]["run_id"],
         "approval": {"id": REVIEWER_ID, "login": REVIEWER_LOGIN},
         "writer_check": writer_check,
-        "protection_snapshot_sha256": digest(live_protection),
+        "protection_snapshot_sha256": protection_digest,
         "status": "verified-before-publisher-token",
     })
 
@@ -929,6 +952,14 @@ def prepare_candidate(manifest: dict, *, frozen_sha: str, frozen_tree: str, mani
         manifest, frozen_sha=frozen_sha, frozen_tree=frozen_tree, manifest_sha256=manifest_sha256,
         preflight_path=preflight_path, control_plan=control_plan,
     )
+    regenerate_candidate(manifest, remote_url=remote_url, work_root=work_root,
+                         proof_dir=proof_dir, fixture_policy=fixture_policy)
+    write_restoration_intent(manifest, preflight_path=preflight_path, control_plan=control_plan, intent_path=intent_path)
+
+
+def regenerate_candidate(manifest: dict, *, remote_url: str, work_root: Path, proof_dir: Path,
+                         fixture_policy: Path | None = None) -> None:
+    selected, output = manifest["selected_refs"], manifest["output_refs"]
     if fixture_policy is not None:
         if os.environ.get("HISTORY_REWRITE_PUBLICATION_FIXTURE") != "1" or remote_url.startswith(("http://", "https://")):
             raise PublicationError("fixture policy override is restricted to an explicit local-remote fixture")
@@ -979,17 +1010,19 @@ def prepare_candidate(manifest: dict, *, frozen_sha: str, frozen_tree: str, mani
         approved = proof_dir / name
         if not candidate.is_file() or not approved.is_file() or file_digest(candidate) != manifest["proof_digests"][name] or candidate.read_bytes() != approved.read_bytes():
             raise PublicationError(f"deterministic regeneration proof mismatch: {name}")
-    plan_digest = file_digest(control_plan)
+
+
+def write_restoration_intent(manifest: dict, *, preflight_path: Path, control_plan: Path, intent_path: Path) -> None:
     write_json(intent_path, {
         "schema": "history-rewrite-restoration-intent-v1",
         "repository": REPOSITORY,
-        "manifest_sha256": manifest_sha256,
-        "harness_sha": frozen_sha,
-        "harness_tree": frozen_tree,
+        "manifest_sha256": digest(manifest),
+        "harness_sha": manifest["harness_sha"],
+        "harness_tree": manifest["harness_tree"],
         "preflight_sha256": file_digest(preflight_path),
-        "control_plan_sha256": plan_digest,
-        "before_refs_sha256": digest(before),
-        "output_refs_sha256": digest(output),
+        "control_plan_sha256": file_digest(control_plan),
+        "before_refs_sha256": manifest["selected_refs_sha256"],
+        "output_refs_sha256": manifest["output_refs_sha256"],
         "regenerated_proof_digests_sha256": digest(manifest["proof_digests"]),
         "status": "ready-no-write-credential-accessed",
     })
@@ -1028,18 +1061,23 @@ def resolve_push_failure(output: Mapping[str, str], error: PublicationError, rea
 
 def publish_repository(manifest: dict, *, frozen_sha: str, frozen_tree: str, manifest_sha256: str,
                        preflight_path: Path, control_plan: Path, intent_path: Path, read_api: Api, observer_api: Api,
-                       current_run_id: int, repo: Path, remote_url: str, token: str | None = None) -> PublicationResult:
+                       current_run_id: int, repo: Path, remote_url: str, token: str | None = None,
+                       handoff: dict | None = None) -> PublicationResult:
     selected, output = validate_phase_bindings(
         manifest, frozen_sha=frozen_sha, frozen_tree=frozen_tree, manifest_sha256=manifest_sha256,
         preflight_path=preflight_path, control_plan=control_plan, intent_path=intent_path,
     )
-    final_state = verify_live_publication_state(manifest, read_api, observer_api=observer_api, current_run_id=current_run_id)
+    final_state = verify_live_publication_state(manifest, read_api, observer_api=observer_api,
+                                               current_run_id=current_run_id, handoff=handoff)
     env, credential_root = credential_environment(remote_url, token)
     try:
         before = advertised_refs(remote_url, env=env)
         if before != selected:
             raise PublicationError("remote changed after preparation; refusing stale publication")
         _object_types(repo, output)
+        if handoff is not None:
+            from protected_handoff import require_fresh_gate
+            require_fresh_gate(handoff, manifest)
         args = ["push", "--atomic"]
         args.extend(f"--force-with-lease={name}:{selected[name]}" for name in sorted(selected))
         args.append(remote_url)
@@ -1318,7 +1356,8 @@ def check_writers_once(api: Api, *, current_run_id: int) -> dict:
     return check_writer_documents(documents, current_run_id=current_run_id)
 
 
-def verify_live_publication_state(manifest: dict, api: Api, *, observer_api: Api, current_run_id: int) -> dict:
+def verify_live_publication_state(manifest: dict, api: Api, *, observer_api: Api, current_run_id: int,
+                                  handoff: dict | None = None) -> dict:
     observer = validate_observer_identity(observer_api)
     states = {}
     for path, workflow_id in WRITER_WORKFLOWS.items():
@@ -1330,15 +1369,26 @@ def verify_live_publication_state(manifest: dict, api: Api, *, observer_api: Api
     if not isinstance(mirror, dict) or mirror.get("id") != MIRROR_WORKFLOW_ID or mirror.get("state") != "disabled_manually":
         raise PublicationError("mirror workflow is not in its required continuing pause")
     writer_check = check_writers_once(api, current_run_id=current_run_id)
-    protection = protection_snapshot_from_api(observer_api)
-    if protection != manifest["controls"]["protection_snapshot"]:
-        raise PublicationError("immediate pre-push protection or publisher App exception readback changed")
+    if handoff is None:
+        protection = protection_snapshot_from_api(observer_api)
+        if protection != manifest["controls"]["protection_snapshot"]:
+            raise PublicationError("immediate pre-push protection or publisher App exception readback changed")
+        protection_evidence = {"protection_snapshot_sha256": digest(protection)}
+    else:
+        from protected_handoff import require_fresh_gate, verify_current
+        require_fresh_gate(handoff, manifest)
+        if handoff["binding"]["run_id"] != current_run_id:
+            raise PublicationError("final gate belongs to a different publication run")
+        gate = verify_current(manifest, handoff["binding"], api, observer_api, now=datetime.now(timezone.utc))
+        if gate["witness_sha256"] != handoff["witness_sha256"]:
+            raise PublicationError("administrator approval changed after the protected gate")
+        protection_evidence = {"protected_handoff": gate}
     return {
         "schema": "history-rewrite-final-state-v1",
         "writer_workflows": states,
         "mirror": {"id": MIRROR_WORKFLOW_ID, "state": "disabled_manually"},
         "writer_check": writer_check,
-        "protection_snapshot_sha256": digest(protection),
+        **protection_evidence,
         "protection_observer": observer,
     }
 
@@ -1510,11 +1560,13 @@ def main() -> int:
     controls = sub.add_parser("controls")
     controls.add_argument("operation", choices=("suppress", "restore")); controls.add_argument("manifest", type=Path)
     controls.add_argument("--receipt", type=Path, required=True); controls.add_argument("--api-url", default="https://api.github.com")
+    controls.add_argument("--handoff", type=Path)
     phase_arguments(controls, include_intent=True)
     publish = sub.add_parser("publish")
     publish.add_argument("manifest", type=Path); publish.add_argument("--repo", type=Path, required=True); publish.add_argument("--remote-url", required=True); publish.add_argument("--receipt", type=Path, required=True)
     publish.add_argument("--current-run-id", type=int, required=True)
     publish.add_argument("--fixture-api", type=Path)
+    publish.add_argument("--handoff", type=Path)
     phase_arguments(publish, include_intent=True)
     restore_artifact = sub.add_parser("restore-intent-artifact")
     restore_artifact.add_argument("--artifact-zip", type=Path, required=True); restore_artifact.add_argument("--artifact-api-json", type=Path, required=True)
@@ -1564,6 +1616,11 @@ def main() -> int:
             validate_phase_bindings(manifest, frozen_sha=ns.frozen_sha, frozen_tree=ns.frozen_tree,
                                     manifest_sha256=ns.manifest_sha256, preflight_path=ns.preflight,
                                     control_plan=ns.control_plan, intent_path=ns.intent)
+            if ns.operation == "suppress" and os.environ.get("HISTORY_REWRITE_PUBLICATION_FIXTURE") != "1":
+                from protected_handoff import require_fresh_gate
+                if ns.handoff is None:
+                    raise PublicationError("publisher effects require the protected handoff")
+                require_fresh_gate(load_object(ns.handoff), manifest)
             api = publisher_api_from_environment(ns.api_url)
             publisher = validate_publisher_identity(api)
             receipt = set_controls(plan, manifest, api, restore=ns.operation == "restore")
@@ -1580,6 +1637,8 @@ def main() -> int:
                     read_api = FixtureApi(fixture_state, principal="workflow")
                     observer_api = FixtureApi(fixture_state, principal="observer")
                 else:
+                    if ns.handoff is None:
+                        raise PublicationError("publication requires the protected handoff")
                     publisher_api = publisher_api_from_environment()
                     read_api = GitHubApi(os.environ.get("HISTORY_REWRITE_READ_TOKEN", ""))
                     observer_api = observer_api_from_environment()
@@ -1590,6 +1649,7 @@ def main() -> int:
                     control_plan=ns.control_plan, intent_path=ns.intent, read_api=read_api, observer_api=observer_api,
                     current_run_id=ns.current_run_id, repo=ns.repo, remote_url=ns.remote_url,
                     token=os.environ.get("GH_TOKEN"),
+                    handoff=load_object(ns.handoff) if ns.handoff is not None else None,
                 )
                 write_json(ns.receipt, {"schema": "history-rewrite-publication-receipt-v1", "outcome": result.outcome,
                                        "reason": result.reason, "manifest_sha256": ns.manifest_sha256, "after_refs": result.after_refs,

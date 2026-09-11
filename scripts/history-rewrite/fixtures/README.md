@@ -57,6 +57,55 @@ same executable CLI used by the workflow works against a controlled Git
 transport; it does not prove that a real repository publication or live
 control mutation occurred.
 
+## Prepared-object and protected-approval handoff
+
+`publication` now prepares and verifies the candidate before the protected
+environment job can start. Preparation uses no maintenance exceptions,
+observer secret or publisher credential. Only `candidate.bundle`, the bound
+manifest and `prepared.json` cross the job boundary. A clean import verifies
+the exact approved refs, full object integrity and equality of stored objects
+with reachable objects; no Git config, preimage refs or dangling objects are
+archived. A separate small binding artifact lets the reviewer inspect the
+approval contract without downloading the object bundle.
+
+The approval comment is canonical JSON. Start from `approval_binding` in that
+small artifact and add `observed_at`, `expires_at`,
+`administrator_snapshot` and `administrator_snapshot_sha256`. The snapshot
+must be an actual fresh, complete normalized administrator read, not the
+expected plan or an observer view padded with expected identities. Retain raw
+administrator API evidence privately; only normalized control fields belong
+in the comment. GitHub supplies the approving user's identity and environment.
+The comment explicitly binds the run, attempt, phase, harness, manifest,
+selected/output maps and prepared artifact; those fields are not inferred
+from the approvals endpoint. Duplicate, stale, foreign and incomplete
+approvals fail closed.
+
+The independent read-only App queries scalar controls and allowance counts,
+without requesting actor fields it cannot resolve. The complete actual
+administrator actor inventory and that limited App view remain separate
+evidence types. General force pushes must still be disabled; publication
+requires the exact approved publisher allowances and queue bypass. A denied
+observer response preserves a sanitized error receipt and never falls back to
+another credential.
+
+Observation freshness is bounded to ten minutes, rechecked before publisher
+effects and immediately before the leased push. This includes runner startup
+and candidate import time. If it expires, retain the prepared artifact and
+dispatch the same frozen harness with `prepared_artifact` and the exact
+manifest digest; preparation is skipped. Recheck the new run/attempt identity
+and obtain a new observation/approval. Older-attempt approvals do not authorize
+the retry. Restore the approved control preimage while waiting for a new gate.
+
+`qualification` uses an isolated synthetic candidate but the real hosted
+artifact, protected environment, structured approval and scalar-observer
+paths. It cannot mint a publisher token, suppress writers or push refs. A
+separately authorized operator qualifies the actual full-size approval
+comment, API round-trip, run/attempt semantics and measured scheduling/import
+latency before any long production backup/rewrite or publication. This
+qualification is not publication proof. The focused fixtures additionally
+reject extra bundle refs/objects/config, null actors, wrong map/artifact
+bindings, duplicate approval records and expired effect gates.
+
 If the publication runner is hard-killed after writer suppression, an operator
 can independently restore the captured writer states from the uploaded
 `history-rewrite-publication-intent-<run-id>` artifact. First read the artifact

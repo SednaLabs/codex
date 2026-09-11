@@ -8,7 +8,7 @@ on:
         required: true
         default: synthetic
         type: choice
-        options: [synthetic, snapshot, custody, inventory, rewrite, manifest, transport, publication, supplemental]
+        options: [synthetic, snapshot, custody, inventory, rewrite, manifest, transport, publication, qualification, supplemental]
       source_sha:
         description: "Exact source main commit from the frozen selected-ref map"
         required: false
@@ -62,6 +62,10 @@ on:
         type: string
       publication_manifest_artifact:
         description: "Exact producer run/head/artifact/size/API-digest JSON; mutually exclusive with inline manifest"
+        required: false
+        type: string
+      prepared_artifact:
+        description: "Reuse an exact prepared artifact descriptor after expiry; never regenerate on approval retry"
         required: false
         type: string
       manifest_recipe_gzip_b64:
@@ -310,6 +314,10 @@ jobs:
           python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps git_filter_repo-2.47.0-py3-none-any.whl
       - name: Exercise production drivers and receipt mismatch fixtures
         run: scripts/history-rewrite/fixtures/run_fixture.sh > fixture-evidence.txt
+      - name: Exercise protected handoff and candidate-only transport
+        run: |
+          python3 scripts/history-rewrite/fixtures/protected_handoff_fixtures.py >> fixture-evidence.txt
+          python3 scripts/history-rewrite/fixtures/candidate_bundle_fixtures.py >> fixture-evidence.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: history-rewrite-synthetic-${{ github.run_id }}
@@ -607,24 +615,23 @@ jobs:
           rm -f history-rewrite-candidate.age selected-refs.json
           rm -rf work output
 
-  publication:
-    if: inputs.mode == 'publication'
+  prepare-publication:
+    if: inputs.mode == 'publication' || inputs.mode == 'qualification'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    concurrency:
-      group: history-rewrite-publication
-      cancel-in-progress: false
-    environment:
-      name: history-rewrite-publication
     permissions:
       contents: read
       actions: read
-      deployments: read
+    outputs:
+      artifact: ${{ steps.prepared_descriptor.outputs.artifact }}
+      manifest_sha256: ${{ steps.prepared_descriptor.outputs.manifest_sha256 }}
     env:
       HARNESS_SHA: ${{ inputs.workflow_harness_sha }}
       HARNESS_TREE: ${{ inputs.workflow_harness_tree }}
       MANIFEST_SHA256: ${{ inputs.publication_manifest_sha256 }}
       REPO_URL: https://github.com/${{ github.repository }}.git
+      MODE: ${{ inputs.mode }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -632,6 +639,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
       - name: Materialize exact operator-approved manifest
+        if: inputs.mode == 'publication' && inputs.prepared_artifact == ''
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLICATION_MANIFEST_GZIP_B64: ${{ inputs.publication_manifest_gzip_b64 }}
@@ -648,7 +656,8 @@ jobs:
             --output "$RUNNER_TEMP/history-rewrite-publication/manifest.json" \
             --manifest-sha256 "$MANIFEST_SHA256" \
             --receipt "$RUNNER_TEMP/history-rewrite-publication/manifest-transport.json"
-      - name: Read workflow controls, approval, backup, and proof before publisher credentials
+      - name: Read immutable backup and proof without maintenance or publisher credentials
+        if: inputs.mode == 'publication' && inputs.prepared_artifact == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -661,9 +670,6 @@ jobs:
           backup_receipt_id=$(jq -er '.backup.receipt_artifact_id | select(type == "number" and . > 0)' "$manifest")
           proof_run=$(jq -er '.proof.run_id | select(type == "number" and . > 0)' "$manifest")
           proof_artifact_id=$(jq -er '.proof.artifact_id | select(type == "number" and . > 0)' "$manifest")
-          gh api "repos/$GITHUB_REPOSITORY/environments/history-rewrite-publication" > "$api/environment.json"
-          gh api "repos/$GITHUB_REPOSITORY/environments/history-rewrite-publication/deployment-branch-policies?per_page=100" > "$api/branch-policies.json"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" > "$api/approvals.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$backup_run" > "$api/backup-run.json"
           backup_workflow=$(jq -er '.workflow_id | select(type == "number" and . > 0)' "$api/backup-run.json")
           gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$backup_workflow" > "$api/backup-workflow.json"
@@ -686,42 +692,8 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$proof_workflow" > "$api/proof-workflow.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$proof_run/artifacts?per_page=100" > "$api/proof-artifacts.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$proof_artifact_id/zip" > "$api/proof.zip"
-          for workflow_id in 231747419 250252266 250252269; do
-            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id" > "$api/workflow-$workflow_id.json"
-            if test "$workflow_id" != 250252269; then
-              for status in in_progress pending queued requested waiting; do
-                gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?status=$status&per_page=100" \
-                  | jq --arg requested_status "$status" '{requested_status: $requested_status, response: .}' \
-                  > "$api/writer-runs-$workflow_id-$status.json"
-              done
-              jq -s . "$api"/writer-runs-"$workflow_id"-*.json > "$api/writer-runs-$workflow_id.json"
-            fi
-          done
-      - name: Mint repository-scoped protection observer
-        id: protection_observer
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
-        with:
-          client-id: Iv23liJxB0M5u6W3cehS
-          private-key: ${{ secrets.HISTORY_REWRITE_OBSERVER_APP_PRIVATE_KEY }}
-          owner: sednalabs
-          repositories: codex
-          permission-administration: read
-          permission-metadata: read
-          skip-token-revoke: false
-      - name: Observe protection state through the separate read-only App
-        env:
-          HISTORY_REWRITE_OBSERVER_TOKEN: ${{ steps.protection_observer.outputs.token }}
-          HISTORY_REWRITE_OBSERVER_INSTALLATION_ID: ${{ steps.protection_observer.outputs.installation-id }}
-          HISTORY_REWRITE_OBSERVER_APP_SLUG: ${{ steps.protection_observer.outputs.app-slug }}
-        run: |
-          set -euo pipefail; umask 077
-          root="$RUNNER_TEMP/history-rewrite-publication"
-          python3 scripts/history-rewrite/publication.py observer-snapshot \
-            --output "$root/api/protection-snapshot.json" --identity-output "$root/api/observer-identity.json" --api-dir "$root/api"
-          python3 scripts/history-rewrite/publication.py preflight "$root/manifest.json" \
-            --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" \
-            --manifest-sha256 "$MANIFEST_SHA256" --api-dir "$root/api" --output "$root/preflight"
       - name: Install pinned git-filter-repo for deterministic regeneration
+        if: inputs.mode == 'publication' && inputs.prepared_artifact == ''
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/history-rewrite-publication"
@@ -736,16 +708,102 @@ jobs:
           python3 -m pip install --disable-pip-version-check --no-warn-script-location --user --no-deps git_filter_repo-2.47.0-py3-none-any.whl
           rm -f git_filter_repo-2.47.0-py3-none-any.whl
       - name: Regenerate from public frozen objects and compare every approved proof
+        if: inputs.mode == 'publication' && inputs.prepared_artifact == ''
         run: |
           set -euo pipefail; umask 077
           root="$RUNNER_TEMP/history-rewrite-publication"
-          python3 scripts/history-rewrite/publication.py prepare "$root/manifest.json" \
-            --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" --manifest-sha256 "$MANIFEST_SHA256" \
-            --preflight "$root/preflight/preflight.json" \
-            --remote-url "$REPO_URL" --work-root "$root/candidate" \
-            --proof-dir "$root/preflight/approved-proof" --control-plan "$root/preflight/control-plan.json" \
-            --intent "$root/publication-restoration-intent.json"
+          python3 scripts/history-rewrite/protected_handoff.py prepare --root "$root"
+      - name: Prepare isolated no-push transport qualification
+        if: inputs.mode == 'qualification' && inputs.prepared_artifact == ''
+        run: |
+          set -euo pipefail; umask 077
+          python3 scripts/history-rewrite/protected_handoff.py qualification-prepare \
+            --root "$RUNNER_TEMP/history-rewrite-publication"
+      - name: Export only candidate reachable objects and minimal bindings
+        id: prepared
+        if: inputs.prepared_artifact == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: history-rewrite-prepared-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/history-rewrite-publication/prepared/candidate.bundle
+            ${{ runner.temp }}/history-rewrite-publication/prepared/manifest.json
+            ${{ runner.temp }}/history-rewrite-publication/prepared/prepared.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Bind immutable prepared artifact for protected publication or retry
+        id: prepared_descriptor
+        env:
+          PREPARED_ID: ${{ steps.prepared.outputs.artifact-id }}
+          PREPARED_ARTIFACT: ${{ inputs.prepared_artifact }}
+        run: |
+          set -euo pipefail
+          python3 scripts/history-rewrite/protected_handoff.py describe \
+            --root "$RUNNER_TEMP/history-rewrite-publication" >> "$GITHUB_OUTPUT"
+      - name: Export small approval binding without downloading candidate objects
+        if: inputs.prepared_artifact == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: history-rewrite-prepared-binding-${{ github.run_id }}
+          path: ${{ runner.temp }}/history-rewrite-publication/prepared-binding.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publication:
+    needs: prepare-publication
+    if: inputs.mode == 'publication' || inputs.mode == 'qualification'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: history-rewrite-publication
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+    env:
+      HARNESS_SHA: ${{ inputs.workflow_harness_sha }}
+      HARNESS_TREE: ${{ inputs.workflow_harness_tree }}
+      MANIFEST_SHA256: ${{ needs.prepare-publication.outputs.manifest_sha256 }}
+      PREPARED_ARTIFACT: ${{ needs.prepare-publication.outputs.artifact }}
+      MODE: ${{ inputs.mode }}
+      REPO_URL: https://github.com/${{ github.repository }}.git
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Import and verify the exact candidate-only object handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail; umask 077
+          root="$RUNNER_TEMP/history-rewrite-publication"
+          python3 scripts/history-rewrite/protected_handoff.py import --root "$root"
+          cp "$root/prepared/manifest.json" "$root/manifest.json"
+      - name: Mint repository-scoped protection observer
+        id: protection_observer
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: Iv23liJxB0M5u6W3cehS
+          private-key: ${{ secrets.HISTORY_REWRITE_OBSERVER_APP_PRIVATE_KEY }}
+          owner: sednalabs
+          repositories: codex
+          permission-administration: read
+          permission-metadata: read
+          skip-token-revoke: false
+      - name: Verify administrator approval and independent observable controls
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HISTORY_REWRITE_OBSERVER_TOKEN: ${{ steps.protection_observer.outputs.token }}
+          HISTORY_REWRITE_OBSERVER_INSTALLATION_ID: ${{ steps.protection_observer.outputs.installation-id }}
+          HISTORY_REWRITE_OBSERVER_APP_SLUG: ${{ steps.protection_observer.outputs.app-slug }}
+        run: |
+          set -euo pipefail; umask 077
+          python3 scripts/history-rewrite/protected_handoff.py gate --root "$RUNNER_TEMP/history-rewrite-publication"
       - name: Persist pre-mutation recovery intent
+        if: inputs.mode == 'publication'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: history-rewrite-publication-intent-${{ github.run_id }}
@@ -757,14 +815,17 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Check release publisher App configuration after all pre-publication gates
+        if: inputs.mode == 'publication'
         env:
           APP_CLIENT_ID: ${{ vars.SEDNA_RELEASE_PUBLISHER_APP_CLIENT_ID }}
           APP_PRIVATE_KEY: ${{ secrets.SEDNA_RELEASE_PUBLISHER_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
+          python3 scripts/history-rewrite/protected_handoff.py freshness --root "$RUNNER_TEMP/history-rewrite-publication"
           test "$APP_CLIENT_ID" = "Iv23ct7PXh5IQrvqoOWZ"
           test -n "$APP_PRIVATE_KEY"
       - name: Mint release publisher App token after environment approval and preflight
+        if: inputs.mode == 'publication'
         id: release_publisher_token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
         with:
@@ -777,6 +838,7 @@ jobs:
           permission-metadata: read
           skip-token-revoke: false
       - name: Verify minted publisher App identity
+        if: inputs.mode == 'publication'
         env:
           GH_TOKEN: ${{ steps.release_publisher_token.outputs.token }}
           HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID: ${{ steps.release_publisher_token.outputs.installation-id }}
@@ -787,6 +849,7 @@ jobs:
           python3 scripts/history-rewrite/publication.py publisher-identity \
             --output "$root/publisher-identity.json"
       - name: Suppress only manifest-authorised release writers
+        if: inputs.mode == 'publication'
         env:
           GH_TOKEN: ${{ steps.release_publisher_token.outputs.token }}
           HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID: ${{ steps.release_publisher_token.outputs.installation-id }}
@@ -797,8 +860,10 @@ jobs:
           python3 scripts/history-rewrite/publication.py controls suppress "$root/manifest.json" \
             --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" --manifest-sha256 "$MANIFEST_SHA256" \
             --preflight "$root/preflight/preflight.json" --control-plan "$root/preflight/control-plan.json" \
-            --intent "$root/publication-restoration-intent.json" --receipt "$root/control-suppression.json"
+            --intent "$root/publication-restoration-intent.json" --receipt "$root/control-suppression.json" \
+            --handoff "$root/handoff.json"
       - name: Publish explicit refs once with atomic per-ref leases
+        if: inputs.mode == 'publication'
         env:
           GH_TOKEN: ${{ steps.release_publisher_token.outputs.token }}
           HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID: ${{ steps.release_publisher_token.outputs.installation-id }}
@@ -814,7 +879,7 @@ jobs:
             --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" --manifest-sha256 "$MANIFEST_SHA256" \
             --preflight "$root/preflight/preflight.json" --control-plan "$root/preflight/control-plan.json" \
             --intent "$root/publication-restoration-intent.json" --current-run-id "$GITHUB_RUN_ID" \
-            --repo "$root/candidate/repo.git" --remote-url "$REPO_URL" \
+            --repo "$root/prepared/repo.git" --remote-url "$REPO_URL" --handoff "$root/handoff.json" \
             --receipt "$root/publication-receipt.json"
       - name: Restore captured release workflow states
         if: ${{ always() && steps.release_publisher_token.outputs.token != '' }}
@@ -842,6 +907,8 @@ jobs:
             ${{ runner.temp }}/history-rewrite-publication/publisher-identity.json
             ${{ runner.temp }}/history-rewrite-publication/publication-receipt.json
             ${{ runner.temp }}/history-rewrite-publication/control-restoration.json
+            ${{ runner.temp }}/history-rewrite-publication/handoff.json
+            ${{ runner.temp }}/history-rewrite-publication/observer-error.json
           if-no-files-found: warn
           retention-days: 30
       - name: Remove publication staging and credentials
