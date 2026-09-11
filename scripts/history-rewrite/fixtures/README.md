@@ -109,10 +109,19 @@ read; the publication receipt records this remaining operational-window risk.
 Dispatch `mode=snapshot` on the exact admitted existing branch with
 `workflow_harness_sha` and `workflow_harness_tree`. Its job has only read
 permissions, no protected environment, no App secrets, and no publication or
-control-mutation path. It can observe the normal, publication-blocked state.
-Capture a separate administrator snapshot with the same `snapshot` CLI under
-that separately authorized principal. Prepare expected state without changing
-GitHub:
+control-mutation path. This does not grant its token permission to enumerate
+classic protection rules: the default `GITHUB_TOKEN` may be denied that entire
+surface. Such a denial fails closed after one query; neither a narrower query,
+an empty inventory, nor an automatic credential fallback is accepted. A
+separately authorized protection-read observer must be provisioned and bound
+before publication can proceed. That observer should remain separate from the
+publisher and from the administrator who changes controls. This workflow does
+not provision it or silently increase the publisher's permissions.
+
+With an authorized observation principal, capture the normal,
+publication-blocked state. Capture a separate administrator snapshot with the
+same `snapshot` CLI under that separately authorized principal. Prepare
+expected state without changing GitHub:
 
 ```text
 python3 scripts/history-rewrite/publication.py plan-maintenance \

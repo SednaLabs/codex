@@ -497,6 +497,27 @@ def main() -> None:
     if observed != before_snapshot(visible=False) or reader_api.mutations:
         raise SystemExit("read-only snapshot changed state or failed exact principal projection")
     evidence.append("read_only_snapshot_current_blocked_state")
+
+    class DeniedProtectionApi(MockApi):
+        def __init__(self):
+            super().__init__({})
+            self.graphql_calls = 0
+
+        def post_graphql(self, query, variables):
+            self.graphql_calls += 1
+            if self.graphql_calls != 1:
+                raise SystemExit("denied observer retried a narrower query")
+            return {"data": {"repository": {"branchProtectionRules": None}},
+                    "errors": [{"type": "FORBIDDEN", "path": ["repository", "branchProtectionRules"]}]}
+
+        def get(self, path):
+            raise SystemExit("denied observer continued collecting partial evidence")
+
+    denied_api = DeniedProtectionApi()
+    evidence.append(expect_failure("denied_protection_observer_fails_closed_without_fallback",
+                                   lambda: publication.protection_snapshot_from_api(denied_api)))
+    if denied_api.graphql_calls != 1 or denied_api.mutations:
+        raise SystemExit("denied observer changed capabilities or state")
     workflow = (Path(__file__).resolve().parents[3] / ".github/workflows/history-rewrite-candidate.yml").read_text()
     for job_name in ("snapshot", "custody"):
         block = workflow.split(f"\n  {job_name}:\n", 1)[1].split("\n  synthetic:\n", 1)[0]
