@@ -5,6 +5,7 @@ codex_rust_crate(
     compile_data = [
         "src/browser_playwright_provider.mjs",
         "src/browser_playwright_review.mjs",
+        "src/browser_playwright_inspection.mjs",
         "src/browser_playwright_service_headers.mjs",
     ],
     crate_name = "codex_browser_computer_use",

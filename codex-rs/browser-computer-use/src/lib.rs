@@ -52,6 +52,7 @@ const BACKEND_WILDCARD: &str = "*";
 
 const PLAYWRIGHT_BRIDGE_SCRIPT: &str = include_str!("browser_playwright_provider.mjs");
 const PLAYWRIGHT_REVIEW_SCRIPT: &str = include_str!("browser_playwright_review.mjs");
+const PLAYWRIGHT_INSPECTION_SCRIPT: &str = include_str!("browser_playwright_inspection.mjs");
 const PLAYWRIGHT_SERVICE_HEADERS_SCRIPT: &str =
     include_str!("browser_playwright_service_headers.mjs");
 
@@ -216,6 +217,7 @@ async fn run_playwright_provider(
         .map_err(|err| format!("failed to create browser provider script directory: {err}"))?;
     let script_path = script_dir.path().join("browser_playwright_provider.mjs");
     let review_script_path = script_dir.path().join("browser_playwright_review.mjs");
+    let inspection_script_path = script_dir.path().join("browser_playwright_inspection.mjs");
     let service_headers_script_path = script_dir
         .path()
         .join("browser_playwright_service_headers.mjs");
@@ -223,6 +225,8 @@ async fn run_playwright_provider(
         .map_err(|err| format!("failed to write browser provider script: {err}"))?;
     std::fs::write(&review_script_path, PLAYWRIGHT_REVIEW_SCRIPT)
         .map_err(|err| format!("failed to write browser review script: {err}"))?;
+    std::fs::write(&inspection_script_path, PLAYWRIGHT_INSPECTION_SCRIPT)
+        .map_err(|err| format!("failed to write browser inspection script: {err}"))?;
     std::fs::write(
         &service_headers_script_path,
         PLAYWRIGHT_SERVICE_HEADERS_SCRIPT,
