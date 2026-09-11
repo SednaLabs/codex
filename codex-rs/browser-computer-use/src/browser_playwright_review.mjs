@@ -149,16 +149,15 @@ export async function pageResponseAfterFailure(
   serviceHeaders,
   inspection = null,
 ) {
+  let screenshots = [];
   try {
     const requestedViewport = page.viewportSize?.() || null;
-    const screenshots = [
-      {
-        label: "failure",
-        screenshot: await captureScreenshot(page),
-        requestedViewport,
-        metadata: await captureViewportMetadata(page, requestedViewport),
-      },
-    ];
+    screenshots = [{
+      label: "failure",
+      screenshot: await captureScreenshot(page),
+      requestedViewport,
+    }];
+    screenshots[0].metadata = await captureViewportMetadata(page, requestedViewport);
     return await responseForPage(page, screenshots, summaries, profile, {
       request,
       actionTrail,
@@ -169,14 +168,20 @@ export async function pageResponseAfterFailure(
       inspection,
     });
   } catch (captureError) {
-    const snapshot = await safePageSnapshot(page).catch(() => null);
+    const snapshot = await safePageSnapshot(page, interactionMapOptions(request)).catch(() => null);
+    const contentItems = [{
+      type: "inputText",
+      text: failureTextWithoutScreenshot(page, failedAction, error, captureError, snapshot),
+    }];
+    for (const capture of screenshots) {
+      contentItems.push({
+        type: "inputImage",
+        imageUrl: `data:image/png;base64,${capture.screenshot.buffer.toString("base64")}`,
+        detail: "high",
+      });
+    }
     return {
-      contentItems: [
-        {
-          type: "inputText",
-          text: failureTextWithoutScreenshot(page, failedAction, error, captureError, snapshot),
-        },
-      ],
+      contentItems,
       success: false,
       error: errorMessage(error),
     };
@@ -193,7 +198,7 @@ export async function responseForPage(page, screenshots, summaries, profile, opt
     failedAction = null,
     inspection = null,
   } = options;
-  const snapshot = await pageSnapshot(page, interactionMapOptions(request));
+  const snapshot = await safePageSnapshot(page, interactionMapOptions(request));
   const lines = [success ? "Browser observation" : "Browser action failed", `url: ${pageUrl(page)}`];
   if (profile?.label) {
     lines.push(`profile: ${profile.label}`);
@@ -369,9 +374,9 @@ async function applyCaptureScroll(page, capture) {
   }
 }
 
-async function safePageSnapshot(page) {
+async function safePageSnapshot(page, mapOptions = {}) {
   try {
-    return await pageSnapshot(page, interactionMapOptions(null));
+    return await pageSnapshot(page, mapOptions);
   } catch (error) {
     return {
       title: await pageTitle(page),

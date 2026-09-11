@@ -388,6 +388,10 @@ async function activePage(context) {
 }
 
 async function restoreOrNavigate(page, request, stateDir) {
+  const firstAction = canonicalActions(request.arguments)[0];
+  if ((firstAction?.type || firstAction?.action) === "navigate") {
+    return;
+  }
   const explicitUrl = request.arguments?.url;
   if (explicitUrl) {
     await page.goto(explicitUrl, { waitUntil: "domcontentloaded", timeout: timeoutMs(request) });
