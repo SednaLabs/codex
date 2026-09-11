@@ -2586,6 +2586,28 @@
       ]
     },
     {
+      "route_id": "native-browser-guidance",
+      "lane_ids": [
+        "codex.native-browser-evidence-targeted"
+      ],
+      "allowed_paths": [
+        ".codex/skills/use-native-browser/**",
+        ".github/scripts/validation-lanes/native-browser-evidence.sh",
+        ".github/validation-lanes.json",
+        ".github/scripts/test_ci_planners.py",
+        "justfile",
+        "docs/native-computer-use.md",
+        "docs/downstream-tool-surface-matrix.md",
+        "docs/downstream-regression-matrix.md",
+        "docs/divergences/index.yaml",
+        "docs/carry-divergence-ledger.md"
+      ],
+      "required_any_paths": [
+        ".codex/skills/use-native-browser/**",
+        ".github/scripts/validation-lanes/native-browser-evidence.sh"
+      ]
+    },
+    {
       "route_id": "app-server-computer-use",
       "lane_ids": [
         "codex.app-server-protocol-test",

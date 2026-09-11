@@ -1184,6 +1184,31 @@ class RouteSelectionTests(unittest.TestCase):
             ],
         )
 
+    def test_native_browser_guidance_routes_to_focused_hosted_lane(self) -> None:
+        paths = [
+            ".codex/skills/use-native-browser/SKILL.md",
+            ".codex/skills/use-native-browser/agents/openai.yaml",
+            ".github/scripts/validation-lanes/native-browser-evidence.sh",
+            ".github/validation-lanes.json",
+            ".github/scripts/test_ci_planners.py",
+            "justfile",
+            "docs/native-computer-use.md",
+            "docs/downstream-tool-surface-matrix.md",
+            "docs/downstream-regression-matrix.md",
+            "docs/divergences/index.yaml",
+            "docs/carry-divergence-ledger.md",
+        ]
+        self.assertEqual(
+            RESOLVE_VALIDATION_PLAN.select_followup_lanes(paths, self.routes),
+            ["codex.native-browser-evidence-targeted"],
+        )
+        self.assertEqual(
+            RESOLVE_VALIDATION_PLAN.select_followup_lanes(
+                paths + ["codex-rs/core/src/config/mod.rs"], self.routes
+            ),
+            [],
+        )
+
     def test_native_computer_use_code_mode_route_covers_wrapper_and_provider_lanes(
         self,
     ) -> None:
@@ -1213,6 +1238,7 @@ class RouteSelectionTests(unittest.TestCase):
                 "codex.tui-native-computer-use-targeted",
                 "codex.exec-native-computer-use-targeted",
                 "codex.native-computer-use-tool-registry-targeted",
+                "codex.native-browser-evidence-targeted",
                 "codex.code-mode-declaration-targeted",
                 "codex.native-computer-use-doctor-targeted",
             ],
