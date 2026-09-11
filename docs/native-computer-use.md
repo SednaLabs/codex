@@ -187,6 +187,21 @@ the original single-provider configuration and a provider registry:
   Interaction metadata uses labels, visible text, attributes, and selector
   hints; it must not echo arbitrary typed field values into model context or
   saved manifests.
+  Maps rank focused and visible actionable controls before the 24-control cap,
+  exclude hidden/inert ancestors, and report total, offset, and omitted counts.
+  Use `interaction_map: {"scope":"page","offset":24}` for another bounded
+  slice. Iframe entries describe only their containers, never frame contents.
+  Capture receipts distinguish requested viewport, effective inner dimensions,
+  document client dimensions, scroll dimensions/position, device-pixel ratio,
+  and visual viewport scale. Each image keeps its own label and receipt;
+  restored state is reported separately. Visual viewport scale is not a
+  measurement of desktop browser zoom.
+  Optional `inspection: {"sections":["runtime","frames","console","network"]}`
+  adds fixed read-only structural facts and call-local event metadata. Event
+  lists are capped at 20 rows with observed/omitted counts. Console text and
+  arguments, network headers/bodies, URL paths/query/fragment/userinfo, and
+  frame contents are omitted. Framework markers are hints, not version proof.
+  Scroll trails retain immediate `after` and separate `settledAfter` state.
   When a Playwright-backed step fails, the bridge returns the current page
   state, visible controls, selector candidates, and a fresh native screenshot
   whenever screenshot capture still works.
@@ -638,6 +653,8 @@ and validates the generic `use-native-browser` skill in an isolated PyYAML
 virtualenv. It is an evidence lane only: test results and any synthetic
 artifact manifest remain provider/test receipts;
 they do not replace native model-visible screenshots or claim a live provider.
+Saved artifact runs use private unique directories and exclusive file creation
+so concurrent captures with the same label cannot overwrite one another.
 
 Do not use local Android builds, browser sessions, or app-specific validation
 as the default proof for Codex protocol/tool semantics. Use Android harness,

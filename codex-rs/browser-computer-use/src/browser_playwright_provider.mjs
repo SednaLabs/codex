@@ -12,12 +12,14 @@ import {
   pageState,
   responseForPage,
   restoreScroll,
+  settleAfterAction,
   settleAfterActions,
 } from "./browser_playwright_review.mjs";
 import {
   installServiceHeaderRoute,
   serviceHeaderPlan,
 } from "./browser_playwright_service_headers.mjs";
+import { installInspection } from "./browser_playwright_inspection.mjs";
 
 const TOOL_OBSERVE = "browser_observe";
 const TOOL_STEP = "browser_step";
@@ -82,7 +84,14 @@ async function main() {
     try {
       await installServiceHeaderRoute(context, serviceHeaders);
       const page = await activePage(context);
-      await restoreOrNavigate(page, request, profile.stateDir);
+      const inspectionRequested = request.arguments?.inspection != null;
+      const inspection = await installInspection(page, request).catch(() => ({
+        collector: null,
+        snapshot: async () => (inspectionRequested ? { status: "unavailable" } : null),
+        cleanup: async () => {},
+      }));
+      try {
+        await restoreOrNavigate(page, request, profile.stateDir);
 
       const summaries = [];
       const actionTrail = [];
@@ -95,8 +104,17 @@ async function main() {
           const before = await pageState(page);
           try {
             const summary = await runAction(page, action);
+            const immediateAfter = await pageState(page);
+            await settleAfterAction(page, action, request);
+            const settledAfter = await pageState(page);
             summaries.push(summary);
-            actionTrail.push({ action: actionSummary(action), before, after: await pageState(page), summary });
+            actionTrail.push({
+              action: actionSummary(action),
+              before,
+              after: immediateAfter,
+              settledAfter: isScrollAction(action) ? settledAfter : undefined,
+              summary,
+            });
           } catch (error) {
             actionTrail.push({
               action: actionSummary(action),
@@ -105,6 +123,7 @@ async function main() {
               error: errorMessage(error),
             });
             await settleAfterActions(page, request);
+            const inspectionSnapshot = await inspection.snapshot().catch(() => (inspectionRequested ? { status: "unavailable" } : null));
             const failureResponse = await pageResponseAfterFailure(
               page,
               summaries,
@@ -114,6 +133,7 @@ async function main() {
               error,
               actionTrail,
               serviceHeaders,
+              inspectionSnapshot,
             );
             await saveState(profile.stateDir, page);
             writeResponse(failureResponse);
@@ -127,6 +147,7 @@ async function main() {
       await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => {});
       await settleAfterActions(page, request);
       const screenshots = await captureBundle(page, request);
+      const inspectionSnapshot = await inspection.snapshot().catch(() => (inspectionRequested ? { status: "unavailable" } : null));
       await saveState(profile.stateDir, page);
       writeResponse(
         await responseForPage(page, screenshots, summaries, profile, {
@@ -134,8 +155,12 @@ async function main() {
           actionTrail,
           serviceHeaders,
           success: true,
+          inspection: inspectionSnapshot,
         }),
       );
+      } finally {
+        await inspection.cleanup().catch(() => {});
+      }
     } finally {
       await context.close().catch(() => {});
     }
@@ -363,6 +388,10 @@ async function activePage(context) {
 }
 
 async function restoreOrNavigate(page, request, stateDir) {
+  const firstAction = canonicalActions(request.arguments)[0];
+  if ((firstAction?.type || firstAction?.action) === "navigate") {
+    return;
+  }
   const explicitUrl = request.arguments?.url;
   if (explicitUrl) {
     await page.goto(explicitUrl, { waitUntil: "domcontentloaded", timeout: timeoutMs(request) });
@@ -412,6 +441,10 @@ function canonicalActions(argumentsValue) {
     return [argumentsValue];
   }
   return [];
+}
+
+function isScrollAction(action) {
+  return ["scroll", "mouse_wheel"].includes(action.type || action.action);
 }
 
 async function runAction(page, action) {
