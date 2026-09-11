@@ -85,9 +85,14 @@ Immediately before the atomic ref update, the publisher performs one fresh,
 finite state snapshot of both mandatory writer workflows, their active runs,
 the continuing mirror pause, all three protected branch rules, force-push App
 allowances, and all applicable repository rulesets. The exact snapshot-pinned
-queue-only ruleset `20008703` remains unchanged without a bypass; every other
-applicable active rule type requires the publisher App `always` bypass. An
-active writer fails the attempt and
+queue-only ruleset `20008703` remains unchanged without adding a bypass. A
+read-only API response that omits `bypass_actors` is recorded as `not_returned`,
+not as evidence that the list is empty; a separately authorized administrator
+retains ownership of full protection and restoration readback. Any visible
+nonempty actor list, queue-rule drift, or other applicable active ruleset fails
+closed pending
+an explicit future source and authority decision. An active writer fails the
+attempt and
 must be drained externally with the approved blocking watcher before a wholly
 fresh dispatch. Per-ref atomic leases protect the approved old ref map, but do
 not prevent an external administrator from changing controls after that final

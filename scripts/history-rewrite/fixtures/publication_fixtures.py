@@ -47,7 +47,8 @@ def protection_snapshot() -> dict:
             "name": publication.QUEUE_ONLY_RULESET_NAME,
             "target": "branch",
             "enforcement": "active",
-            "bypass_actors": [],
+            "bypass_actors_visibility": "not_returned",
+            "bypass_actors": None,
             "conditions": {"ref_name": {"exclude": [], "include": ["refs/heads/main"]}},
             "rules": [{"type": "merge_queue", "parameters": {
                 "merge_method": "SQUASH",
@@ -151,7 +152,11 @@ class MockApi:
             return [{"id": item["id"]} for item in self.protection["repository_rulesets"]]
         if path.startswith(f"/repos/{publication.REPOSITORY}/rulesets/"):
             ruleset_id = int(path.rsplit("/", 1)[1])
-            return next(item for item in self.protection["repository_rulesets"] if item["id"] == ruleset_id)
+            ruleset = next(item for item in self.protection["repository_rulesets"] if item["id"] == ruleset_id)
+            document = {key: ruleset[key] for key in ("id", "name", "target", "enforcement", "conditions", "rules")}
+            if ruleset["bypass_actors_visibility"] == "visible":
+                document["bypass_actors"] = ruleset["bypass_actors"]
+            return document
         parts = path.split("?")[0].split("/")
         workflow_id = int(parts[6])
         if parts[-1] == "runs":
@@ -276,7 +281,14 @@ def main() -> None:
     manifest = base_manifest()
     evidence = []
     publication.validate_manifest(manifest, frozen_sha="5" * 40, frozen_tree="6" * 40)
-    evidence.extend(["manifest_complete", "queue_only_ruleset_preserved_without_bypass"])
+    evidence.extend(["manifest_complete", "queue_only_ruleset_omitted_bypass_field_preserved"])
+    visible_queue_manifest = copy.deepcopy(manifest)
+    visible_queue = visible_queue_manifest["controls"]["protection_snapshot"]["repository_rulesets"][0]
+    visible_queue["bypass_actors_visibility"] = "visible"
+    visible_queue["bypass_actors"] = []
+    visible_queue_manifest["controls"]["protection_snapshot_sha256"] = digest(visible_queue_manifest["controls"]["protection_snapshot"])
+    publication.validate_manifest(visible_queue_manifest, frozen_sha="5" * 40, frozen_tree="6" * 40)
+    evidence.append("queue_only_ruleset_visible_empty_bypass_preserved")
     cases = {
         "missing_ref": lambda value: value["output_refs"].pop("refs/tags/v1"),
         "extra_ref": lambda value: value["output_refs"].update({"refs/heads/extra": "a" * 40}),
@@ -304,15 +316,25 @@ def main() -> None:
     evidence.append(expect_failure("publisher_app_exception", lambda: publication.validate_manifest(
         bad_protection, frozen_sha="5" * 40, frozen_tree="6" * 40,
     )))
-    bad_ruleset_bypass = copy.deepcopy(manifest)
-    bad_ruleset_bypass["controls"]["protection_snapshot"]["repository_rulesets"].append({
+    unknown_ruleset = copy.deepcopy(manifest)
+    unknown_ruleset["controls"]["protection_snapshot"]["repository_rulesets"].append({
         "id": 900, "name": "fixture-main", "target": "branch", "enforcement": "active",
-        "bypass_actors": [{"actor_id": publication.PUBLISHER_APP_ID, "actor_type": "Integration", "bypass_mode": "pull_request"}],
-        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}}, "rules": [],
+        "bypass_actors_visibility": "visible",
+        "bypass_actors": [{"actor_id": publication.PUBLISHER_APP_ID, "actor_type": "Integration", "bypass_mode": "always"}],
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+        "rules": [{"type": "non_fast_forward"}],
     })
-    bad_ruleset_bypass["controls"]["protection_snapshot_sha256"] = digest(bad_ruleset_bypass["controls"]["protection_snapshot"])
-    evidence.append(expect_failure("publisher_app_ruleset_bypass", lambda: publication.validate_manifest(
-        bad_ruleset_bypass, frozen_sha="5" * 40, frozen_tree="6" * 40,
+    unknown_ruleset["controls"]["protection_snapshot_sha256"] = digest(unknown_ruleset["controls"]["protection_snapshot"])
+    evidence.append(expect_failure("unknown_ruleset_rejected_even_with_app_bypass", lambda: publication.validate_manifest(
+        unknown_ruleset, frozen_sha="5" * 40, frozen_tree="6" * 40,
+    )))
+    visible_queue_actors = copy.deepcopy(visible_queue_manifest)
+    visible_queue_actors["controls"]["protection_snapshot"]["repository_rulesets"][0]["bypass_actors"] = [{
+        "actor_id": publication.PUBLISHER_APP_ID, "actor_type": "Integration", "bypass_mode": "always",
+    }]
+    visible_queue_actors["controls"]["protection_snapshot_sha256"] = digest(visible_queue_actors["controls"]["protection_snapshot"])
+    evidence.append(expect_failure("queue_only_visible_nonempty_bypass", lambda: publication.validate_manifest(
+        visible_queue_actors, frozen_sha="5" * 40, frozen_tree="6" * 40,
     )))
     queue_rule_type_drift = copy.deepcopy(manifest)
     queue_rule_type_drift["controls"]["protection_snapshot"]["repository_rulesets"][0]["rules"].append({

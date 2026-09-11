@@ -42,6 +42,16 @@ PUBLISHER_APP_ID = 3520391
 PUBLISHER_APP_NODE_ID = "A_kwHODOdWjM4ANbeH"
 QUEUE_ONLY_RULESET_ID = 20008703
 QUEUE_ONLY_RULESET_NAME = "Serialized merge queue for main"
+QUEUE_ONLY_RULESET_CONDITIONS = {"ref_name": {"exclude": [], "include": ["refs/heads/main"]}}
+QUEUE_ONLY_RULESET_RULES = [{"type": "merge_queue", "parameters": {
+    "merge_method": "SQUASH",
+    "max_entries_to_build": 4,
+    "min_entries_to_merge": 1,
+    "max_entries_to_merge": 1,
+    "min_entries_to_merge_wait_minutes": 0,
+    "grouping_strategy": "ALLGREEN",
+    "check_response_timeout_minutes": 180,
+}}]
 WRITER_WORKFLOWS = {
     ".github/workflows/rust-release.yml": 231747419,
     ".github/workflows/sedna-release.yml": 250252266,
@@ -305,7 +315,20 @@ def normalize_protection_snapshot(branch_document: object, ruleset_documents: Se
     for document in ruleset_documents:
         if not isinstance(document, dict) or not isinstance(document.get("id"), int):
             raise PublicationError("repository ruleset evidence is malformed")
-        rulesets.append({key: document.get(key) for key in ("id", "name", "target", "enforcement", "bypass_actors", "conditions", "rules")})
+        if "bypass_actors" in document:
+            bypass_actors = document["bypass_actors"]
+            if not isinstance(bypass_actors, list):
+                raise PublicationError("visible repository ruleset bypass actors are malformed")
+            bypass_visibility = "visible"
+            bypass_actors = sorted(bypass_actors, key=lambda item: canonical_json(item))
+        else:
+            bypass_visibility = "not_returned"
+            bypass_actors = None
+        rulesets.append({
+            **{key: document.get(key) for key in ("id", "name", "target", "enforcement", "conditions", "rules")},
+            "bypass_actors_visibility": bypass_visibility,
+            "bypass_actors": bypass_actors,
+        })
     rulesets.sort(key=lambda item: item["id"])
     return {
         "schema": "history-rewrite-protection-snapshot-v1",
@@ -364,25 +387,20 @@ def validate_protection_snapshot(snapshot: object) -> None:
         if not applicable:
             continue
         bypass = ruleset.get("bypass_actors")
+        bypass_visibility = ruleset.get("bypass_actors_visibility")
         rules = ruleset.get("rules")
         if (
             ruleset.get("id") == QUEUE_ONLY_RULESET_ID
             and ruleset.get("name") == QUEUE_ONLY_RULESET_NAME
-            and bypass == []
-            and isinstance(rules, list)
-            and len(rules) == 1
-            and isinstance(rules[0], dict)
-            and rules[0].get("type") == "merge_queue"
+            and ruleset.get("conditions") == QUEUE_ONLY_RULESET_CONDITIONS
+            and rules == QUEUE_ONLY_RULESET_RULES
+            and (
+                (bypass_visibility == "visible" and bypass == [])
+                or (bypass_visibility == "not_returned" and bypass is None)
+            )
         ):
             continue
-        if not isinstance(bypass, list) or not any(
-            isinstance(item, dict)
-            and item.get("actor_type") == "Integration"
-            and item.get("actor_id") == PUBLISHER_APP_ID
-            and item.get("bypass_mode") == "always"
-            for item in bypass
-        ):
-            raise PublicationError(f"applicable ruleset lacks the publisher App bypass: {ruleset.get('id')}")
+        raise PublicationError(f"unexpected applicable active ruleset requires an explicit future authority decision: {ruleset.get('id')}")
 
 
 def protection_snapshot_from_api(api: Api) -> dict:
