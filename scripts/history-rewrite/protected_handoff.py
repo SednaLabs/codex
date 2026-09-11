@@ -170,7 +170,9 @@ def validate_attestation(approvals: object, expected: dict, snapshot_sha256: str
             continue
         if (item.get("user", {}).get("id"), item.get("user", {}).get("login")) != (p.REVIEWER_ID, p.REVIEWER_LOGIN):
             raise p.PublicationError("approval is not from the exact administrator")
-        if environments != [{"id": ENVIRONMENT_ID, "name": p.ENVIRONMENT_NAME}]:
+        # Approval history includes provider metadata as well as identity.
+        # Environment policy is checked separately against its live endpoint.
+        if len(environments) != 1 or (environments[0].get("id"), environments[0].get("name")) != (ENVIRONMENT_ID, p.ENVIRONMENT_NAME):
             raise p.PublicationError("approval environment domain mismatch")
         if value["administrator_snapshot_sha256"] != snapshot_sha256:
             raise p.PublicationError("attested actual snapshot digest differs from the approved expected after-state")

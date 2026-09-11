@@ -31,15 +31,27 @@ def main() -> None:
                    "expires_at": (now + timedelta(seconds=585)).isoformat(timespec="microseconds"),
                    "administrator_snapshot_sha256": p.digest(administrator)}
 
+    # Field shape observed in the real approvals API. Non-authority metadata
+    # uses public-safe synthetic values; id/name remain the exact contract.
+    provider_environment = {"can_admins_bypass": True, "created_at": "2026-01-01T00:00:00Z",
+        "html_url": f"https://github.com/{p.REPOSITORY}/deployments/activity_log?environments_filter={p.ENVIRONMENT_NAME}",
+        "id": h.ENVIRONMENT_ID, "name": p.ENVIRONMENT_NAME, "node_id": "EN_fixture",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "url": f"https://api.github.com/repos/{p.REPOSITORY}/environments/{p.ENVIRONMENT_NAME}"}
+
     def approval(value):
         return {"state": "approved", "user": {"id": p.REVIEWER_ID, "login": p.REVIEWER_LOGIN},
-                "environments": [{"id": h.ENVIRONMENT_ID, "name": p.ENVIRONMENT_NAME}], "comment": p.canonical_json(value).decode()}
+                "environments": [copy.deepcopy(provider_environment)], "comment": p.canonical_json(value).decode()}
 
     def validate(items, expected=binding, current_run=run):
         return h.validate_attestation(items, expected, p.digest(administrator), current_run, now=now)
 
     records = [approval(attestation)]
     assert validate(records).document == attestation
+    assert validate([{**records[0], "environments": [{"id": h.ENVIRONMENT_ID, "name": p.ENVIRONMENT_NAME}]}]).document == attestation
+    # Approval metadata cannot itself grant policy authority or revoke it;
+    # the separate live environment-policy check remains mandatory.
+    assert validate([{**records[0], "environments": [{**provider_environment, "can_admins_bypass": False}]}]).document == attestation
     assert len(records[0]["comment"].encode()) == 337 < h.MAX_COMMENT_BYTES
     old = {**attestation, "binding_sha256": p.digest({**binding, "run_attempt": 1}),
            "observed_at": (now - timedelta(days=1)).isoformat(), "expires_at": (now - timedelta(hours=23)).isoformat()}
@@ -78,6 +90,10 @@ def main() -> None:
         ("non_ascii_comment", [{**records[0], "comment": records[0]["comment"].replace("attestation", "attestatiön")}]),
         ("wrong_environment_name", [{**records[0], "environments": [{"id": h.ENVIRONMENT_ID, "name": "other"}]}]),
         ("wrong_environment_id", [{**records[0], "environments": [{"id": 1, "name": p.ENVIRONMENT_NAME}]}]),
+        ("missing_environment_id", [{**records[0], "environments": [{key: value for key, value in provider_environment.items() if key != "id"}]}]),
+        ("missing_environment_name", [{**records[0], "environments": [{key: value for key, value in provider_environment.items() if key != "name"}]}]),
+        ("conflicting_environment", [{**records[0], "environments": [provider_environment, {"id": 1, "name": p.ENVIRONMENT_NAME}]}]),
+        ("malformed_environment", [{**records[0], "environments": [None]}]),
         ("extra_environment", [{**records[0], "environments": records[0]["environments"] * 2}]),
         ("rejected", [{**records[0], "state": "rejected"}])):
         failures.append(expect_failure(label, lambda: validate(changed)))
