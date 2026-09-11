@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "synthetic, inventory, rewrite, publication, or supplemental"
+        description: "synthetic, snapshot, custody, inventory, rewrite, publication, or supplemental"
         required: true
         default: synthetic
         type: choice
-        options: [synthetic, inventory, rewrite, publication, supplemental]
+        options: [synthetic, snapshot, custody, inventory, rewrite, publication, supplemental]
       source_sha:
         description: "Exact source main commit from the frozen selected-ref map"
         required: false
@@ -60,6 +60,14 @@ on:
         description: "Operator-approved SHA-256 of canonical publication manifest JSON"
         required: false
         type: string
+      custody_manifest_gzip_b64:
+        description: "gzip+base64 canonical exact encrypted artifact custody manifest"
+        required: false
+        type: string
+      custody_manifest_sha256:
+        description: "Operator-approved SHA-256 of the finite custody manifest"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -70,6 +78,97 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  snapshot:
+    if: inputs.mode == 'snapshot'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Capture read-token protection observation without publication authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HARNESS_SHA: ${{ inputs.workflow_harness_sha }}
+          HARNESS_TREE: ${{ inputs.workflow_harness_tree }}
+        run: |
+          set -euo pipefail; umask 077
+          test "$GITHUB_REPOSITORY" = "sednalabs/codex"
+          test "$GITHUB_REF_NAME" = "repair/history-rewrite-publication-w13828"
+          test "$GITHUB_SHA" = "$HARNESS_SHA"
+          test "$(git rev-parse "$GITHUB_SHA^{tree}")" = "$HARNESS_TREE"
+          root="$RUNNER_TEMP/history-rewrite-snapshot"
+          mkdir -m 700 "$root"
+          python3 scripts/history-rewrite/publication.py snapshot --output "$root/protection-snapshot.json"
+          jq -n --arg run_id "$GITHUB_RUN_ID" --arg head_sha "$GITHUB_SHA" --arg tree "$HARNESS_TREE" \
+            '{run_id:$run_id,head_sha:$head_sha,tree:$tree,principal:"GITHUB_TOKEN; contents/actions/deployments read",status:"observation only; no maintenance or publication authorization"}' > "$root/binding.json"
+          sha256sum "$root/protection-snapshot.json" > "$root/snapshot.sha256"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: history-rewrite-protection-snapshot-${{ github.run_id }}
+          path: ${{ runner.temp }}/history-rewrite-snapshot/
+          if-no-files-found: error
+          retention-days: 7
+
+  custody:
+    if: inputs.mode == 'custody'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Preserve only the approved encrypted ZIPs and original receipt bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HARNESS_SHA: ${{ inputs.workflow_harness_sha }}
+          HARNESS_TREE: ${{ inputs.workflow_harness_tree }}
+          PUBLICATION_MANIFEST_GZIP_B64: ${{ inputs.custody_manifest_gzip_b64 }}
+          CUSTODY_SHA256: ${{ inputs.custody_manifest_sha256 }}
+        run: |
+          set -euo pipefail; umask 077
+          test "$GITHUB_REPOSITORY" = "sednalabs/codex"
+          test "$GITHUB_REF_NAME" = "repair/history-rewrite-publication-w13828"
+          test "$GITHUB_SHA" = "$HARNESS_SHA"
+          test "$(git rev-parse "$GITHUB_SHA^{tree}")" = "$HARNESS_TREE"
+          root="$RUNNER_TEMP/history-rewrite-custody"
+          mkdir -m 700 "$root"
+          python3 scripts/history-rewrite/publication.py decode --output "$root/manifest.json" --manifest-sha256 "$CUSTODY_SHA256"
+          python3 scripts/history-rewrite/publication.py custody "$root/manifest.json" --manifest-sha256 "$CUSTODY_SHA256" --output "$root/bytes"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        id: custody_upload
+        with:
+          name: history-rewrite-encrypted-custody-${{ github.run_id }}
+          path: ${{ runner.temp }}/history-rewrite-custody/bytes/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+      - name: Verify actual custody identity and archival deadline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.custody_upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.custody_upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail; umask 077
+          root="$RUNNER_TEMP/history-rewrite-custody"
+          python3 scripts/history-rewrite/publication.py custody-readback \
+            --source-receipt "$root/bytes/source-custody-receipt.json" \
+            --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" \
+            --run-id "$GITHUB_RUN_ID" --head-sha "$GITHUB_SHA" --output "$root/custody-receipt.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: history-rewrite-custody-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/history-rewrite-custody/custody-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
   synthetic:
     if: inputs.mode == 'synthetic'
     runs-on: ubuntu-24.04
@@ -368,7 +467,7 @@ jobs:
         with:
           name: history-rewrite-candidate-ciphertext
           path: history-rewrite-candidate.age
-          retention-days: 3
+          retention-days: 90
           if-no-files-found: error
       - name: Bind candidate ciphertext artifact API receipt
         if: inputs.mode == 'rewrite'
@@ -394,7 +493,7 @@ jobs:
           name: history-rewrite-${{ inputs.mode }}-${{ github.run_id }}
           path: output
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
       - name: Upload timing-only diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
@@ -497,22 +596,7 @@ jobs:
               jq -s . "$api"/writer-runs-"$workflow_id"-*.json > "$api/writer-runs-$workflow_id.json"
             fi
           done
-          protection_query='query($owner: String!, $name: String!) {
-            repository(owner: $owner, name: $name) {
-              branchProtectionRules(first: 100) {
-                totalCount
-                nodes {
-                  id pattern allowsForcePushes isAdminEnforced requiresStatusChecks
-                  requiredStatusCheckContexts requiresApprovingReviews requiredApprovingReviewCount
-                  requiresConversationResolution restrictsPushes
-                  bypassForcePushAllowances(first: 100) {
-                    totalCount
-                    nodes { actor { __typename ... on App { id databaseId slug } } }
-                  }
-                }
-              }
-            }
-          }'
+          protection_query=$(python3 -c 'import sys; sys.path.insert(0,"scripts/history-rewrite"); from publication import BRANCH_PROTECTION_QUERY; print(BRANCH_PROTECTION_QUERY)')
           gh api graphql -f owner=sednalabs -f name=codex -f query="$protection_query" > "$api/branch-protection-rules.json"
           gh api "repos/$GITHUB_REPOSITORY/rulesets?includes_parents=true&per_page=100" > "$api/rulesets.json"
           jq -er '.[].id' "$api/rulesets.json" | while read -r ruleset_id; do

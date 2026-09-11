@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import fnmatch
 import hashlib
 import json
@@ -25,6 +26,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Mapping, Protocol, Sequence
 
@@ -40,6 +42,14 @@ BRANCH_POLICY_ID = 59660428
 MIRROR_WORKFLOW_ID = 250252269
 PUBLISHER_APP_ID = 3520391
 PUBLISHER_APP_NODE_ID = "A_kwHODOdWjM4ANbeH"
+PUBLISHER_ACTOR = {"__typename": "App", "id": PUBLISHER_APP_NODE_ID,
+                   "databaseId": PUBLISHER_APP_ID, "slug": "sedna-release-publisher"}
+QUEUE_MAINTENANCE_ACTORS = [{"actor_id": PUBLISHER_APP_ID, "actor_type": "Integration", "bypass_mode": "always"}]
+PROTECTION_RULE_IDS = {
+    "main": "BPR_kwDORLG0B84Eb5kA",
+    "upstream-main": "BPR_kwDORLG0B84Eb5Z4",
+    "integration/app-server-delivery-train-20260824": "BPR_kwDORLG0B84E5XWA",
+}
 QUEUE_ONLY_RULESET_ID = 20008703
 QUEUE_ONLY_RULESET_NAME = "Serialized merge queue for main"
 QUEUE_ONLY_RULESET_CONDITIONS = {"ref_name": {"exclude": [], "include": ["refs/heads/main"]}}
@@ -225,6 +235,12 @@ def validate_manifest(manifest: Mapping[str, object], *, frozen_sha: str, frozen
     if not isinstance(snapshot, dict) or controls.get("protection_snapshot_sha256") != digest(snapshot):
         raise PublicationError("approved protection snapshot is missing or has the wrong digest")
     validate_protection_snapshot(snapshot)
+    plan = controls.get("maintenance_plan")
+    if not isinstance(plan, dict) or controls.get("maintenance_plan_sha256") != digest(plan):
+        raise PublicationError("operator maintenance plan or digest is missing")
+    expected_plan = plan_maintenance(plan.get("administrator_before"), plan.get("read_token_before"))
+    if plan != expected_plan or snapshot != plan["read_token_after"]:
+        raise PublicationError("maintenance plan changes more than the exact approved transition")
     return selected, output
 
 
@@ -263,11 +279,20 @@ BRANCH_PROTECTION_QUERY = """query($owner: String!, $name: String!) {
       totalCount
       nodes {
         id pattern allowsForcePushes isAdminEnforced requiresStatusChecks
-        requiredStatusCheckContexts requiresApprovingReviews requiredApprovingReviewCount
-        requiresConversationResolution restrictsPushes
+        requiredStatusCheckContexts requiredStatusChecks { context app { databaseId slug } }
+        requiresStrictStatusChecks requiresApprovingReviews requiredApprovingReviewCount
+        requiresConversationResolution restrictsPushes requiresCommitSignatures
+        requiresLinearHistory lockBranch requiresDeployments requiredDeploymentEnvironments
+        requireLastPushApproval requiresCodeOwnerReviews allowsDeletions blocksCreations
         bypassForcePushAllowances(first: 100) {
           totalCount
           nodes { actor { __typename ... on App { id databaseId slug } } }
+        }
+        bypassPullRequestAllowances(first: 100) {
+          totalCount nodes { actor { __typename ... on App { id databaseId slug } } }
+        }
+        pushAllowances(first: 100) {
+          totalCount nodes { actor { __typename ... on App { id databaseId slug } } }
         }
       }
     }
@@ -276,6 +301,9 @@ BRANCH_PROTECTION_QUERY = """query($owner: String!, $name: String!) {
 
 
 def normalize_protection_snapshot(branch_document: object, ruleset_documents: Sequence[object]) -> dict:
+    if isinstance(branch_document, dict) and branch_document.get("errors"):
+        paths = [item.get("path") for item in branch_document["errors"] if isinstance(item, dict)]
+        raise PublicationError(f"branch protection GraphQL returned partial/error evidence at paths: {paths}")
     try:
         branch_rules = branch_document["data"]["repository"]["branchProtectionRules"]
         nodes = branch_rules["nodes"]
@@ -287,16 +315,19 @@ def normalize_protection_snapshot(branch_document: object, ruleset_documents: Se
     for node in nodes:
         if not isinstance(node, dict):
             raise PublicationError("branch protection rule is malformed")
-        allowances = node.get("bypassForcePushAllowances")
-        allowance_nodes = allowances.get("nodes") if isinstance(allowances, dict) else None
-        if not isinstance(allowance_nodes, list) or allowances.get("totalCount") != len(allowance_nodes) or len(allowance_nodes) >= 100:
-            raise PublicationError("force-push allowance result is incomplete")
-        actors = []
-        for allowance in allowance_nodes:
-            actor = allowance.get("actor") if isinstance(allowance, dict) else None
-            if not isinstance(actor, dict):
-                raise PublicationError("force-push allowance actor is malformed")
-            actors.append({key: actor.get(key) for key in ("__typename", "id", "databaseId", "slug")})
+        actors = {}
+        for field in ("bypassForcePushAllowances", "bypassPullRequestAllowances", "pushAllowances"):
+            allowances = node.get(field)
+            allowance_nodes = allowances.get("nodes") if isinstance(allowances, dict) else None
+            if not isinstance(allowance_nodes, list) or allowances.get("totalCount") != len(allowance_nodes) or len(allowance_nodes) >= 100:
+                raise PublicationError(f"{field} result is incomplete")
+            values = []
+            for allowance in allowance_nodes:
+                actor = allowance.get("actor") if isinstance(allowance, dict) else None
+                if not isinstance(actor, dict):
+                    raise PublicationError(f"{field} actor is malformed")
+                values.append({key: actor.get(key) for key in ("__typename", "id", "databaseId", "slug")})
+            actors[field] = sorted(values, key=canonical_json)
         normalized_rules.append({
             "id": node.get("id"),
             "pattern": node.get("pattern"),
@@ -304,11 +335,24 @@ def normalize_protection_snapshot(branch_document: object, ruleset_documents: Se
             "is_admin_enforced": node.get("isAdminEnforced"),
             "requires_status_checks": node.get("requiresStatusChecks"),
             "required_status_check_contexts": node.get("requiredStatusCheckContexts"),
+            "required_status_checks": node.get("requiredStatusChecks"),
+            "requires_strict_status_checks": node.get("requiresStrictStatusChecks"),
             "requires_approving_reviews": node.get("requiresApprovingReviews"),
             "required_approving_review_count": node.get("requiredApprovingReviewCount"),
             "requires_conversation_resolution": node.get("requiresConversationResolution"),
             "restricts_pushes": node.get("restrictsPushes"),
-            "bypass_force_push_allowances": sorted(actors, key=lambda item: canonical_json(item)),
+            "requires_commit_signatures": node.get("requiresCommitSignatures"),
+            "requires_linear_history": node.get("requiresLinearHistory"),
+            "lock_branch": node.get("lockBranch"),
+            "requires_deployments": node.get("requiresDeployments"),
+            "required_deployment_environments": node.get("requiredDeploymentEnvironments"),
+            "require_last_push_approval": node.get("requireLastPushApproval"),
+            "requires_code_owner_reviews": node.get("requiresCodeOwnerReviews"),
+            "allows_deletions": node.get("allowsDeletions"),
+            "blocks_creations": node.get("blocksCreations"),
+            "bypass_force_push_allowances": actors["bypassForcePushAllowances"],
+            "bypass_pull_request_allowances": actors["bypassPullRequestAllowances"],
+            "push_allowances": actors["pushAllowances"],
         })
     normalized_rules.sort(key=lambda item: (str(item["pattern"]), str(item["id"])))
     rulesets = []
@@ -331,20 +375,56 @@ def normalize_protection_snapshot(branch_document: object, ruleset_documents: Se
         })
     rulesets.sort(key=lambda item: item["id"])
     return {
-        "schema": "history-rewrite-protection-snapshot-v1",
+        "schema": "history-rewrite-protection-snapshot-v2",
         "protected_refs": list(PROTECTED_REFS),
         "branch_protection_rules": normalized_rules,
         "repository_rulesets": rulesets,
     }
 
 
-def validate_protection_snapshot(snapshot: object) -> None:
-    if not isinstance(snapshot, dict) or snapshot.get("schema") != "history-rewrite-protection-snapshot-v1" or snapshot.get("protected_refs") != list(PROTECTED_REFS):
+def validate_snapshot_shape(snapshot: object) -> None:
+    if not isinstance(snapshot, dict) or snapshot.get("schema") != "history-rewrite-protection-snapshot-v2" or snapshot.get("protected_refs") != list(PROTECTED_REFS):
         raise PublicationError("protection snapshot schema or protected ref domain mismatch")
     branch_rules = snapshot.get("branch_protection_rules")
     rulesets = snapshot.get("repository_rulesets")
     if not isinstance(branch_rules, list) or not isinstance(rulesets, list):
         raise PublicationError("protection snapshot rule domains are malformed")
+    if len(branch_rules) != len(PROTECTION_RULE_IDS) or {item.get("pattern") for item in branch_rules if isinstance(item, dict)} != set(PROTECTION_RULE_IDS):
+        raise PublicationError("classic protection rule domain differs from the admitted three branches")
+    for rule in branch_rules:
+        if rule.get("id") != PROTECTION_RULE_IDS[rule["pattern"]]:
+            raise PublicationError("classic protection rule identity changed")
+        for name in ("allows_force_pushes", "is_admin_enforced", "requires_status_checks", "requires_strict_status_checks",
+                     "requires_approving_reviews", "requires_conversation_resolution", "restricts_pushes",
+                     "requires_commit_signatures", "requires_linear_history", "lock_branch", "requires_deployments",
+                     "require_last_push_approval", "requires_code_owner_reviews", "allows_deletions", "blocks_creations"):
+            if type(rule.get(name)) is not bool:
+                raise PublicationError(f"missing or malformed protection field: {name}")
+        for name in ("required_status_check_contexts", "required_status_checks", "required_deployment_environments",
+                     "bypass_force_push_allowances", "bypass_pull_request_allowances", "push_allowances"):
+            if not isinstance(rule.get(name), list):
+                raise PublicationError(f"missing protection list: {name}")
+        if rule.get("required_approving_review_count") is not None and type(rule["required_approving_review_count"]) is not int:
+            raise PublicationError("review count is malformed")
+        for check in rule["required_status_checks"]:
+            if not isinstance(check, dict) or not isinstance(check.get("context"), str) or (
+                check.get("app") is not None and (not isinstance(check["app"], dict) or type(check["app"].get("databaseId")) is not int)
+            ):
+                raise PublicationError("required check source identity is malformed")
+    ids = [item.get("id") for item in rulesets if isinstance(item, dict)]
+    if len(ids) != len(rulesets) or len(set(ids)) != len(ids) or any(type(value) is not int for value in ids):
+        raise PublicationError("ruleset identity domain is malformed")
+    for item in rulesets:
+        if not isinstance(item.get("rules"), list) or item.get("target") not in {"branch", "tag", "push"} or item.get("enforcement") not in {"active", "disabled", "evaluate"}:
+            raise PublicationError("ruleset semantics are missing")
+        if not ((item.get("bypass_actors_visibility") == "visible" and isinstance(item.get("bypass_actors"), list)) or
+                (item.get("bypass_actors_visibility") == "not_returned" and item.get("bypass_actors") is None)):
+            raise PublicationError("ruleset actor visibility is contradictory")
+
+
+def validate_protection_snapshot(snapshot: object) -> None:
+    validate_snapshot_shape(snapshot)
+    branch_rules, rulesets = snapshot["branch_protection_rules"], snapshot["repository_rulesets"]
     def matches_ref(ref: str, pattern: object) -> bool:
         if pattern == "~ALL":
             return True
@@ -358,18 +438,22 @@ def validate_protection_snapshot(snapshot: object) -> None:
         if len(matches) != 1 or matches[0].get("allows_force_pushes") is not True:
             raise PublicationError(f"protected ref lacks an exact temporary force-push rule: {ref}")
         allowances = matches[0].get("bypass_force_push_allowances")
-        if not isinstance(allowances, list) or not any(
-            isinstance(item, dict)
-            and item.get("__typename") == "App"
-            and item.get("id") == PUBLISHER_APP_NODE_ID
-            and item.get("databaseId") == PUBLISHER_APP_ID
-            and isinstance(item.get("slug"), str)
-            for item in allowances if isinstance(item, dict)
-        ):
+        rule = matches[0]
+        if allowances != [PUBLISHER_ACTOR] or rule["push_allowances"] != [PUBLISHER_ACTOR] or rule["restricts_pushes"] is not True:
             raise PublicationError(f"protected ref lacks the exact publisher App allowance: {ref}")
+        if rule["requires_status_checks"] or rule["required_status_checks"] or rule["required_status_check_contexts"]:
+            raise PublicationError(f"rewritten commits cannot satisfy retained normal status gates: {ref}")
+        review_required = branch != "upstream-main"
+        if rule["requires_approving_reviews"] is not review_required or rule["bypass_pull_request_allowances"] != ([PUBLISHER_ACTOR] if review_required else []):
+            raise PublicationError(f"exact App-only pull request exception is missing: {ref}")
+        for field in ("requires_commit_signatures", "requires_linear_history", "lock_branch", "requires_deployments", "allows_deletions"):
+            if rule[field]:
+                raise PublicationError(f"unadmitted maintenance restriction or deletion permission: {field}")
     for ruleset in rulesets:
-        if not isinstance(ruleset, dict) or ruleset.get("target") != "branch" or ruleset.get("enforcement") != "active":
+        if ruleset.get("enforcement") != "active":
             continue
+        if ruleset.get("target") != "branch":
+            raise PublicationError("active tag/push rules require a separate publication authority decision")
         conditions = ruleset.get("conditions")
         ref_names = conditions.get("ref_name") if isinstance(conditions, dict) else None
         includes = ref_names.get("include") if isinstance(ref_names, dict) else None
@@ -395,12 +479,61 @@ def validate_protection_snapshot(snapshot: object) -> None:
             and ruleset.get("conditions") == QUEUE_ONLY_RULESET_CONDITIONS
             and rules == QUEUE_ONLY_RULESET_RULES
             and (
-                (bypass_visibility == "visible" and bypass == [])
+                (bypass_visibility == "visible" and bypass == QUEUE_MAINTENANCE_ACTORS)
                 or (bypass_visibility == "not_returned" and bypass is None)
             )
         ):
             continue
         raise PublicationError(f"unexpected applicable active ruleset requires an explicit future authority decision: {ruleset.get('id')}")
+    if not any(item["id"] == QUEUE_ONLY_RULESET_ID and item["enforcement"] == "active" for item in rulesets):
+        raise PublicationError("the main queue ruleset must remain active during maintenance")
+
+
+def project_actor_visibility(administrator: dict, observation: dict) -> dict:
+    """Project only a documented hidden field; never infer an empty actor list."""
+    validate_snapshot_shape(administrator); validate_snapshot_shape(observation)
+    result = copy.deepcopy(administrator)
+    observed = {item["id"]: item for item in observation["repository_rulesets"]}
+    if set(observed) != {item["id"] for item in administrator["repository_rulesets"]}:
+        raise PublicationError("administrator and read-token ruleset domains differ")
+    for item in result["repository_rulesets"]:
+        if item["bypass_actors_visibility"] != "visible":
+            raise PublicationError("administrator actor evidence is not complete")
+        if observed[item["id"]]["bypass_actors_visibility"] == "not_returned":
+            item.update(bypass_actors_visibility="not_returned", bypass_actors=None)
+    return result
+
+
+def plan_maintenance(administrator_before: object, read_token_before: object) -> dict:
+    """Build expected state and exact rollback evidence without changing GitHub."""
+    validate_snapshot_shape(administrator_before); validate_snapshot_shape(read_token_before)
+    if project_actor_visibility(administrator_before, read_token_before) != read_token_before:
+        raise PublicationError("principals disagree on observable pre-maintenance protection state")
+    after = copy.deepcopy(administrator_before)
+    for rule in after["branch_protection_rules"]:
+        if rule["allows_force_pushes"] or any(rule[key] for key in ("bypass_force_push_allowances", "bypass_pull_request_allowances", "push_allowances")) or rule["restricts_pushes"]:
+            raise PublicationError("maintenance preimage differs from the admitted actor/force-push baseline")
+        rule.update(allows_force_pushes=True, restricts_pushes=True,
+                    bypass_force_push_allowances=[copy.deepcopy(PUBLISHER_ACTOR)], push_allowances=[copy.deepcopy(PUBLISHER_ACTOR)])
+        if rule["pattern"] != "upstream-main":
+            checks = {item["context"]: item.get("app", {}).get("databaseId") for item in rule["required_status_checks"] if isinstance(item.get("app"), dict)}
+            if rule["requires_status_checks"] is not True or checks != {"CI required": 15368, "CodeQL required gate": 15368}:
+                raise PublicationError("normal status gate/source differs from the admitted maintenance baseline")
+            rule.update(requires_status_checks=False, required_status_checks=[], required_status_check_contexts=[],
+                        bypass_pull_request_allowances=[copy.deepcopy(PUBLISHER_ACTOR)])
+    queue = [item for item in after["repository_rulesets"] if item["id"] == QUEUE_ONLY_RULESET_ID]
+    if len(queue) != 1 or queue[0]["bypass_actors"] != []:
+        raise PublicationError("queue bypass preimage differs from the admitted empty baseline")
+    queue[0]["bypass_actors"] = copy.deepcopy(QUEUE_MAINTENANCE_ACTORS)
+    validate_protection_snapshot(after)
+    return {
+        "schema": "history-rewrite-maintenance-plan-v1", "repository": REPOSITORY,
+        "administrator_before": administrator_before, "administrator_after": after,
+        "read_token_before": read_token_before,
+        "read_token_after": project_actor_visibility(after, read_token_before),
+        "administrator_readback": "required immediately after the separately authorized control mutation and after exact rollback",
+        "authority": "expected-state proposal only; the operator must approve the exact manifest and maintenance exception",
+    }
 
 
 def protection_snapshot_from_api(api: Api) -> dict:
@@ -1102,6 +1235,105 @@ def decode_manifest(output: Path, manifest_sha256: str) -> None:
     output.write_bytes(raw)
 
 
+def custody_sources(manifest: dict, manifest_sha256: str, api: Api, output: Path, download) -> dict:
+    """Preserve immutable encrypted ZIP bytes; never open or decrypt an archive."""
+    if digest(manifest) != manifest_sha256 or manifest.get("schema") != "history-rewrite-custody-v1" or manifest.get("repository") != REPOSITORY or manifest.get("requested_retention_days") != 90:
+        raise PublicationError("custody manifest identity, approval digest, or retention mismatch")
+    sources = manifest.get("artifacts")
+    if not isinstance(sources, list) or len(sources) != 4:
+        raise PublicationError("custody requires exactly two encrypted ZIPs and their two proof/receipt ZIPs")
+    expected_names = {"recovery-snapshot-ciphertext", "recovery-snapshot-receipt", "history-rewrite-candidate-ciphertext"}
+    names = {item.get("name") for item in sources if isinstance(item, dict)}
+    proof_names = names - expected_names
+    if len(names) != 4 or not expected_names.issubset(names) or len(proof_names) != 1:
+        raise PublicationError("custody source domain is incomplete or duplicated")
+    proof_name = next(iter(proof_names))
+    if not isinstance(proof_name, str) or not re.fullmatch(r"history-rewrite-rewrite-[1-9][0-9]*", proof_name):
+        raise PublicationError("custody proof artifact name is invalid")
+    verified, ids, runs = [], set(), {}
+    for item in sources:
+        artifact_id = _positive_int(item.get("id"), "custody artifact id")
+        run_id = _positive_int(item.get("run_id"), "custody source run")
+        size = _positive_int(item.get("size_in_bytes"), "custody source size")
+        sha = _sha256(item.get("sha256"), "custody source digest")
+        if artifact_id in ids or size > 600 * 1024 * 1024 or not OID.fullmatch(str(item.get("head_sha"))):
+            raise PublicationError("custody source identity is duplicated, oversized, or malformed")
+        ids.add(artifact_id)
+        metadata = api.get(f"/repos/{REPOSITORY}/actions/artifacts/{artifact_id}")
+        if not isinstance(metadata, dict) or any(metadata.get(key) != value for key, value in {
+            "id": artifact_id, "name": item["name"], "size_in_bytes": size,
+            "digest": "sha256:" + sha, "expired": False,
+        }.items()) or metadata.get("workflow_run", {}).get("id") != run_id or metadata.get("workflow_run", {}).get("head_sha") != item["head_sha"]:
+            raise PublicationError("custody source API identity/digest differs from its approved immutable binding")
+        if run_id not in runs:
+            runs[run_id] = api.get(f"/repos/{REPOSITORY}/actions/runs/{run_id}")
+        run = runs[run_id]
+        expected_path = ".github/workflows/recovery-snapshot.yml" if item["name"].startswith("recovery-snapshot-") else ".github/workflows/history-rewrite-candidate.yml"
+        if not isinstance(run, dict) or run.get("id") != run_id or run.get("head_sha") != item["head_sha"] or run.get("status") != "completed" or run.get("conclusion") != "success" or run.get("repository", {}).get("full_name") != REPOSITORY or run.get("path") != expected_path:
+            raise PublicationError("custody source is not the exact successful repository workflow run")
+        if item["name"] == proof_name and proof_name != f"history-rewrite-rewrite-{run_id}":
+            raise PublicationError("custody proof name/run binding mismatch")
+        verified.append({**item, "original_expires_at": metadata.get("expires_at"), "filename": f"artifact-{artifact_id}.zip"})
+    backup_runs = {item["run_id"] for item in verified if item["name"].startswith("recovery-snapshot-")}
+    rewrite_runs = {item["run_id"] for item in verified if not item["name"].startswith("recovery-snapshot-")}
+    if len(backup_runs) != 1 or len(rewrite_runs) != 1 or len({item["head_sha"] for item in verified}) != 1 or next(iter(backup_runs)) >= next(iter(rewrite_runs)):
+        raise PublicationError("custody backup/proof pairs do not share the original frozen harness sequence")
+    output.mkdir(parents=True, exist_ok=False)
+    for item in verified:
+        target = output / item["filename"]
+        download(item["id"], target, item["size_in_bytes"])
+        if target.stat().st_size != item["size_in_bytes"] or file_digest(target) != item["sha256"]:
+            raise PublicationError("custody download did not preserve the exact original ZIP bytes")
+    receipt = {"schema": "history-rewrite-custody-sources-v1", "repository": REPOSITORY,
+               "manifest_sha256": manifest_sha256, "requested_retention_days": 90, "artifacts": verified,
+               "content": "original encrypted ZIPs and original receipt/proof ZIPs, unopened and not decrypted",
+               "status": "verified-source-bytes; destination retention not yet established"}
+    write_json(output / "source-custody-receipt.json", receipt)
+    write_json(output / "custody-manifest.json", manifest)
+    return receipt
+
+
+def download_custody_zip(artifact_id: int, target: Path, size: int) -> None:
+    # gh handles GitHub's signed artifact redirect without forwarding our bearer
+    # credential to the storage host. Keep both output and errors off public logs.
+    with tempfile.TemporaryFile() as errors, target.open("xb") as destination:
+        process = subprocess.Popen(["gh", "api", f"repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip"],
+                                   stdout=subprocess.PIPE, stderr=errors)
+        count = 0
+        try:
+            while chunk := process.stdout.read(1024 * 1024):
+                count += len(chunk)
+                if count > size:
+                    raise PublicationError("custody download exceeded the approved size")
+                destination.write(chunk)
+            if process.wait() != 0:
+                raise PublicationError("custody artifact download failed")
+        finally:
+            if process.poll() is None:
+                process.terminate(); process.wait()
+
+
+def custody_destination(source_receipt: dict, metadata: dict, *, run_id: int, artifact_id: int,
+                        artifact_digest: str, head_sha: str, now: datetime) -> dict:
+    if source_receipt.get("schema") != "history-rewrite-custody-sources-v1" or source_receipt.get("requested_retention_days") != 90:
+        raise PublicationError("custody source receipt is invalid")
+    _sha256(artifact_digest, "custody destination digest")
+    if not isinstance(metadata, dict) or metadata.get("id") != artifact_id or metadata.get("name") != f"history-rewrite-encrypted-custody-{run_id}" or metadata.get("digest") != "sha256:" + artifact_digest or metadata.get("expired") is not False or metadata.get("workflow_run", {}).get("id") != run_id or metadata.get("workflow_run", {}).get("head_sha") != head_sha:
+        raise PublicationError("custody destination API readback differs from the upload result")
+    try:
+        expiry = datetime.fromisoformat(metadata["expires_at"].replace("Z", "+00:00"))
+        created = datetime.fromisoformat(metadata["created_at"].replace("Z", "+00:00"))
+        if expiry <= now or expiry - created < timedelta(days=89):
+            raise PublicationError("actual custody retention does not establish the approved 90-day bridge")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PublicationError("custody destination timestamps are invalid") from exc
+    return {"schema": "history-rewrite-finite-custody-v1", "repository": REPOSITORY,
+            "sources": source_receipt, "source_receipt_sha256": digest(source_receipt),
+            "destination": {key: metadata[key] for key in ("id", "name", "size_in_bytes", "digest", "created_at", "expires_at", "workflow_run")},
+            "archival_deadline": (expiry - timedelta(days=7)).isoformat(),
+            "status": "verified finite hosted custody; not indefinite archival storage"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1116,6 +1348,22 @@ def main() -> int:
 
     decode = sub.add_parser("decode")
     decode.add_argument("--output", type=Path, required=True); decode.add_argument("--manifest-sha256", required=True)
+    snapshot = sub.add_parser("snapshot")
+    snapshot.add_argument("--output", type=Path, required=True)
+    planning = sub.add_parser("plan-maintenance")
+    planning.add_argument("--administrator-before", type=Path, required=True)
+    planning.add_argument("--read-token-before", type=Path, required=True)
+    planning.add_argument("--output", type=Path, required=True)
+    custody = sub.add_parser("custody")
+    custody.add_argument("manifest", type=Path); custody.add_argument("--manifest-sha256", required=True)
+    custody.add_argument("--output", type=Path, required=True)
+    custody_readback = sub.add_parser("custody-readback")
+    custody_readback.add_argument("--source-receipt", type=Path, required=True)
+    custody_readback.add_argument("--artifact-id", type=int, required=True)
+    custody_readback.add_argument("--artifact-digest", required=True)
+    custody_readback.add_argument("--run-id", type=int, required=True)
+    custody_readback.add_argument("--head-sha", required=True)
+    custody_readback.add_argument("--output", type=Path, required=True)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("manifest", type=Path); preflight.add_argument("--frozen-sha", required=True); preflight.add_argument("--frozen-tree", required=True)
     preflight.add_argument("--manifest-sha256", required=True); preflight.add_argument("--api-dir", type=Path, required=True); preflight.add_argument("--output", type=Path, required=True)
@@ -1144,6 +1392,20 @@ def main() -> int:
     try:
         if ns.command == "decode":
             decode_manifest(ns.output, ns.manifest_sha256)
+        elif ns.command == "snapshot":
+            value = protection_snapshot_from_api(GitHubApi(os.environ.get("GH_TOKEN", "")))
+            validate_snapshot_shape(value)
+            write_json(ns.output, value)
+        elif ns.command == "plan-maintenance":
+            write_json(ns.output, plan_maintenance(load_object(ns.administrator_before), load_object(ns.read_token_before)))
+        elif ns.command == "custody":
+            custody_sources(load_object(ns.manifest), ns.manifest_sha256, GitHubApi(os.environ.get("GH_TOKEN", "")), ns.output, download_custody_zip)
+        elif ns.command == "custody-readback":
+            api = GitHubApi(os.environ.get("GH_TOKEN", ""))
+            metadata = api.get(f"/repos/{REPOSITORY}/actions/artifacts/{ns.artifact_id}")
+            write_json(ns.output, custody_destination(load_object(ns.source_receipt), metadata,
+                       run_id=ns.run_id, artifact_id=ns.artifact_id, artifact_digest=ns.artifact_digest,
+                       head_sha=ns.head_sha, now=datetime.now(timezone.utc)))
         elif ns.command == "preflight":
             validate_preflight(load_object(ns.manifest, "manifest"), frozen_sha=ns.frozen_sha, frozen_tree=ns.frozen_tree,
                                manifest_sha256=ns.manifest_sha256, api_dir=ns.api_dir, output=ns.output)

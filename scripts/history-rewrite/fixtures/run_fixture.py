@@ -623,21 +623,12 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
     proof_digests = {}
     for name in publication_module.ARTIFACT_FILES:
         proof_digests[name] = hashlib.sha256((approved / name).read_bytes()).hexdigest()
-    branch_nodes = []
-    for ref in publication_module.PROTECTED_REFS:
-        branch = ref.removeprefix("refs/heads/")
-        branch_nodes.append({
-            "id": "fixture-" + hashlib.sha256(branch.encode()).hexdigest()[:12], "pattern": branch,
-            "allowsForcePushes": True, "isAdminEnforced": True, "requiresStatusChecks": True,
-            "requiredStatusCheckContexts": ["fixture"], "requiresApprovingReviews": True,
-            "requiredApprovingReviewCount": 0, "requiresConversationResolution": True, "restrictsPushes": False,
-            "bypassForcePushAllowances": {"totalCount": 1, "nodes": [{"actor": {
-                "__typename": "App", "id": publication_module.PUBLISHER_APP_NODE_ID,
-                "databaseId": publication_module.PUBLISHER_APP_ID, "slug": "fixture-publisher",
-            }}]},
-        })
-    branch_document = {"data": {"repository": {"branchProtectionRules": {"totalCount": len(branch_nodes), "nodes": branch_nodes}}}}
-    protection = publication_module.normalize_protection_snapshot(branch_document, [])
+    from publication_fixtures import MockApi, base_manifest
+    fixture_manifest = base_manifest()
+    controls = fixture_manifest["controls"]
+    protection = controls["protection_snapshot"]
+    protection_api = MockApi({}, protection=protection)
+    branch_document = protection_api.post_graphql(publication_module.BRANCH_PROTECTION_QUERY, {})
     manifest = {
         "schema": "history-rewrite-publication-v1",
         "repository": publication_module.REPOSITORY,
@@ -654,17 +645,7 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
         "proof_digests_sha256": publication_module.digest(proof_digests),
         "backup": {"run_id": 41, "receipt_artifact_id": 410, "receipt_artifact_api_digest": "8" * 64},
         "proof": {"run_id": 42, "artifact_id": 420, "artifact_api_digest": "9" * 64},
-        "controls": {
-            "publication_branch": publication_module.PUBLICATION_BRANCH,
-            "environment": publication_module.ENVIRONMENT_NAME,
-            "reviewer_id": publication_module.REVIEWER_ID,
-            "reviewer_login": publication_module.REVIEWER_LOGIN,
-            "writer_workflows": publication_module.WRITER_WORKFLOWS,
-            "mirror_workflow_id": publication_module.MIRROR_WORKFLOW_ID,
-            "protected_refs": list(publication_module.PROTECTED_REFS),
-            "protection_snapshot": protection,
-            "protection_snapshot_sha256": publication_module.digest(protection),
-        },
+        "controls": controls,
     }
     manifest_path = root / "manifest.json"; write_json(manifest_path, manifest)
     control_plan = {
@@ -705,7 +686,10 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
         "app": {"id": publication_module.PUBLISHER_APP_ID, "node_id": publication_module.PUBLISHER_APP_NODE_ID},
         "workflows": workflows,
         "writer_runs": {str(workflow_id): {"total_count": 0, "workflow_runs": []} for workflow_id in publication_module.WRITER_WORKFLOWS.values()},
-        "branch_protection_document": branch_document, "rulesets": [], "ruleset_documents": {},
+        "branch_protection_document": branch_document,
+        "rulesets": [{"id": publication_module.QUEUE_ONLY_RULESET_ID}],
+        "ruleset_documents": {str(publication_module.QUEUE_ONLY_RULESET_ID): protection_api.get(
+            f"/repos/{publication_module.REPOSITORY}/rulesets/{publication_module.QUEUE_ONLY_RULESET_ID}")},
     })
     work = root / "candidate"
     environment = dict(os.environ); environment["HISTORY_REWRITE_PUBLICATION_FIXTURE"] = "1"

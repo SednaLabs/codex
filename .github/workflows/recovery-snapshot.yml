@@ -130,7 +130,7 @@ jobs:
         with:
           name: recovery-snapshot-ciphertext
           path: recovery-snapshot.age
-          retention-days: 3
+          retention-days: 90
           if-no-files-found: error
       - name: Build non-sensitive receipt from independent artifact API metadata
         env:
@@ -166,7 +166,7 @@ jobs:
           path: |
             recovery-snapshot-receipt.json
             selected-ref-map.json
-          retention-days: 3
+          retention-days: 90
           if-no-files-found: error
       - name: Emit non-sensitive receipt identities
         env:

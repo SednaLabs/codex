@@ -83,17 +83,67 @@ survive runner termination.
 
 Immediately before the atomic ref update, the publisher performs one fresh,
 finite state snapshot of both mandatory writer workflows, their active runs,
-the continuing mirror pause, all three protected branch rules, force-push App
-allowances, and all applicable repository rulesets. The exact snapshot-pinned
-queue-only ruleset `20008703` remains unchanged without adding a bypass. A
+the continuing mirror pause, all three protected branch rules, force-push,
+push and PR App allowances, check sources/strictness, other execution gates,
+and all applicable repository rulesets. The normal force-push-only state is
+not publication-ready: rewritten commit IDs do not inherit old CI checks.
+The separately approved maintenance plan restricts pushes and force pushes to
+the publisher App, adds its PR exception on the two PR-protected branches,
+and temporarily suspends their ordinary required checks. The exact queue-only
+ruleset `20008703` stays active with unchanged rules/conditions/parameters and
+exactly one temporary publisher-App `always` exception. This is an explicit
+maintenance exception, not evidence of passing ordinary CI. A
 read-only API response that omits `bypass_actors` is recorded as `not_returned`,
 not as evidence that the list is empty; a separately authorized administrator
-retains ownership of full protection and restoration readback. Any visible
-nonempty actor list, queue-rule drift, or other applicable active ruleset fails
-closed pending
-an explicit future source and authority decision. An active writer fails the
-attempt and
-must be drained externally with the approved blocking watcher before a wholly
+retains ownership of full protection and restoration readback. The manifest
+binds both the full administrator before/after plan and the expected read-token
+projection. Missing actor visibility is never reported as live verification.
+Extra actors, queue-rule drift, or an unknown applicable active ruleset fails
+closed. An active writer must be drained externally with the blocking watcher before a wholly
 fresh dispatch. Per-ref atomic leases protect the approved old ref map, but do
 not prevent an external administrator from changing controls after that final
 read; the publication receipt records this remaining operational-window risk.
+
+## Read-only preparation and finite encrypted custody
+
+Dispatch `mode=snapshot` on the exact admitted existing branch with
+`workflow_harness_sha` and `workflow_harness_tree`. Its job has only read
+permissions, no protected environment, no App secrets, and no publication or
+control-mutation path. It can observe the normal, publication-blocked state.
+Capture a separate administrator snapshot with the same `snapshot` CLI under
+that separately authorized principal. Prepare expected state without changing
+GitHub:
+
+```text
+python3 scripts/history-rewrite/publication.py plan-maintenance \
+  --administrator-before ADMINISTRATOR-SNAPSHOT.json \
+  --read-token-before WORKFLOW-SNAPSHOT.json --output MAINTENANCE-PLAN.json
+```
+
+The plan preserves the exact rollback preimage, including check source IDs and
+strictness. Bind it as `controls.maintenance_plan` plus its SHA-256, and bind
+`read_token_after` as `controls.protection_snapshot` plus its SHA-256. The
+operator approves the complete manifest and maintenance exception before the
+administrative window opens. After the administrator applies only that delta,
+fresh administrator readback and the workflow's exact expected-state check
+precede publication. Restore exact original protections and remove the queue
+exception on success or failure. Administrative rollback is separate from
+the App's writer-restoration CLI, including after a killed runner. Never leave
+the maintenance window open while developing or repeating review.
+
+`mode=custody` is a separate hosted, read-permission job. Its canonical
+`history-rewrite-custody-v1` manifest binds `repository`,
+`requested_retention_days: 90`, and exactly four `artifacts`: the backup
+ciphertext/receipt and candidate ciphertext/proof. Each entry supplies `id`,
+`name`, `run_id`, `head_sha`, `size_in_bytes`, and `sha256`. Provide its
+gzip+base64 bytes and approved digest through `custody_manifest_gzip_b64` and
+`custody_manifest_sha256`, plus the exact executing harness SHA/tree.
+The job checks successful original run/API identity, size, digest and expiry,
+copies original ZIP bytes without opening or decrypting them, and uploads
+those bytes with the original provenance. It verifies the destination API
+digest against the upload result and derives an archival deadline seven days
+before the actual expiry. Truncated retention fails the bridge check; requested
+retention alone is never proof. This is finite hosted escrow, not indefinite
+archival storage. A separately selected durable destination remains required
+before its recorded archival deadline. Original artifact IDs/digests are not
+replaced by the new wrapper's ID/digest, and source archives are not deleted.

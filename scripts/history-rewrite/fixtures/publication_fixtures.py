@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import publication
@@ -22,24 +23,29 @@ def protection_snapshot() -> dict:
     for ref in publication.PROTECTED_REFS:
         branch = ref.removeprefix("refs/heads/")
         rules.append({
-            "id": "rule-" + hashlib.sha256(branch.encode()).hexdigest()[:12],
+            "id": publication.PROTECTION_RULE_IDS[branch],
             "pattern": branch,
             "allows_force_pushes": True,
-            "is_admin_enforced": True,
-            "requires_status_checks": True,
-            "required_status_check_contexts": ["fixture"],
-            "requires_approving_reviews": True,
+            "is_admin_enforced": branch != "upstream-main",
+            "requires_status_checks": False,
+            "required_status_check_contexts": [],
+            "required_status_checks": [],
+            "requires_strict_status_checks": branch != "main",
+            "requires_approving_reviews": branch != "upstream-main",
             "required_approving_review_count": 0,
             "requires_conversation_resolution": True,
-            "restricts_pushes": False,
-            "bypass_force_push_allowances": [{
-                "__typename": "App", "id": publication.PUBLISHER_APP_NODE_ID,
-                "databaseId": publication.PUBLISHER_APP_ID, "slug": "fixture-publisher",
-            }],
+            "restricts_pushes": True,
+            "requires_commit_signatures": False, "requires_linear_history": False,
+            "lock_branch": False, "requires_deployments": False,
+            "required_deployment_environments": [], "require_last_push_approval": False,
+            "requires_code_owner_reviews": False, "allows_deletions": False, "blocks_creations": False,
+            "bypass_force_push_allowances": [copy.deepcopy(publication.PUBLISHER_ACTOR)],
+            "bypass_pull_request_allowances": [copy.deepcopy(publication.PUBLISHER_ACTOR)] if branch != "upstream-main" else [],
+            "push_allowances": [copy.deepcopy(publication.PUBLISHER_ACTOR)],
         })
     rules.sort(key=lambda item: (item["pattern"], item["id"]))
     return {
-        "schema": "history-rewrite-protection-snapshot-v1",
+        "schema": "history-rewrite-protection-snapshot-v2",
         "protected_refs": list(publication.PROTECTED_REFS),
         "branch_protection_rules": rules,
         "repository_rulesets": [{
@@ -61,6 +67,20 @@ def protection_snapshot() -> dict:
             }}],
         }],
     }
+
+
+def before_snapshot(*, visible: bool) -> dict:
+    snapshot = protection_snapshot()
+    for rule in snapshot["branch_protection_rules"]:
+        rule.update(allows_force_pushes=False, restricts_pushes=False,
+                    bypass_force_push_allowances=[], bypass_pull_request_allowances=[], push_allowances=[])
+        if rule["pattern"] != "upstream-main":
+            rule.update(requires_status_checks=True, required_status_check_contexts=["CI required", "CodeQL required gate"],
+                        required_status_checks=[{"context": context, "app": {"databaseId": 15368, "slug": "github-actions"}}
+                                                for context in ("CI required", "CodeQL required gate")])
+    if visible:
+        snapshot["repository_rulesets"][0].update(bypass_actors_visibility="visible", bypass_actors=[])
+    return snapshot
 
 
 def git(repo: Path, *args: str) -> str:
@@ -99,6 +119,11 @@ def base_manifest(selected: dict[str, str] | None = None, output: dict[str, str]
         },
     }
     manifest["controls"]["protection_snapshot_sha256"] = digest(manifest["controls"]["protection_snapshot"])
+    plan = publication.plan_maintenance(before_snapshot(visible=True), before_snapshot(visible=False))
+    if plan["read_token_after"] != manifest["controls"]["protection_snapshot"]:
+        raise SystemExit("maintenance planner does not match the independently specified expected after-state")
+    manifest["controls"]["maintenance_plan"] = plan
+    manifest["controls"]["maintenance_plan_sha256"] = digest(plan)
     return manifest
 
 
@@ -179,12 +204,25 @@ class MockApi:
                 "id": item["id"], "pattern": item["pattern"], "allowsForcePushes": item["allows_force_pushes"],
                 "isAdminEnforced": item["is_admin_enforced"], "requiresStatusChecks": item["requires_status_checks"],
                 "requiredStatusCheckContexts": item["required_status_check_contexts"],
+                "requiredStatusChecks": item["required_status_checks"],
+                "requiresStrictStatusChecks": item["requires_strict_status_checks"],
                 "requiresApprovingReviews": item["requires_approving_reviews"],
                 "requiredApprovingReviewCount": item["required_approving_review_count"],
                 "requiresConversationResolution": item["requires_conversation_resolution"],
                 "restrictsPushes": item["restricts_pushes"],
+                "requiresCommitSignatures": item["requires_commit_signatures"],
+                "requiresLinearHistory": item["requires_linear_history"], "lockBranch": item["lock_branch"],
+                "requiresDeployments": item["requires_deployments"], "requiredDeploymentEnvironments": item["required_deployment_environments"],
+                "requireLastPushApproval": item["require_last_push_approval"], "requiresCodeOwnerReviews": item["requires_code_owner_reviews"],
+                "allowsDeletions": item["allows_deletions"], "blocksCreations": item["blocks_creations"],
                 "bypassForcePushAllowances": {"totalCount": len(item["bypass_force_push_allowances"]), "nodes": [
                     {"actor": actor} for actor in item["bypass_force_push_allowances"]
+                ]},
+                "bypassPullRequestAllowances": {"totalCount": len(item["bypass_pull_request_allowances"]), "nodes": [
+                    {"actor": actor} for actor in item["bypass_pull_request_allowances"]
+                ]},
+                "pushAllowances": {"totalCount": len(item["push_allowances"]), "nodes": [
+                    {"actor": actor} for actor in item["push_allowances"]
                 ]},
             })
         return {"data": {"repository": {"branchProtectionRules": {"totalCount": len(nodes), "nodes": nodes}}}}
@@ -277,18 +315,113 @@ def git_adapter_fixture(root: Path) -> tuple[str, str]:
     return positive, negative
 
 
+def custody_fixtures() -> list[str]:
+    names = ["recovery-snapshot-ciphertext", "recovery-snapshot-receipt",
+             "history-rewrite-candidate-ciphertext", "history-rewrite-rewrite-42"]
+    payloads = {index + 100: ("opaque-original-artifact-" + name).encode() for index, name in enumerate(names)}
+    artifacts = [{"id": index + 100, "name": name, "run_id": 41 if index < 2 else 42,
+                  "head_sha": "5" * 40, "size_in_bytes": len(payloads[index + 100]),
+                  "sha256": hashlib.sha256(payloads[index + 100]).hexdigest()} for index, name in enumerate(names)]
+    manifest = {"schema": "history-rewrite-custody-v1", "repository": publication.REPOSITORY,
+                "requested_retention_days": 90, "artifacts": artifacts}
+    documents = {}
+    for item in artifacts:
+        documents[f"/repos/{publication.REPOSITORY}/actions/artifacts/{item['id']}"] = {
+            "id": item["id"], "name": item["name"], "size_in_bytes": item["size_in_bytes"],
+            "digest": "sha256:" + item["sha256"], "expired": False, "expires_at": "2026-09-14T00:00:00Z",
+            "workflow_run": {"id": item["run_id"], "head_sha": item["head_sha"]},
+        }
+        documents[f"/repos/{publication.REPOSITORY}/actions/runs/{item['run_id']}"] = {
+            "id": item["run_id"], "head_sha": item["head_sha"], "status": "completed", "conclusion": "success",
+            "repository": {"full_name": publication.REPOSITORY},
+            "path": ".github/workflows/recovery-snapshot.yml" if item["run_id"] == 41 else ".github/workflows/history-rewrite-candidate.yml",
+        }
+
+    class ReadOnlyApi:
+        def get(self, path):
+            return copy.deepcopy(documents[path])
+
+        def put(self, path):
+            raise SystemExit("custody attempted a control mutation")
+
+        def post_graphql(self, query, variables):
+            raise SystemExit("custody attempted an unrelated API call")
+
+    downloads = []
+
+    def download(artifact_id, target, size):
+        downloads.append(artifact_id)
+        target.write_bytes(payloads[artifact_id])
+
+    evidence = []
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        receipt = publication.custody_sources(manifest, digest(manifest), ReadOnlyApi(), root / "good", download)
+        if downloads != [item["id"] for item in artifacts] or any(
+            (root / "good" / f"artifact-{item['id']}.zip").read_bytes() != payloads[item["id"]] for item in artifacts
+        ):
+            raise SystemExit("custody did not preserve the exact original archive bytes")
+        evidence.append("custody_exact_original_bytes_without_extraction")
+        for name, mutate in (
+            ("custody_digest", lambda value: value["artifacts"][0].update(sha256="0" * 64)),
+            ("custody_name", lambda value: value["artifacts"][0].update(name="arbitrary-publication")),
+            ("custody_source_run", lambda value: value["artifacts"][0].update(run_id=999)),
+            ("custody_source_head", lambda value: value["artifacts"][0].update(head_sha="0" * 40)),
+            ("custody_duplicate", lambda value: value["artifacts"].append(value["artifacts"][0])),
+            ("custody_oversized", lambda value: value["artifacts"][0].update(size_in_bytes=2**40)),
+        ):
+            changed = copy.deepcopy(manifest); mutate(changed)
+            before_downloads = list(downloads)
+            evidence.append(expect_failure(name, lambda candidate=changed: publication.custody_sources(
+                candidate, digest(candidate), ReadOnlyApi(), root / name, download)))
+            if downloads != before_downloads:
+                raise SystemExit("custody downloaded before all metadata bindings were verified")
+        evidence.append(expect_failure("custody_external_approval_digest", lambda: publication.custody_sources(
+            manifest, "0" * 64, ReadOnlyApi(), root / "unapproved", download)))
+        artifact_path = f"/repos/{publication.REPOSITORY}/actions/artifacts/100"
+        documents[artifact_path]["expired"] = True
+        evidence.append(expect_failure("custody_expired_source", lambda: publication.custody_sources(
+            manifest, digest(manifest), ReadOnlyApi(), root / "expired", download)))
+        documents[artifact_path]["expired"] = False
+        evidence.append(expect_failure("custody_short_corrupt_download", lambda: publication.custody_sources(
+            manifest, digest(manifest), ReadOnlyApi(), root / "corrupt", lambda artifact_id, target, size: target.write_bytes(b"wrong"))))
+        now = datetime(2026, 9, 11, tzinfo=timezone.utc)
+        destination = {"id": 999, "name": "history-rewrite-encrypted-custody-43", "size_in_bytes": 1234,
+                       "digest": "sha256:" + "9" * 64, "expired": False,
+                       "created_at": now.isoformat(), "expires_at": (now + timedelta(days=90)).isoformat(),
+                       "workflow_run": {"id": 43, "head_sha": "6" * 40}}
+
+        def verify_destination(value):
+            return publication.custody_destination(receipt, value, run_id=43, artifact_id=999,
+                artifact_digest="9" * 64, head_sha="6" * 40, now=now)
+
+        retained = verify_destination(destination)
+        if retained["archival_deadline"] != (now + timedelta(days=83)).isoformat():
+            raise SystemExit("custody deadline was not derived from actual destination expiry")
+        evidence.append("custody_actual_expiry_and_finite_archival_deadline")
+        for name, key, value in (
+            ("custody_truncated_retention", "expires_at", (now + timedelta(days=3)).isoformat()),
+            ("custody_wrong_destination_digest", "digest", "sha256:" + "0" * 64),
+            ("custody_wrong_destination_run", "workflow_run", {"id": 44, "head_sha": "6" * 40}),
+            ("custody_wrong_destination_head", "workflow_run", {"id": 43, "head_sha": "7" * 40}),
+        ):
+            changed = copy.deepcopy(destination); changed[key] = value
+            evidence.append(expect_failure(name, lambda value=changed: verify_destination(value)))
+    return evidence
+
+
 def main() -> None:
     manifest = base_manifest()
     evidence = []
     publication.validate_manifest(manifest, frozen_sha="5" * 40, frozen_tree="6" * 40)
-    evidence.extend(["manifest_complete", "queue_only_ruleset_omitted_bypass_field_preserved"])
+    evidence.extend(["manifest_complete", "queue_actor_visibility_is_not_invented"])
     visible_queue_manifest = copy.deepcopy(manifest)
-    visible_queue = visible_queue_manifest["controls"]["protection_snapshot"]["repository_rulesets"][0]
-    visible_queue["bypass_actors_visibility"] = "visible"
-    visible_queue["bypass_actors"] = []
-    visible_queue_manifest["controls"]["protection_snapshot_sha256"] = digest(visible_queue_manifest["controls"]["protection_snapshot"])
+    visible_plan = publication.plan_maintenance(before_snapshot(visible=True), before_snapshot(visible=True))
+    visible_queue_manifest["controls"].update(maintenance_plan=visible_plan, maintenance_plan_sha256=digest(visible_plan),
+                                           protection_snapshot=visible_plan["read_token_after"],
+                                           protection_snapshot_sha256=digest(visible_plan["read_token_after"]))
     publication.validate_manifest(visible_queue_manifest, frozen_sha="5" * 40, frozen_tree="6" * 40)
-    evidence.append("queue_only_ruleset_visible_empty_bypass_preserved")
+    evidence.append("queue_only_exact_visible_maintenance_actor")
     cases = {
         "missing_ref": lambda value: value["output_refs"].pop("refs/tags/v1"),
         "extra_ref": lambda value: value["output_refs"].update({"refs/heads/extra": "a" * 40}),
@@ -299,6 +432,7 @@ def main() -> None:
         "wrong_branch": lambda value: value["controls"].update(publication_branch="main"),
         "missing_mandatory_writer": lambda value: value["controls"]["writer_workflows"].pop(".github/workflows/sedna-release.yml"),
         "arbitrary_writer": lambda value: value["controls"]["writer_workflows"].update({".github/workflows/other.yml": 999}),
+        "missing_maintenance_plan": lambda value: value["controls"].pop("maintenance_plan"),
     }
     for name, mutate in cases.items():
         candidate = copy.deepcopy(manifest); mutate(candidate)
@@ -329,13 +463,51 @@ def main() -> None:
         unknown_ruleset, frozen_sha="5" * 40, frozen_tree="6" * 40,
     )))
     visible_queue_actors = copy.deepcopy(visible_queue_manifest)
-    visible_queue_actors["controls"]["protection_snapshot"]["repository_rulesets"][0]["bypass_actors"] = [{
-        "actor_id": publication.PUBLISHER_APP_ID, "actor_type": "Integration", "bypass_mode": "always",
-    }]
+    visible_queue_actors["controls"]["protection_snapshot"]["repository_rulesets"][0]["bypass_actors"].append({
+        "actor_id": 999, "actor_type": "Integration", "bypass_mode": "always",
+    })
     visible_queue_actors["controls"]["protection_snapshot_sha256"] = digest(visible_queue_actors["controls"]["protection_snapshot"])
-    evidence.append(expect_failure("queue_only_visible_nonempty_bypass", lambda: publication.validate_manifest(
+    evidence.append(expect_failure("queue_extra_visible_bypass_actor", lambda: publication.validate_manifest(
         visible_queue_actors, frozen_sha="5" * 40, frozen_tree="6" * 40,
     )))
+    for name, field, value in (
+        ("old_status_gate_blocks_publication", "requires_status_checks", True),
+        ("pr_exception_absent", "bypass_pull_request_allowances", []),
+        ("push_restriction_absent", "restricts_pushes", False),
+        ("foreign_push_actor", "push_allowances", [publication.PUBLISHER_ACTOR, {"__typename": "User", "id": "foreign"}]),
+        ("missing_strictness_evidence", "requires_strict_status_checks", None),
+        ("signed_commit_gate_not_waived", "requires_commit_signatures", True),
+    ):
+        changed = protection_snapshot(); changed["branch_protection_rules"][0][field] = value
+        evidence.append(expect_failure(name, lambda snapshot=changed: publication.validate_protection_snapshot(snapshot)))
+    before = before_snapshot(visible=True)
+    before["branch_protection_rules"][0]["required_status_checks"][0]["app"]["databaseId"] = 999
+    evidence.append(expect_failure("wrong_check_source_not_inferred", lambda: publication.plan_maintenance(before, before)))
+    reader = before_snapshot(visible=False); reader["branch_protection_rules"][0]["requires_strict_status_checks"] = False
+    evidence.append(expect_failure("principal_semantic_disagreement", lambda: publication.plan_maintenance(before_snapshot(visible=True), reader)))
+    source = before_snapshot(visible=True)
+    before_bytes = publication.canonical_json(source)
+    publication.plan_maintenance(source, before_snapshot(visible=False))
+    if publication.canonical_json(source) != before_bytes:
+        raise SystemExit("maintenance planning modified the rollback preimage")
+    evidence.append("exact_rollback_preimage_preserved_without_mutation")
+    reader_api = MockApi({}, protection=before_snapshot(visible=False))
+    observed = publication.protection_snapshot_from_api(reader_api)
+    publication.validate_snapshot_shape(observed)
+    if observed != before_snapshot(visible=False) or reader_api.mutations:
+        raise SystemExit("read-only snapshot changed state or failed exact principal projection")
+    evidence.append("read_only_snapshot_current_blocked_state")
+    workflow = (Path(__file__).resolve().parents[3] / ".github/workflows/history-rewrite-candidate.yml").read_text()
+    for job_name in ("snapshot", "custody"):
+        block = workflow.split(f"\n  {job_name}:\n", 1)[1].split("\n  synthetic:\n", 1)[0]
+        if job_name == "snapshot":
+            block = block.split("\n  custody:\n", 1)[0]
+        if any(forbidden in block for forbidden in ("secrets.", "environment:", "contents: write", "actions: write", "create-github-app-token", " controls ", " publish ")):
+            raise SystemExit(f"{job_name} workflow acquired publication capability")
+        if f"if: inputs.mode == '{job_name}'" not in block:
+            raise SystemExit(f"{job_name} mode can enter through another dispatch")
+    evidence.append("snapshot_and_custody_job_capability_exclusions")
+    evidence.extend(custody_fixtures())
     queue_rule_type_drift = copy.deepcopy(manifest)
     queue_rule_type_drift["controls"]["protection_snapshot"]["repository_rulesets"][0]["rules"].append({
         "type": "non_fast_forward",
