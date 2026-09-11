@@ -628,7 +628,16 @@ just tui-native-computer-use-targeted
 just exec-native-computer-use-targeted
 just native-computer-use-tool-registry-targeted
 just native-computer-use-doctor-targeted
+just native-browser-evidence-targeted
 ```
+
+The hosted `codex.native-browser-evidence-targeted` lane installs the pinned
+Playwright package and Chromium into runner-temporary paths, runs every
+`codex-rs/browser-computer-use/src/*_test.mjs` file through Node's test runner,
+and validates the generic `use-native-browser` skill in an isolated PyYAML
+virtualenv. It is an evidence lane only: test results and any synthetic
+artifact manifest remain provider/test receipts;
+they do not replace native model-visible screenshots or claim a live provider.
 
 Do not use local Android builds, browser sessions, or app-specific validation
 as the default proof for Codex protocol/tool semantics. Use Android harness,

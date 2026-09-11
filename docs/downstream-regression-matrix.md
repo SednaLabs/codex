@@ -160,6 +160,10 @@ Focused lane used for protocol/event-history seams:
 - `codex.exec-native-computer-use-targeted`
 - `codex.native-computer-use-tool-registry-targeted`
 - `codex.native-computer-use-doctor-targeted`
+- `codex.native-browser-evidence-targeted`
+  - Hosted Node/Playwright runs the provider regression files and native-browser
+    skill validation. Keep this lane when upstream gains an equivalent provider/test
+    seam; drop it only after those checks move to the upstream lane.
 - `codex.app-server-thread-cwd-targeted`
 
 Upstream hook and approval behavior is not a downstream divergence, but it

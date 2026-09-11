@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use Native Browser"
+  short_description: "Review rendered browser UX with native visuals"
+  default_prompt: "Use $use-native-browser for a native-first visual browser review with bounded actions and explicit screenshot evidence."

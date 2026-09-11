@@ -71,6 +71,7 @@ on:
           - codex.exec-native-computer-use-targeted
           - codex.native-computer-use-tool-registry-targeted
           - codex.native-computer-use-doctor-targeted
+          - codex.native-browser-evidence-targeted
           - codex.app-server-collab-spawn-identity-targeted
           - codex.collab-spawn-identity-consumers-targeted
           - codex.app-server-thread-cwd-targeted

@@ -581,6 +581,10 @@ native-computer-use-tool-registry-targeted:
 native-computer-use-doctor-targeted:
     cargo test --locked -p codex-cli doctor::tests::native_computer_use_check_reports_android_browser_and_desktop_config_files -- --exact --test-threads=1
 
+# Hosted Playwright and skill-contract evidence for the native browser surface.
+native-browser-evidence-targeted:
+    .github/scripts/validation-lanes/native-browser-evidence.sh
+
 # Focused downstream agent-workflow helper sanity slice.
 [no-cd]
 agent-workflow-sanity:
