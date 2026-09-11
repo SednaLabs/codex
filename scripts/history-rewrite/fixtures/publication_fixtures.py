@@ -42,7 +42,23 @@ def protection_snapshot() -> dict:
         "schema": "history-rewrite-protection-snapshot-v1",
         "protected_refs": list(publication.PROTECTED_REFS),
         "branch_protection_rules": rules,
-        "repository_rulesets": [],
+        "repository_rulesets": [{
+            "id": publication.QUEUE_ONLY_RULESET_ID,
+            "name": publication.QUEUE_ONLY_RULESET_NAME,
+            "target": "branch",
+            "enforcement": "active",
+            "bypass_actors": [],
+            "conditions": {"ref_name": {"exclude": [], "include": ["refs/heads/main"]}},
+            "rules": [{"type": "merge_queue", "parameters": {
+                "merge_method": "SQUASH",
+                "max_entries_to_build": 4,
+                "min_entries_to_merge": 1,
+                "max_entries_to_merge": 1,
+                "min_entries_to_merge_wait_minutes": 0,
+                "grouping_strategy": "ALLGREEN",
+                "check_response_timeout_minutes": 180,
+            }}],
+        }],
     }
 
 
@@ -132,7 +148,10 @@ class MockApi:
         if path == "/apps/fixture-publisher":
             return {"id": publication.PUBLISHER_APP_ID, "node_id": publication.PUBLISHER_APP_NODE_ID}
         if path.startswith(f"/repos/{publication.REPOSITORY}/rulesets?"):
-            return []
+            return [{"id": item["id"]} for item in self.protection["repository_rulesets"]]
+        if path.startswith(f"/repos/{publication.REPOSITORY}/rulesets/"):
+            ruleset_id = int(path.rsplit("/", 1)[1])
+            return next(item for item in self.protection["repository_rulesets"] if item["id"] == ruleset_id)
         parts = path.split("?")[0].split("/")
         workflow_id = int(parts[6])
         if parts[-1] == "runs":
@@ -257,7 +276,7 @@ def main() -> None:
     manifest = base_manifest()
     evidence = []
     publication.validate_manifest(manifest, frozen_sha="5" * 40, frozen_tree="6" * 40)
-    evidence.append("manifest_complete")
+    evidence.extend(["manifest_complete", "queue_only_ruleset_preserved_without_bypass"])
     cases = {
         "missing_ref": lambda value: value["output_refs"].pop("refs/tags/v1"),
         "extra_ref": lambda value: value["output_refs"].update({"refs/heads/extra": "a" * 40}),
@@ -294,6 +313,14 @@ def main() -> None:
     bad_ruleset_bypass["controls"]["protection_snapshot_sha256"] = digest(bad_ruleset_bypass["controls"]["protection_snapshot"])
     evidence.append(expect_failure("publisher_app_ruleset_bypass", lambda: publication.validate_manifest(
         bad_ruleset_bypass, frozen_sha="5" * 40, frozen_tree="6" * 40,
+    )))
+    queue_rule_type_drift = copy.deepcopy(manifest)
+    queue_rule_type_drift["controls"]["protection_snapshot"]["repository_rulesets"][0]["rules"].append({
+        "type": "non_fast_forward",
+    })
+    queue_rule_type_drift["controls"]["protection_snapshot_sha256"] = digest(queue_rule_type_drift["controls"]["protection_snapshot"])
+    evidence.append(expect_failure("queue_only_ruleset_type_drift", lambda: publication.validate_manifest(
+        queue_rule_type_drift, frozen_sha="5" * 40, frozen_tree="6" * 40,
     )))
     plan = control_plan(manifest)
     api = MockApi({231747419: "active", 250252266: "disabled_manually", publication.MIRROR_WORKFLOW_ID: "disabled_manually"})

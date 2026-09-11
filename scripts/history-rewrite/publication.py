@@ -40,6 +40,8 @@ BRANCH_POLICY_ID = 59660428
 MIRROR_WORKFLOW_ID = 250252269
 PUBLISHER_APP_ID = 3520391
 PUBLISHER_APP_NODE_ID = "A_kwHODOdWjM4ANbeH"
+QUEUE_ONLY_RULESET_ID = 20008703
+QUEUE_ONLY_RULESET_NAME = "Serialized merge queue for main"
 WRITER_WORKFLOWS = {
     ".github/workflows/rust-release.yml": 231747419,
     ".github/workflows/sedna-release.yml": 250252266,
@@ -362,6 +364,17 @@ def validate_protection_snapshot(snapshot: object) -> None:
         if not applicable:
             continue
         bypass = ruleset.get("bypass_actors")
+        rules = ruleset.get("rules")
+        if (
+            ruleset.get("id") == QUEUE_ONLY_RULESET_ID
+            and ruleset.get("name") == QUEUE_ONLY_RULESET_NAME
+            and bypass == []
+            and isinstance(rules, list)
+            and len(rules) == 1
+            and isinstance(rules[0], dict)
+            and rules[0].get("type") == "merge_queue"
+        ):
+            continue
         if not isinstance(bypass, list) or not any(
             isinstance(item, dict)
             and item.get("actor_type") == "Integration"

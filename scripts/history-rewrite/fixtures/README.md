@@ -82,9 +82,12 @@ recovery path; the workflow's ordinary `always()` step is not claimed to
 survive runner termination.
 
 Immediately before the atomic ref update, the publisher performs one fresh,
-finite state snapshot of both mandatory writer workflows, their active runs, the continuing
-mirror pause, all three protected branch rules, force-push App allowances, and
-all applicable repository rulesets. An active writer fails the attempt and
+finite state snapshot of both mandatory writer workflows, their active runs,
+the continuing mirror pause, all three protected branch rules, force-push App
+allowances, and all applicable repository rulesets. The exact snapshot-pinned
+queue-only ruleset `20008703` remains unchanged without a bypass; every other
+applicable active rule type requires the publisher App `always` bypass. An
+active writer fails the attempt and
 must be drained externally with the approved blocking watcher before a wholly
 fresh dispatch. Per-ref atomic leases protect the approved old ref map, but do
 not prevent an external administrator from changing controls after that final
