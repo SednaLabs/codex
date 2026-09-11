@@ -122,6 +122,8 @@ fn create_browser_observe_tool(defer_loading: bool) -> ResponsesApiTool {
                 Some("Allowed hosts for service-account or per-call headers.".to_string()),
             ),
         ),
+        ("inspection".to_string(), inspection_schema()),
+        ("interaction_map".to_string(), interaction_map_schema()),
     ]);
 
     ResponsesApiTool {
@@ -217,6 +219,8 @@ fn create_browser_step_tool(defer_loading: bool) -> ResponsesApiTool {
                 .to_string(),
         )),
     );
+    properties.insert("inspection".to_string(), inspection_schema());
+    properties.insert("interaction_map".to_string(), interaction_map_schema());
 
     ResponsesApiTool {
         name: BROWSER_STEP_TOOL_NAME.to_string(),
@@ -460,6 +464,45 @@ fn backend_schema() -> JsonSchema {
             BACKEND_IAB,
         ],
         "Preferred browser provider backend. Use auto unless the task requires a specific browser route such as Chrome, Chromium, or the in-app browser.",
+    )
+}
+
+fn inspection_schema() -> JsonSchema {
+    JsonSchema::object(
+        BTreeMap::from([(
+            "sections".to_string(),
+            JsonSchema::array(
+                string_enum(
+                    &["runtime", "frames", "console", "network"],
+                    "Bounded read-only diagnostic sections to include.",
+                ),
+                Some("Optional fixed diagnostic sections; omitted means all sections.".to_string()),
+            ),
+        ]),
+        /*required*/ None,
+        Some(false.into()),
+    )
+}
+
+fn interaction_map_schema() -> JsonSchema {
+    JsonSchema::object(
+        BTreeMap::from([
+            (
+                "scope".to_string(),
+                string_enum(
+                    &["viewport", "page"],
+                    "Interaction-map scope; viewport is the default.",
+                ),
+            ),
+            (
+                "offset".to_string(),
+                JsonSchema::integer(Some(
+                    "Optional nonnegative page-result offset, bounded by the provider.".to_string(),
+                )),
+            ),
+        ]),
+        /*required*/ None,
+        Some(false.into()),
     )
 }
 
