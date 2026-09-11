@@ -478,7 +478,7 @@ fn inspection_schema() -> JsonSchema {
                 ),
                 Some("Optional fixed diagnostic sections; omitted means all sections.".to_string()),
             ),
-        ]),
+        )]),
         /*required*/ None,
         Some(false.into()),
     )
