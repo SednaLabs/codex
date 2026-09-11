@@ -406,11 +406,19 @@ def validate_snapshot_shape(snapshot: object) -> None:
                 raise PublicationError(f"missing protection list: {name}")
         if rule.get("required_approving_review_count") is not None and type(rule["required_approving_review_count"]) is not int:
             raise PublicationError("review count is malformed")
+        contexts = rule["required_status_check_contexts"]
+        if any(not isinstance(context, str) or not context for context in contexts) or len(contexts) != len(set(contexts)):
+            raise PublicationError("required check contexts are malformed or duplicated")
+        check_contexts = []
         for check in rule["required_status_checks"]:
-            if not isinstance(check, dict) or not isinstance(check.get("context"), str) or (
-                check.get("app") is not None and (not isinstance(check["app"], dict) or type(check["app"].get("databaseId")) is not int)
-            ):
+            if not isinstance(check, dict) or set(check) != {"context", "app"} or not isinstance(check["context"], str) or not check["context"]:
                 raise PublicationError("required check source identity is malformed")
+            app = check["app"]
+            if not isinstance(app, dict) or set(app) != {"databaseId", "slug"} or type(app["databaseId"]) is not int or app["databaseId"] <= 0 or not isinstance(app["slug"], str) or not app["slug"]:
+                raise PublicationError("required check App identity is missing or malformed")
+            check_contexts.append(check["context"])
+        if len(check_contexts) != len(set(check_contexts)) or set(check_contexts) != set(contexts):
+            raise PublicationError("required checks and contexts must have the same complete, unique domain")
     ids = [item.get("id") for item in rulesets if isinstance(item, dict)]
     if len(ids) != len(rulesets) or len(set(ids)) != len(ids) or any(type(value) is not int for value in ids):
         raise PublicationError("ruleset identity domain is malformed")
@@ -516,8 +524,12 @@ def plan_maintenance(administrator_before: object, read_token_before: object) ->
         rule.update(allows_force_pushes=True, restricts_pushes=True,
                     bypass_force_push_allowances=[copy.deepcopy(PUBLISHER_ACTOR)], push_allowances=[copy.deepcopy(PUBLISHER_ACTOR)])
         if rule["pattern"] != "upstream-main":
-            checks = {item["context"]: item.get("app", {}).get("databaseId") for item in rule["required_status_checks"] if isinstance(item.get("app"), dict)}
-            if rule["requires_status_checks"] is not True or checks != {"CI required": 15368, "CodeQL required gate": 15368}:
+            # Shape validation has already proved a one-to-one correspondence;
+            # never filter or collapse entries before admitting their removal.
+            if (rule["requires_status_checks"] is not True
+                    or set(rule["required_status_check_contexts"]) != {"CI required", "CodeQL required gate"}
+                    or any(check["app"] != {"databaseId": 15368, "slug": "github-actions"}
+                           for check in rule["required_status_checks"])):
                 raise PublicationError("normal status gate/source differs from the admitted maintenance baseline")
             rule.update(requires_status_checks=False, required_status_checks=[], required_status_check_contexts=[],
                         bypass_pull_request_allowances=[copy.deepcopy(PUBLISHER_ACTOR)])

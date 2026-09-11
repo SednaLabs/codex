@@ -483,6 +483,47 @@ def main() -> None:
     before = before_snapshot(visible=True)
     before["branch_protection_rules"][0]["required_status_checks"][0]["app"]["databaseId"] = 999
     evidence.append(expect_failure("wrong_check_source_not_inferred", lambda: publication.plan_maintenance(before, before)))
+
+    def extra_gate(rule, entry):
+        rule["required_status_checks"].append(entry)
+        rule["required_status_check_contexts"].append(entry["context"])
+
+    check_domain_cases = {
+        "extra_null_source_gate": lambda rule: extra_gate(rule, {"context": "extra gate", "app": None}),
+        "extra_missing_source_gate": lambda rule: extra_gate(rule, {"context": "extra gate"}),
+        "extra_valid_source_gate": lambda rule: extra_gate(rule, {"context": "extra gate", "app": {"databaseId": 15368, "slug": "github-actions"}}),
+        "required_source_null": lambda rule: rule["required_status_checks"][0].update(app=None),
+        "required_source_missing": lambda rule: rule["required_status_checks"][0].pop("app"),
+        "source_database_id_missing": lambda rule: rule["required_status_checks"][0]["app"].pop("databaseId"),
+        "source_database_id_wrong_type": lambda rule: rule["required_status_checks"][0]["app"].update(databaseId="15368"),
+        "source_slug_missing": lambda rule: rule["required_status_checks"][0]["app"].pop("slug"),
+        "source_slug_null": lambda rule: rule["required_status_checks"][0]["app"].update(slug=None),
+        "source_slug_contradiction": lambda rule: rule["required_status_checks"][0]["app"].update(slug="unknown-app"),
+        "source_unknown_field": lambda rule: rule["required_status_checks"][0]["app"].update(unreviewed=True),
+        "check_unknown_field": lambda rule: rule["required_status_checks"][0].update(unreviewed=True),
+        "check_context_missing": lambda rule: rule["required_status_checks"][0].pop("context"),
+        "check_entry_missing": lambda rule: rule["required_status_checks"].pop(),
+        "check_entry_null": lambda rule: rule["required_status_checks"].append(None),
+        "duplicate_identical_check": lambda rule: rule["required_status_checks"].append(copy.deepcopy(rule["required_status_checks"][0])),
+        "duplicate_contradictory_check_source": lambda rule: rule["required_status_checks"].insert(0, {"context": "CI required", "app": {"databaseId": 999, "slug": "unknown-app"}}),
+        "duplicate_context": lambda rule: rule["required_status_check_contexts"].append("CI required"),
+        "context_missing": lambda rule: rule["required_status_check_contexts"].pop(),
+        "context_extra": lambda rule: rule["required_status_check_contexts"].append("extra gate"),
+        "context_null": lambda rule: rule["required_status_check_contexts"].append(None),
+        "context_domain_contradiction": lambda rule: rule.update(required_status_check_contexts=["CI required", "different gate"]),
+        "both_required_domains_empty": lambda rule: rule.update(required_status_checks=[], required_status_check_contexts=[]),
+    }
+    for name, change in check_domain_cases.items():
+        for pattern in ("main", "integration/app-server-delivery-train-20260824"):
+            changed = before_snapshot(visible=True)
+            change(next(rule for rule in changed["branch_protection_rules"] if rule["pattern"] == pattern))
+            evidence.append(expect_failure(f"maintenance_{name}_{pattern.split('/')[0]}",
+                                           lambda value=changed: publication.plan_maintenance(value, value)))
+    reordered = before_snapshot(visible=True)
+    for rule in reordered["branch_protection_rules"]:
+        rule["required_status_check_contexts"].reverse()
+    publication.plan_maintenance(reordered, copy.deepcopy(reordered))
+    evidence.append("maintenance_exact_check_domain_order_independent")
     reader = before_snapshot(visible=False); reader["branch_protection_rules"][0]["requires_strict_status_checks"] = False
     evidence.append(expect_failure("principal_semantic_disagreement", lambda: publication.plan_maintenance(before_snapshot(visible=True), reader)))
     source = before_snapshot(visible=True)
