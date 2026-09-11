@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "synthetic, snapshot, custody, inventory, rewrite, publication, or supplemental"
+        description: "Candidate, proof, manifest transport, or publication phase"
         required: true
         default: synthetic
         type: choice
-        options: [synthetic, snapshot, custody, inventory, rewrite, publication, supplemental]
+        options: [synthetic, snapshot, custody, inventory, rewrite, manifest, transport, publication, supplemental]
       source_sha:
         description: "Exact source main commit from the frozen selected-ref map"
         required: false
@@ -60,6 +60,18 @@ on:
         description: "Operator-approved SHA-256 of canonical publication manifest JSON"
         required: false
         type: string
+      publication_manifest_artifact:
+        description: "Exact producer run/head/artifact/size/API-digest JSON; mutually exclusive with inline manifest"
+        required: false
+        type: string
+      manifest_recipe_gzip_b64:
+        description: "Manifest producer only: canonical manifest with selected_refs and output_refs omitted"
+        required: false
+        type: string
+      manifest_recipe_sha256:
+        description: "SHA-256 of canonical manifest recipe; full manifest SHA remains independently required"
+        required: false
+        type: string
       custody_manifest_gzip_b64:
         description: "gzip+base64 canonical exact encrypted artifact custody manifest"
         required: false
@@ -78,6 +90,65 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  manifest:
+    if: inputs.mode == 'manifest' || inputs.mode == 'transport'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Produce or verify an immutable manifest without publication authority
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HARNESS_SHA: ${{ inputs.workflow_harness_sha }}
+          HARNESS_TREE: ${{ inputs.workflow_harness_tree }}
+          MODE: ${{ inputs.mode }}
+          RECIPE_GZIP_B64: ${{ inputs.manifest_recipe_gzip_b64 }}
+          RECIPE_SHA256: ${{ inputs.manifest_recipe_sha256 }}
+          PUBLICATION_MANIFEST_ARTIFACT: ${{ inputs.publication_manifest_artifact }}
+          PUBLICATION_MANIFEST_GZIP_B64: ${{ inputs.publication_manifest_gzip_b64 }}
+          MANIFEST_SHA256: ${{ inputs.publication_manifest_sha256 }}
+        run: |
+          set -euo pipefail; umask 077
+          test "$GITHUB_REPOSITORY" = "sednalabs/codex"
+          test "$GITHUB_REF_NAME" = "repair/history-rewrite-publication-w13828"
+          test "$GITHUB_SHA" = "$HARNESS_SHA"
+          test "$(git rev-parse "$GITHUB_SHA^{tree}")" = "$HARNESS_TREE"
+          root="$RUNNER_TEMP/history-rewrite-manifest"
+          mkdir -m 700 "$root"
+          if [ "$MODE" = manifest ]; then
+            test -z "$PUBLICATION_MANIFEST_ARTIFACT"
+            test -z "$PUBLICATION_MANIFEST_GZIP_B64"
+            PUBLICATION_MANIFEST_GZIP_B64="$RECIPE_GZIP_B64" \
+              python3 scripts/history-rewrite/publication.py decode \
+                --output "$root/recipe.json" --manifest-sha256 "$RECIPE_SHA256"
+            python3 scripts/history-rewrite/manifest_transport.py assemble \
+              --recipe "$root/recipe.json" --output "$root/publication-manifest.json" \
+              --manifest-sha256 "$MANIFEST_SHA256" --receipt "$root/receipt.json"
+          else
+            test -n "$PUBLICATION_MANIFEST_ARTIFACT"
+            python3 scripts/history-rewrite/manifest_transport.py read \
+              --output "$root/publication-manifest.json" --manifest-sha256 "$MANIFEST_SHA256" \
+              --receipt "$root/receipt.json"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        if: inputs.mode == 'manifest'
+        with:
+          name: history-rewrite-publication-manifest-${{ github.run_id }}
+          path: ${{ runner.temp }}/history-rewrite-manifest/publication-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: history-rewrite-manifest-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/history-rewrite-manifest/receipt.json
+          if-no-files-found: error
+          retention-days: 90
+
   snapshot:
     if: inputs.mode == 'snapshot'
     runs-on: ubuntu-24.04
@@ -562,7 +633,9 @@ jobs:
           persist-credentials: false
       - name: Materialize exact operator-approved manifest
         env:
+          GH_TOKEN: ${{ github.token }}
           PUBLICATION_MANIFEST_GZIP_B64: ${{ inputs.publication_manifest_gzip_b64 }}
+          PUBLICATION_MANIFEST_ARTIFACT: ${{ inputs.publication_manifest_artifact }}
         run: |
           set -euo pipefail; umask 077
           [[ "$MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -571,9 +644,10 @@ jobs:
           test "$GITHUB_SHA" = "$HARNESS_SHA"
           test "$(git rev-parse "$GITHUB_SHA^{tree}")" = "$HARNESS_TREE"
           mkdir -m 700 "$RUNNER_TEMP/history-rewrite-publication"
-          python3 scripts/history-rewrite/publication.py decode \
+          python3 scripts/history-rewrite/manifest_transport.py read \
             --output "$RUNNER_TEMP/history-rewrite-publication/manifest.json" \
-            --manifest-sha256 "$MANIFEST_SHA256"
+            --manifest-sha256 "$MANIFEST_SHA256" \
+            --receipt "$RUNNER_TEMP/history-rewrite-publication/manifest-transport.json"
       - name: Read workflow controls, approval, backup, and proof before publisher credentials
         env:
           GH_TOKEN: ${{ github.token }}

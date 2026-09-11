@@ -733,6 +733,9 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
 
 def main() -> None:
     evidence: list[tuple[str, str]] = []
+    transport = subprocess.run(["python3", str(Path(__file__).with_name("manifest_transport_fixtures.py"))], text=True, capture_output=True)
+    require_driver_success("manifest_transport_contract", transport)
+    evidence.append(("manifest_transport_contract", hashlib.sha256(transport.stdout.encode()).hexdigest()))
     publication = subprocess.run(["python3", str(Path(__file__).with_name("publication_fixtures.py"))], text=True, capture_output=True)
     require_driver_success("publication_contract", publication)
     evidence.append(("publication_contract", hashlib.sha256(publication.stdout.encode()).hexdigest()))

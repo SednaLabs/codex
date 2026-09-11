@@ -95,6 +95,42 @@ identity source. The receipt records the App's observed global grants
 separately from the action's exact requested token permissions. It does not
 pretend that App metadata directly introspects an issued token's permissions.
 
+## Manifest transport capacity
+
+A publication manifest can exceed GitHub's 65,535-character total dispatch
+input limit even after gzip/base64 compression. The `manifest` mode on the
+existing candidate branch accepts a small, separately hashed recipe: the exact
+canonical manifest with only `selected_refs` and `output_refs` omitted. It
+reconstructs those maps from the exact successful proof run's hash-bound ref
+metadata, validates the complete result against the external approved manifest
+SHA-256, and uploads only `publication-manifest.json` in an immutable artifact.
+It has read-only repository permissions and does not mint an App credential.
+
+Bind `publication_manifest_artifact` to a JSON object with exactly `schema`
+(`history-rewrite-manifest-artifact-v1`), `repository`, `run_id`, `head_sha`,
+`artifact_id`, `artifact_api_digest` (without its `sha256:` prefix), and
+`artifact_size`. The separately supplied `publication_manifest_sha256` remains
+the approval anchor, not a hash trusted from the downloaded artifact. Consumer
+checks bind the exact successful producer run, workflow, repository, head,
+artifact identity, size, API digest, expiry and singleton ZIP member before any
+publication/control effects. Downloads are byte-bounded and have a 120-second
+deadline. Inline input remains supported; selecting both transports is rejected.
+
+The read-only `transport` mode exercises the same consumer before publication.
+First qualify producer upload and consumer read at the actual portfolio size;
+only then repeat expensive fresh backup/rewrite work if the harness changed.
+An older approved packet may be used for this transport-only qualification:
+its proof remains bound to its original harness, and the producer is separately
+bound to its exact new head. This does not relax publication's same-harness
+backup/proof checks. No new staging branch, mutable download URL, control
+exception, or extra write credential is needed.
+
+Hosted fixtures reconstruct and receive a 1,088-ref manifest whose inline
+encoding exceeds dispatch capacity. They exercise identity, external digest,
+expiry, size, byte mismatch, duplicate/missing/extra ZIP member and ambiguous
+transport failures without creating an accepted manifest. These tests do not
+claim that protection changes or a real history publication occurred.
+
 Production-shaped fixtures execute the identity CLI through its actual HTTP
 request and JSON handling. Wrong principals, App identity/grants, repository
 domains, issuer outputs, and denied or expired responses cannot produce a
