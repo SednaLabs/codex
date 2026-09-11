@@ -444,7 +444,7 @@ jobs:
           key: sedna-release-cargo-home-linux-rust-${{ matrix.target }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
 
       - name: Install sccache
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2
+        uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2
         with:
           tool: sccache
 
@@ -838,7 +838,7 @@ jobs:
             sedna-release-cargo-home-macos-15-intel-x86_64-apple-darwin-
 
       - name: Install sccache
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
         with:
           tool: sccache
 
