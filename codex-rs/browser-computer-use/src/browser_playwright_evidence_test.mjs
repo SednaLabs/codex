@@ -80,7 +80,7 @@ test("capture bundle records requested and effective responsive viewport evidenc
   }
 });
 
-test("artifact manifest agrees with native capture metadata", async () => {
+test("artifact manifest agrees with native capture metadata", async (t) => {
   const { chromium } = createRequire(import.meta.url)("playwright");
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-browser-evidence-"));
   const browser = await chromium.launch({ headless: true });
@@ -104,7 +104,27 @@ test("artifact manifest agrees with native capture metadata", async () => {
     assert.equal(manifest.restoredState.scroll.y, screenshots.restoredState.scroll.y);
     assert.equal(manifest.screenshots.length, 2);
     assert.equal(response.contentItems.filter(({ type }) => type === "inputImage").length, 2);
+
+    t.mock.timers.enable({ apis: ["Date"], now: 0 });
+    const concurrent = await Promise.all(Array.from({ length: 2 }, () => responseForPage(
+      page,
+      screenshots,
+      [],
+      { label: "test", stateDir },
+      { request: { tool: "browser_observe", arguments: { save_artifact: true, artifact_label: "same-label" } } },
+    )));
+    const concurrentPaths = concurrent.map(({ contentItems }) => contentItems[0].text.match(/^artifacts: (.+)$/m)?.[1]);
+    assert.notEqual(concurrentPaths[0], concurrentPaths[1]);
+    if (process.platform !== "win32") {
+      for (const filePath of concurrentPaths) {
+        const manifest = JSON.parse(await fs.readFile(filePath, "utf8"));
+        assert.equal((await fs.stat(filePath)).mode & 0o777, 0o600);
+        assert.equal((await fs.stat(manifest.screenshots[0].path)).mode & 0o777, 0o600);
+        assert.equal((await fs.stat(path.dirname(filePath))).mode & 0o777, 0o700);
+      }
+    }
   } finally {
+    t.mock.timers.reset();
     await browser.close();
     await fs.rm(stateDir, { recursive: true, force: true });
   }

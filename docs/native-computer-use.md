@@ -653,6 +653,8 @@ and validates the generic `use-native-browser` skill in an isolated PyYAML
 virtualenv. It is an evidence lane only: test results and any synthetic
 artifact manifest remain provider/test receipts;
 they do not replace native model-visible screenshots or claim a live provider.
+Saved artifact runs use private unique directories and exclusive file creation
+so concurrent captures with the same label cannot overwrite one another.
 
 Do not use local Android builds, browser sessions, or app-specific validation
 as the default proof for Codex protocol/tool semantics. Use Android harness,

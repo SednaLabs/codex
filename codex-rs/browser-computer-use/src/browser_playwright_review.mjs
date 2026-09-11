@@ -856,15 +856,15 @@ async function maybeSaveArtifacts({
   const baseDir =
     trimmedEnv("CODEX_BROWSER_PLAYWRIGHT_ARTIFACT_DIR") ||
     path.join(profile.stateDir, "artifacts");
-  const runDir = path.join(baseDir, artifactRunName(request, success));
-  await fs.mkdir(runDir, { recursive: true });
+  await fs.mkdir(baseDir, { recursive: true, mode: 0o700 });
+  const runDir = await fs.mkdtemp(path.join(baseDir, `${artifactRunName(request, success)}-`));
   const screenshotFiles = [];
   for (let index = 0; index < screenshots.length; index += 1) {
     const capture = screenshots[index];
     const label = safePathComponent(capture.label || `capture-${index + 1}`);
     const fileName = `${String(index + 1).padStart(2, "0")}-${label}.png`;
     const filePath = path.join(runDir, fileName);
-    await fs.writeFile(filePath, capture.screenshot.buffer);
+    await fs.writeFile(filePath, capture.screenshot.buffer, { flag: "wx", mode: 0o600 });
     screenshotFiles.push({ label: capture.label || null, path: filePath, method: capture.screenshot.method });
   }
   const manifest = {
@@ -895,7 +895,7 @@ async function maybeSaveArtifacts({
     inspection: inspection || null,
   };
   const manifestPath = path.join(runDir, "manifest.json");
-  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), { flag: "wx", mode: 0o600 });
   return { manifestPath, screenshotFiles };
 }
 
