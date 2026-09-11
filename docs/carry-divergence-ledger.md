@@ -2502,6 +2502,12 @@ bundles during upstream sync merely because they once shared this carry entry.
   equivalent bare-tool schema, provider discovery and advertisement, native
   image/transcript semantics, and start/resume/fork propagation. Port these
   guarantees over upstream dynamic-tool representation changes during sync.
+- Hosted `codex.native-browser-evidence-targeted` preserves the browser carry's
+  focused Node/Playwright evidence boundary and validates the generic
+  `use-native-browser` skill. It runs the provider's Node tests in hosted
+  Chromium without treating provider artifacts or text summaries as native
+  screenshots. Drop this lane only when an upstream-equivalent hosted seam
+  proves the same checks.
 - Namespaced Android-like, browser-like, or desktop-like tools remain ordinary dynamic tools
   so app-specific providers can keep their own tool surfaces without taking
   over the native Codex contract.

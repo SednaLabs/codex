@@ -1411,6 +1411,31 @@
       "needs_sccache": true
     },
     {
+      "lane_id": "codex.native-browser-evidence-targeted",
+      "groups": [
+        "ui_protocol"
+      ],
+      "lane_sets": [
+        "all",
+        "ui-protocol"
+      ],
+      "frontier_default": true,
+      "frontier_lane_sets": [
+        "ui-protocol"
+      ],
+      "setup_class": "node",
+      "batch_weight_seconds": 300,
+      "working_directory": ".",
+      "script_path": ".github/scripts/validation-lanes/native-browser-evidence.sh",
+      "script_args": [],
+      "needs_just": false,
+      "needs_node": true,
+      "needs_nextest": false,
+      "needs_linux_build_deps": false,
+      "needs_dotslash": false,
+      "needs_sccache": false
+    },
+    {
       "lane_id": "codex.app-server-collab-spawn-identity-targeted",
       "groups": [
         "ui_protocol"
@@ -2568,6 +2593,7 @@
         "codex.tui-native-computer-use-targeted",
         "codex.exec-native-computer-use-targeted",
         "codex.native-computer-use-tool-registry-targeted",
+        "codex.native-browser-evidence-targeted",
         "codex.code-mode-declaration-targeted",
         "codex.native-computer-use-doctor-targeted"
       ],
@@ -2603,6 +2629,7 @@
         "codex-rs/browser-computer-use/**",
         "codex-rs/browser-computer-use/BUILD.bazel",
         "codex-rs/browser-computer-use/Cargo.toml",
+        ".github/scripts/validation-lanes/native-browser-evidence.sh",
         "codex-rs/exec/Cargo.toml",
         "codex-rs/exec/src/lib.rs",
         "codex-rs/exec/src/lib_tests.rs",
