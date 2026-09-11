@@ -31,13 +31,9 @@ fn canonical_browser_dynamic_tool_preserves_supported_browser_tool_names() {
     assert!(observe_properties.contains_key("prompt"));
     assert!(observe_properties.contains_key("inspection"));
     assert!(observe_properties.contains_key("interaction_map"));
-    let inspection = observe_properties
-        .get("inspection")
-        .expect("inspection schema");
+    let inspection = observe_properties.get("inspection").expect("inspection schema");
     let inspection_properties = inspection.properties.as_ref().expect("inspection object");
-    let sections = inspection_properties
-        .get("sections")
-        .expect("sections schema");
+    let sections = inspection_properties.get("sections").expect("sections schema");
     assert_eq!(
         sections
             .items
