@@ -2503,6 +2503,9 @@ bundles during upstream sync merely because they once shared this carry entry.
   image/transcript semantics, and start/resume/fork propagation. Port these
   guarantees over upstream dynamic-tool representation changes during sync.
 - Hosted `codex.native-browser-evidence-targeted` preserves the browser carry's
+  viewport-ranked maps, per-image geometry receipts, optional bounded
+  inspection metadata, and scroll trail agreement through real Chromium tests.
+  It also preserves the
   focused Node/Playwright evidence boundary and validates the generic
   `use-native-browser` skill. It runs the provider's Node tests in hosted
   Chromium without treating provider artifacts or text summaries as native

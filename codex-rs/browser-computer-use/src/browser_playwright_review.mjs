@@ -23,36 +23,66 @@ export async function captureBundle(page, request) {
     ? request.arguments.captures.slice(0, CAPTURE_BUNDLE_LIMIT)
     : [];
   if (captures.length === 0) {
-    return [{ label: null, screenshot: await captureScreenshot(page) }];
+    const requestedViewport = page.viewportSize?.() || null;
+    return [
+      {
+        label: null,
+        requestedViewport,
+        screenshot: await captureScreenshot(page),
+        metadata: await captureViewportMetadata(page, requestedViewport),
+      },
+    ];
   }
 
-  const original = await page.evaluate(() => ({
-    width: window.innerWidth,
-    height: window.innerHeight,
-    scrollX: window.scrollX,
-    scrollY: window.scrollY,
-  }));
+  const originalRequestedViewport = page.viewportSize?.() || null;
+  const original = await captureViewportMetadata(page, originalRequestedViewport);
   const results = [];
   try {
     for (const capture of captures) {
-      const viewport = page.viewportSize();
-      const width = numberOrDefault(capture.viewportWidth, viewport?.width || original.width);
-      const height = numberOrDefault(capture.viewportHeight, viewport?.height || original.height);
+      const viewport = page.viewportSize?.();
+      const width = numberOrDefault(capture.viewportWidth, viewport?.width || original.effectiveViewport.width);
+      const height = numberOrDefault(capture.viewportHeight, viewport?.height || original.effectiveViewport.height);
       await page.setViewportSize({ width, height });
       await applyCaptureScroll(page, capture);
       await page.waitForTimeout(nonNegativeIntegerOrUndefined(capture.settle_ms) || 150);
+      const metadata = await captureViewportMetadata(page, { width, height });
       results.push({
         label: capture.label || capture.scroll || `capture-${results.length + 1}`,
         screenshot: await captureScreenshot(page),
+        requestedViewport: { width, height },
+        metadata,
       });
     }
   } finally {
-    await page.setViewportSize({ width: original.width, height: original.height }).catch(() => {});
-    await page
-      .evaluate((state) => window.scrollTo(state.scrollX, state.scrollY), original)
-      .catch(() => {});
+    await page.setViewportSize(originalRequestedViewport).catch(async () => {
+      if (originalRequestedViewport === null) {
+        await page
+          .setViewportSize({
+            width: original.effectiveViewport.width,
+            height: original.effectiveViewport.height,
+          })
+          .catch(() => {});
+      }
+    });
+    await page.evaluate((state) => window.scrollTo(state.scroll.x, state.scroll.y), original).catch(() => {});
   }
+  results.restoredState = await captureViewportMetadata(page, originalRequestedViewport).catch(() => null);
   return results;
+}
+
+async function captureViewportMetadata(page, requestedViewport) {
+  const metadata = await page.evaluate(() => ({
+    effectiveViewport: { width: window.innerWidth, height: window.innerHeight },
+    clientViewport: { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight },
+    document: {
+      width: document.documentElement.scrollWidth,
+      height: document.documentElement.scrollHeight,
+    },
+    scroll: { x: window.scrollX, y: window.scrollY },
+    devicePixelRatio: window.devicePixelRatio,
+    visualViewportScale: window.visualViewport?.scale ?? null,
+  }));
+  return { requestedViewport, ...metadata };
 }
 
 export async function captureScreenshot(page) {
@@ -117,9 +147,18 @@ export async function pageResponseAfterFailure(
   error,
   actionTrail,
   serviceHeaders,
+  inspection = null,
 ) {
   try {
-    const screenshots = [{ label: "failure", screenshot: await captureScreenshot(page) }];
+    const requestedViewport = page.viewportSize?.() || null;
+    const screenshots = [
+      {
+        label: "failure",
+        screenshot: await captureScreenshot(page),
+        requestedViewport,
+        metadata: await captureViewportMetadata(page, requestedViewport),
+      },
+    ];
     return await responseForPage(page, screenshots, summaries, profile, {
       request,
       actionTrail,
@@ -127,6 +166,7 @@ export async function pageResponseAfterFailure(
       success: false,
       error: errorMessage(error),
       failedAction,
+      inspection,
     });
   } catch (captureError) {
     const snapshot = await safePageSnapshot(page).catch(() => null);
@@ -151,8 +191,9 @@ export async function responseForPage(page, screenshots, summaries, profile, opt
     success = true,
     error = null,
     failedAction = null,
+    inspection = null,
   } = options;
-  const snapshot = await safePageSnapshot(page);
+  const snapshot = await pageSnapshot(page, interactionMapOptions(request));
   const lines = [success ? "Browser observation" : "Browser action failed", `url: ${pageUrl(page)}`];
   if (profile?.label) {
     lines.push(`profile: ${profile.label}`);
@@ -190,9 +231,16 @@ export async function responseForPage(page, screenshots, summaries, profile, opt
   for (const capture of screenshots) {
     const label = capture.label ? ` ${capture.label}` : "";
     lines.push(`capture${label}: ${capture.screenshot.method}`);
+    appendCaptureMetadata(lines, capture);
     if (capture.screenshot.warning) {
       lines.push(`capture_fallback${label}: ${capture.screenshot.warning}`);
     }
+  }
+  if (screenshots.restoredState) {
+    lines.push(`capture_restored: ${formatViewportMetadata(screenshots.restoredState)}`);
+  }
+  if (inspection) {
+    lines.push(`inspection: ${JSON.stringify(inspection)}`);
   }
 
   const artifact = await maybeSaveArtifacts({
@@ -207,6 +255,7 @@ export async function responseForPage(page, screenshots, summaries, profile, opt
     success,
     error,
     failedAction,
+    inspection,
   }).catch((artifactError) => ({ error: errorMessage(artifactError) }));
   if (artifact?.manifestPath) {
     lines.push(`artifacts: ${artifact.manifestPath}`);
@@ -230,6 +279,23 @@ export async function responseForPage(page, screenshots, summaries, profile, opt
   };
 }
 
+function appendCaptureMetadata(lines, capture) {
+  if (!capture.metadata) return;
+  lines.push(`capture_metadata${capture.label ? ` ${capture.label}` : ""}: ${formatViewportMetadata(capture.metadata)}`);
+}
+
+function formatViewportMetadata(metadata) {
+  return JSON.stringify({
+    requestedViewport: metadata.requestedViewport || null,
+    effectiveViewport: metadata.effectiveViewport || null,
+    clientViewport: metadata.clientViewport || null,
+    document: metadata.document || null,
+    scroll: metadata.scroll || null,
+    devicePixelRatio: metadata.devicePixelRatio ?? null,
+    visualViewportScale: metadata.visualViewportScale ?? null,
+  });
+}
+
 export async function pageState(page) {
   return {
     url: pageUrl(page),
@@ -241,7 +307,9 @@ export async function pageState(page) {
 }
 
 export const __test = {
+  pageSnapshot,
   summarizeControlsForTest,
+  captureViewportMetadata,
 };
 
 export async function settleAfterActions(page, request) {
@@ -249,6 +317,22 @@ export async function settleAfterActions(page, request) {
   if (delay !== undefined) {
     await page.waitForTimeout(delay);
   }
+}
+
+export async function settleAfterAction(page, action, request = { arguments: {} }) {
+  if (!["scroll", "mouse_wheel"].includes(action.type || action.action)) {
+    return;
+  }
+  const timeout = nonNegativeIntegerOrUndefined(request.arguments?.settle_ms) ?? 100;
+  await Promise.race([
+    page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(resolve));
+        }),
+    ),
+    page.waitForTimeout(Math.min(timeout, 250)),
+  ]);
 }
 
 export function actionSummary(action) {
@@ -287,7 +371,7 @@ async function applyCaptureScroll(page, capture) {
 
 async function safePageSnapshot(page) {
   try {
-    return await pageSnapshot(page);
+    return await pageSnapshot(page, interactionMapOptions(null));
   } catch (error) {
     return {
       title: await pageTitle(page),
@@ -296,6 +380,8 @@ async function safePageSnapshot(page) {
       scroll: { x: 0, y: 0 },
       focused: null,
       controls: [],
+      interactionTotal: 0,
+      interactionOmitted: 0,
       attention: [
         {
           role: "status",
@@ -309,14 +395,24 @@ async function safePageSnapshot(page) {
   }
 }
 
-async function pageSnapshot(page) {
-  return page.evaluate(({ interactionLimit, attentionLimit }) => {
+function interactionMapOptions(request) {
+  const map = request?.arguments?.interaction_map;
+  if (!map || map.scope !== "page") {
+    return { offset: 0 };
+  }
+  return {
+    offset: Number.isInteger(map.offset) && map.offset >= 0 ? map.offset : 0,
+  };
+}
+
+async function pageSnapshot(page, mapOptions = {}) {
+  return page.evaluate(({ interactionLimit, attentionLimit, offset }) => {
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     const documentSize = {
       width: document.documentElement.scrollWidth,
       height: document.documentElement.scrollHeight,
     };
-    const controls = Array.from(
+    const allControls = Array.from(
       document.querySelectorAll(
         [
           "button",
@@ -324,6 +420,7 @@ async function pageSnapshot(page) {
           "input",
           "textarea",
           "select",
+          "iframe",
           "[role]",
           "[tabindex]",
           "[contenteditable='true']",
@@ -332,9 +429,12 @@ async function pageSnapshot(page) {
         ].join(","),
       ),
     )
-      .map((element) => controlSummary(element, viewport))
-      .filter(Boolean)
-      .slice(0, interactionLimit);
+      .map((element, index) => {
+        if (isHidden(element)) return null;
+        const summary = controlSummary(element, viewport);
+        return summary ? { element, index, summary } : null;
+      })
+      .filter(Boolean);
     const attention = Array.from(
       document.querySelectorAll(
         [
@@ -360,6 +460,15 @@ async function pageSnapshot(page) {
     const activeElement = document.activeElement
       ? controlSummary(document.activeElement, viewport)
       : null;
+    const rankedControls = allControls
+      .map((entry) => ({
+        ...entry,
+        focused: entry.element === document.activeElement,
+        modal: isActiveOverlay(entry.element),
+      }))
+      .sort(compareControlEntries);
+    const boundedOffset = Math.min(offset, rankedControls.length);
+    const controls = rankedControls.slice(boundedOffset, boundedOffset + interactionLimit).map((entry) => entry.summary);
     return {
       title: document.title || "",
       viewport,
@@ -367,6 +476,9 @@ async function pageSnapshot(page) {
       scroll: { x: window.scrollX, y: window.scrollY },
       focused: activeElement,
       controls,
+      interactionTotal: allControls.length,
+      interactionOffset: boundedOffset,
+      interactionOmitted: Math.max(0, allControls.length - controls.length),
       attention,
     };
 
@@ -424,11 +536,52 @@ async function pageSnapshot(page) {
       };
     }
 
+    function rankControlEntry(entry) {
+      const control = entry.summary;
+      return [
+        entry.focused ? 1 : 0,
+        entry.modal ? 1 : 0,
+        control.offscreen ? 0 : 1,
+        control.covered ? 0 : 1,
+        control.disabled ? 0 : 1,
+        control.role === "link" || control.role === "button" ? 1 : 0,
+      ];
+    }
+
+    function compareControlEntries(left, right) {
+      const leftRank = rankControlEntry(left);
+      const rightRank = rankControlEntry(right);
+      for (let index = 0; index < leftRank.length; index += 1) {
+        if (leftRank[index] !== rightRank[index]) return rightRank[index] - leftRank[index];
+      }
+      return left.index - right.index;
+    }
+
+    function isHidden(element) {
+      for (let current = element; current; current = current.parentElement) {
+        if (current.hidden || current.inert || current.getAttribute("aria-hidden") === "true") return true;
+        const style = window.getComputedStyle(current);
+        if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return true;
+      }
+      return false;
+    }
+
+    function isActiveOverlay(element) {
+      const overlay = element.closest("dialog,[role='dialog'],[aria-modal='true'],[role='menu'],.modal");
+      if (!overlay || overlay.hasAttribute("hidden") || overlay.hasAttribute("inert") || overlay.getAttribute("aria-hidden") === "true") return false;
+      if (overlay.tagName.toLowerCase() === "dialog" && overlay.hasAttribute("closed")) return false;
+      const rect = overlay.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+      const style = window.getComputedStyle(overlay);
+      return style.display !== "none" && style.visibility !== "hidden";
+    }
+
     function controlName(element, role) {
       const tag = element.tagName.toLowerCase();
       const inputType = (element.getAttribute("type") || "").toLowerCase();
       if (
         tag === "textarea" ||
+        tag === "iframe" ||
         element.isContentEditable ||
         element.getAttribute("contenteditable") === "true" ||
         role === "textbox" ||
@@ -529,13 +682,14 @@ async function pageSnapshot(page) {
   }, {
     interactionLimit: INTERACTION_MAP_LIMIT,
     attentionLimit: ATTENTION_LIMIT,
+    offset: Math.max(0, Number.isInteger(mapOptions.offset) ? mapOptions.offset : 0),
   });
 }
 
 function summarizeControlsForTest(documentLike, viewport, selector) {
-  return Array.from(documentLike.querySelectorAll(selector)).map((element) =>
-    summarizeElementForTest(element, viewport),
-  );
+  return Array.from(documentLike.querySelectorAll(selector))
+    .map((element) => summarizeElementForTest(element, viewport))
+    .filter(Boolean);
 }
 
 function summarizeElementForTest(element, viewport) {
@@ -685,6 +839,7 @@ async function maybeSaveArtifacts({
   success,
   error,
   failedAction,
+  inspection,
 }) {
   const policy = artifactPolicy();
   const explicit = request.arguments?.save_artifact === true;
@@ -727,6 +882,12 @@ async function maybeSaveArtifacts({
     attention: snapshot.attention,
     interactionMap: snapshot.controls,
     screenshots: screenshotFiles,
+    captureMetadata: screenshots.map((capture) => ({
+      label: capture.label || null,
+      metadata: capture.metadata || null,
+    })),
+    restoredState: screenshots.restoredState || null,
+    inspection: inspection || null,
   };
   const manifestPath = path.join(runDir, "manifest.json");
   await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
@@ -770,10 +931,13 @@ function appendStateMarkers(lines, snapshot) {
 }
 
 function appendInteractionMap(lines, snapshot) {
-  if (snapshot.controls.length === 0) {
-    return;
-  }
-  lines.push("interaction_map:");
+  const total = Number.isInteger(snapshot.interactionTotal)
+    ? snapshot.interactionTotal
+    : snapshot.controls.length;
+  const omitted = Number.isInteger(snapshot.interactionOmitted)
+    ? snapshot.interactionOmitted
+    : Math.max(0, total - snapshot.controls.length);
+  lines.push(`interaction_map (showing ${snapshot.controls.length} of ${total}; omitted ${omitted}):`);
   for (const control of snapshot.controls) {
     lines.push(`- ${controlText(control)}`);
   }

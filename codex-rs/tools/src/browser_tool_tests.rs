@@ -29,6 +29,30 @@ fn canonical_browser_dynamic_tool_preserves_supported_browser_tool_names() {
     assert!(observe_properties.contains_key("backend"));
     assert!(observe_properties.contains_key("scope"));
     assert!(observe_properties.contains_key("prompt"));
+    assert!(observe_properties.contains_key("inspection"));
+    assert!(observe_properties.contains_key("interaction_map"));
+    let inspection = observe_properties
+        .get("inspection")
+        .expect("inspection schema");
+    let inspection_properties = inspection.properties.as_ref().expect("inspection object");
+    let sections = inspection_properties
+        .get("sections")
+        .expect("sections schema");
+    assert_eq!(
+        sections
+            .items
+            .as_ref()
+            .expect("section items")
+            .enum_values
+            .as_ref()
+            .expect("section enum"),
+        &[
+            json!("runtime"),
+            json!("frames"),
+            json!("console"),
+            json!("network")
+        ]
+    );
 
     let step = canonical_browser_dynamic_tool(&DynamicToolSpec {
         namespace: None,
@@ -52,6 +76,8 @@ fn canonical_browser_dynamic_tool_preserves_supported_browser_tool_names() {
     assert!(step_properties.contains_key("view"));
     assert!(step_properties.contains_key("action"));
     assert!(step_properties.contains_key("backend"));
+    assert!(step_properties.contains_key("inspection"));
+    assert!(step_properties.contains_key("interaction_map"));
 
     let action_schema = step_properties.get("action").expect("action schema");
     let action_values = action_schema
