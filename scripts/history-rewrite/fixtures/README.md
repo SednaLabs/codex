@@ -68,25 +68,41 @@ with reachable objects; no Git config, preimage refs or dangling objects are
 archived. A separate small binding artifact lets the reviewer inspect the
 approval contract without downloading the object bundle.
 
-The approval comment is canonical JSON. Start from `approval_binding` in that
-small artifact and add `observed_at`, `expires_at`,
-`administrator_snapshot` and `administrator_snapshot_sha256`. The snapshot
-must be an actual fresh, complete normalized administrator read, not the
-expected plan or an observer view padded with expected identities. Retain raw
-administrator API evidence privately; only normalized control fields belong
-in the comment. GitHub supplies the approving user's identity and environment.
-The comment explicitly binds the run, attempt, phase, harness, manifest,
-selected/output maps and prepared artifact; those fields are not inferred
-from the approvals endpoint. Duplicate, stale, foreign and incomplete
+The approval comment is compact canonical ASCII JSON, within GitHub's
+1024-character limit. Its exact five fields are `schema` (the literal
+`history-rewrite-administrator-attestation-v1`), `binding_sha256`,
+`administrator_snapshot_sha256`, `observed_at` and `expires_at`. With full
+SHA-256 digests and six-digit fractional UTC timestamps it occupies 337 bytes.
+Hash the complete canonical `approval_binding` from the small artifact for
+`binding_sha256`; the consumer independently reconstructs that binding from
+the manifest, prepared artifact and current run/attempt. No binding fields
+are dropped: repository, phase, harness, manifest, selected/output maps and
+prepared artifact remain covered by the digest.
+
+Compute `administrator_snapshot_sha256` from an actual fresh, complete
+normalized administrator API read. Retain that full actual snapshot and its
+raw API evidence privately. Do not construct observed evidence from the
+expected plan or fill unresolved actor identities from expected values. The
+authenticated administrator attests that actual digest; the consumer compares
+it with the approved complete expected after-state already bound in the
+manifest. Expected state remains expected, not a reconstructed observation.
+GitHub supplies the exact approving user and protected environment. Exactly
+one current-binding approval is required. Other binding digests confer no
+authority; malformed, duplicate-current, stale-current or foreign-current
 approvals fail closed.
 
 The independent read-only App queries scalar controls and allowance counts,
 without requesting actor fields it cannot resolve. The complete actual
-administrator actor inventory and that limited App view remain separate
-evidence types. General force pushes must still be disabled; publication
+administrator actor attestation and that limited App view remain separate
+evidence types. Actual App scalars/counts must equal the projection of the
+approved expected state. General force pushes must still be disabled; publication
 requires the exact approved publisher allowances and queue bypass. A denied
 observer response preserves a sanitized error receipt and never falls back to
-another credential.
+another credential. This retains the administrator-attestation trust boundary:
+the read-only App cannot independently identify private allowance actors.
+A same-count actor substitution after the administrator observation is not
+detected by the scalar view; the short freshness window does not eliminate
+that pre-existing observation race.
 
 Observation freshness is bounded to ten minutes, rechecked before publisher
 effects and immediately before the leased push. This includes runner startup
@@ -98,8 +114,11 @@ the retry. Restore the approved control preimage while waiting for a new gate.
 
 `qualification` uses an isolated synthetic candidate but the real hosted
 artifact, protected environment, structured approval and scalar-observer
-paths. It cannot mint a publisher token, suppress writers or push refs. A
-separately authorized operator qualifies the actual full-size approval
+paths. Its prepared manifest must contain the approved **expected** full
+after-state, supplied through `qualification_expected_snapshot_gzip_b64` and
+`qualification_expected_snapshot_sha256`; these are not observation inputs.
+It cannot mint a publisher token, suppress writers or push refs. A
+separately authorized operator qualifies the actual compact approval
 comment, API round-trip, run/attempt semantics and measured scheduling/import
 latency before any long production backup/rewrite or publication. This
 qualification is not publication proof. The focused fixtures additionally

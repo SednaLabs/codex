@@ -68,6 +68,14 @@ on:
         description: "Reuse an exact prepared artifact descriptor after expiry; never regenerate on approval retry"
         required: false
         type: string
+      qualification_expected_snapshot_gzip_b64:
+        description: "Qualification only: gzip+base64 approved EXPECTED after-state, never an observation"
+        required: false
+        type: string
+      qualification_expected_snapshot_sha256:
+        description: "Qualification only: approved SHA-256 of canonical expected after-state JSON"
+        required: false
+        type: string
       manifest_recipe_gzip_b64:
         description: "Manifest producer only: canonical manifest with selected_refs and output_refs omitted"
         required: false
@@ -715,8 +723,15 @@ jobs:
           python3 scripts/history-rewrite/protected_handoff.py prepare --root "$root"
       - name: Prepare isolated no-push transport qualification
         if: inputs.mode == 'qualification' && inputs.prepared_artifact == ''
+        env:
+          PUBLICATION_MANIFEST_GZIP_B64: ${{ inputs.qualification_expected_snapshot_gzip_b64 }}
+          EXPECTED_SNAPSHOT_SHA256: ${{ inputs.qualification_expected_snapshot_sha256 }}
         run: |
           set -euo pipefail; umask 077
+          mkdir -p "$RUNNER_TEMP/history-rewrite-publication"
+          python3 scripts/history-rewrite/publication.py decode \
+            --output "$RUNNER_TEMP/history-rewrite-publication/qualification-expected.json" \
+            --manifest-sha256 "$EXPECTED_SNAPSHOT_SHA256"
           python3 scripts/history-rewrite/protected_handoff.py qualification-prepare \
             --root "$RUNNER_TEMP/history-rewrite-publication"
       - name: Export only candidate reachable objects and minimal bindings

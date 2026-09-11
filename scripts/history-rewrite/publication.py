@@ -1380,7 +1380,7 @@ def verify_live_publication_state(manifest: dict, api: Api, *, observer_api: Api
         if handoff["binding"]["run_id"] != current_run_id:
             raise PublicationError("final gate belongs to a different publication run")
         gate = verify_current(manifest, handoff["binding"], api, observer_api, now=datetime.now(timezone.utc))
-        if gate["witness_sha256"] != handoff["witness_sha256"]:
+        if gate["attestation_sha256"] != handoff["attestation_sha256"]:
             raise PublicationError("administrator approval changed after the protected gate")
         protection_evidence = {"protected_handoff": gate}
     return {

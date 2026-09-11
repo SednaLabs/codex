@@ -1,7 +1,8 @@
 """Protected approval evidence and independently observed control scalars.
 
-The administrator witnesses actor identity. The read-only App observes scalar
-controls and allowance counts. Neither view is represented as the other.
+The administrator attests the digest of a privately retained actual observation.
+The read-only App observes scalar controls and allowance counts. The manifest's
+expected state is never represented as either principal's actual observation.
 """
 import argparse
 import copy
@@ -18,6 +19,8 @@ import publication as p
 
 ENVIRONMENT_ID = 21690526893
 MAX_WITNESS_SECONDS = 600
+MAX_COMMENT_BYTES = 1024
+ATTESTATION_SCHEMA = "history-rewrite-administrator-attestation-v1"
 ALLOWANCES = {"bypassForcePushAllowances": "bypass_force_push_allowances",
               "bypassPullRequestAllowances": "bypass_pull_request_allowances", "pushAllowances": "push_allowances"}
 SCALARS = dict(zip(
@@ -33,7 +36,7 @@ class ObserverScalars:
 
 
 @dataclass(frozen=True)
-class AdministratorWitness:
+class AdministratorAttestation:
     document: dict
 
 
@@ -44,19 +47,19 @@ def timestamp(value: object) -> datetime:
             raise ValueError("timezone required")
         return result
     except (AttributeError, TypeError, ValueError) as exc:
-        raise p.PublicationError("witness timestamp is malformed") from exc
+        raise p.PublicationError("attestation timestamp is malformed") from exc
 
 
-def project_scalars(administrator: dict, visibility: dict) -> ObserverScalars:
-    p.validate_snapshot_shape(administrator)
-    result = copy.deepcopy(administrator)
+def project_scalars(expected: dict, visibility: dict) -> ObserverScalars:
+    p.validate_snapshot_shape(expected)
+    result = copy.deepcopy(expected)
     result["schema"] = "history-rewrite-observer-scalars-v1"
     for rule in result["branch_protection_rules"]:
         for field in ALLOWANCES.values():
             rule[field + "_count"] = len(rule.pop(field))
     for ruleset in result["repository_rulesets"]:
         if ruleset["bypass_actors_visibility"] != "visible":
-            raise p.PublicationError("administrator ruleset actor inventory is not complete")
+            raise p.PublicationError("expected ruleset actor inventory is not complete")
         observed = visibility.get(ruleset["id"])
         if observed == "not_returned":
             ruleset.update(bypass_actors_visibility="not_returned", bypass_actors=None)
@@ -113,7 +116,21 @@ def approval_binding(manifest: dict, prepared: dict, artifact: dict, *, run_id: 
             "prepared_sha256": p.digest(prepared)}
 
 
-def validate_witness(approvals: object, expected: dict, run: dict, *, now: datetime) -> AdministratorWitness:
+def expected_snapshot(manifest: dict, phase: str) -> dict:
+    if phase not in {"publication", "qualification"}:
+        raise p.PublicationError("invalid protected handoff phase")
+    try:
+        snapshot = manifest["controls"]["maintenance_plan"]["administrator_after"]
+    except (KeyError, TypeError) as exc:
+        raise p.PublicationError("prepared manifest lacks the approved expected after-state") from exc
+    p.validate_protection_snapshot(snapshot)
+    if any(row["bypass_actors_visibility"] != "visible" for row in snapshot["repository_rulesets"]):
+        raise p.PublicationError("expected administrator actor domain is incomplete")
+    return snapshot
+
+
+def validate_attestation(approvals: object, expected: dict, snapshot_sha256: str, run: dict, *, now: datetime) -> AdministratorAttestation:
+    p._sha256(snapshot_sha256, "expected administrator snapshot digest")
     if (run.get("id") != expected["run_id"] or run.get("run_attempt") != expected["run_attempt"]
             or run.get("head_sha") != expected["harness_sha"] or run.get("repository", {}).get("id") != p.REPOSITORY_ID
             or run.get("event") != "workflow_dispatch" or run.get("head_branch") != p.PUBLICATION_BRANCH
@@ -134,67 +151,55 @@ def validate_witness(approvals: object, expected: dict, run: dict, *, now: datet
             raise p.PublicationError("publication environment has a non-approval record")
         try:
             comment = item["comment"]
-            if not isinstance(comment, str) or len(comment.encode()) > 60000:
+            if not isinstance(comment, str) or not comment.isascii() or len(comment.encode()) > MAX_COMMENT_BYTES:
                 raise ValueError("comment bound")
             value = json.loads(comment)
             if not isinstance(value, dict) or comment != p.canonical_json(value).decode():
                 raise ValueError("canonical structured comment required")
         except (KeyError, ValueError, UnicodeError) as exc:
             raise p.PublicationError("approval comment is malformed or not canonical") from exc
-        # GitHub may retain approvals from older attempts. A previous attempt
-        # is evidence of history, never authorization for this retry.
-        if (value.get("schema") == expected["schema"] and value.get("run_id") == expected["run_id"]
-                and type(value.get("run_attempt")) is int and value["run_attempt"] < expected["run_attempt"]):
+        if (set(value) != {"schema", "binding_sha256", "administrator_snapshot_sha256", "observed_at", "expires_at"}
+                or value["schema"] != ATTESTATION_SCHEMA):
+            raise p.PublicationError("approval attestation schema or field domain mismatch")
+        p._sha256(value["binding_sha256"], "approval binding digest")
+        p._sha256(value["administrator_snapshot_sha256"], "attested administrator snapshot digest")
+        # The complete binding is reconstructed independently, including this
+        # attempt and immutable prepared artifact. Other digests confer no
+        # authority, even if they identify a prior authenticated approval.
+        if value["binding_sha256"] != p.digest(expected):
             continue
         if (item.get("user", {}).get("id"), item.get("user", {}).get("login")) != (p.REVIEWER_ID, p.REVIEWER_LOGIN):
             raise p.PublicationError("approval is not from the exact administrator")
         if environments != [{"id": ENVIRONMENT_ID, "name": p.ENVIRONMENT_NAME}]:
             raise p.PublicationError("approval environment domain mismatch")
-        extra = {"observed_at", "expires_at", "administrator_snapshot", "administrator_snapshot_sha256"}
-        if set(value) != set(expected) | extra or any(value.get(key) != wanted for key, wanted in expected.items()):
-            raise p.PublicationError("approval does not bind the exact phase, attempt and prepared artifact")
+        if value["administrator_snapshot_sha256"] != snapshot_sha256:
+            raise p.PublicationError("attested actual snapshot digest differs from the approved expected after-state")
         observed, expires = timestamp(value["observed_at"]), timestamp(value["expires_at"])
         if not timestamp(run["run_started_at"]) <= observed <= now < expires or not 0 < (expires - observed).total_seconds() <= MAX_WITNESS_SECONDS:
             raise p.PublicationError("administrator observation is stale, future-dated or overlong")
-        snapshot = value["administrator_snapshot"]
-        p.validate_snapshot_shape(snapshot)
-        for rule in snapshot["branch_protection_rules"]:
-            for field in ALLOWANCES.values():
-                for actor in rule[field]:
-                    if (not isinstance(actor, dict) or set(actor) != {"__typename", "id", "databaseId", "slug"}
-                            or actor.get("__typename") != "App" or type(actor.get("databaseId")) is not int
-                            or actor["databaseId"] <= 0 or not all(isinstance(actor.get(key), str) and actor[key] for key in ("id", "slug"))):
-                        raise p.PublicationError("administrator allowance actor identity is null or malformed")
-        if p.digest(snapshot) != value["administrator_snapshot_sha256"]:
-            raise p.PublicationError("administrator snapshot digest mismatch")
-        if any(row["bypass_actors_visibility"] != "visible" for row in snapshot["repository_rulesets"]):
-            raise p.PublicationError("administrator actor evidence is incomplete")
         matches.append(value)
     if len(matches) != 1:
-        raise p.PublicationError("current-attempt administrator witness is missing or ambiguous")
-    return AdministratorWitness(matches[0])
+        raise p.PublicationError("current-binding administrator attestation is missing or ambiguous")
+    return AdministratorAttestation(matches[0])
 
 
 def verify_current(manifest: dict, binding: dict, read_api, observer_api, *, now: datetime, error_path: Path | None = None) -> dict:
     run_id, attempt = binding["run_id"], binding["run_attempt"]
     run = read_api.get(f"/repos/{p.REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}")
-    witness = validate_witness(read_api.get(f"/repos/{p.REPOSITORY}/actions/runs/{run_id}/approvals"), binding, run, now=now)
-    snapshot = witness.document["administrator_snapshot"]
-    if binding["phase"] == "publication":
-        p.validate_protection_snapshot(snapshot)
-        if snapshot != manifest["controls"]["maintenance_plan"]["administrator_after"]:
-            raise p.PublicationError("actual administrator state differs from the approved full maintenance plan")
-    elif binding["phase"] != "qualification":
-        raise p.PublicationError("invalid protected handoff phase")
+    expected = expected_snapshot(manifest, binding["phase"])
+    attestation = validate_attestation(read_api.get(f"/repos/{p.REPOSITORY}/actions/runs/{run_id}/approvals"),
+                                      binding, p.digest(expected), run, now=now)
     observed = observe(observer_api, error_path=error_path)
     visibility = {row["id"]: row["bypass_actors_visibility"] for row in observed.document["repository_rulesets"]}
-    if observed != project_scalars(snapshot, visibility):
-        raise p.PublicationError("independent observer scalars/counts differ from administrator observation")
+    if observed != project_scalars(expected, visibility):
+        raise p.PublicationError("independent observer scalars/counts differ from the approved expected after-state")
     return {"schema": "history-rewrite-protected-gate-v1", "binding": binding,
-            "witness_sha256": p.digest(witness.document), "administrator_snapshot_sha256": p.digest(snapshot),
-            "observer_scalars_sha256": p.digest(observed.document), "expires_at": witness.document["expires_at"],
-            "observed_at": witness.document["observed_at"], "verified_at": now.isoformat(),
-            "comment_bytes": len(p.canonical_json(witness.document)), "comment_sha256": p.digest(witness.document)}
+            "attestation_sha256": p.digest(attestation.document),
+            "attested_administrator_snapshot_sha256": attestation.document["administrator_snapshot_sha256"],
+            "expected_administrator_snapshot_sha256": p.digest(expected),
+            "observer_scalars_sha256": p.digest(observed.document), "expires_at": attestation.document["expires_at"],
+            "observed_at": attestation.document["observed_at"], "verified_at": now.isoformat(),
+            "comment_bytes": len(p.canonical_json(attestation.document)), "comment_sha256": p.digest(attestation.document)}
 
 
 def require_fresh_gate(receipt: dict, manifest: dict) -> None:
@@ -250,6 +255,9 @@ def main() -> None:
     if ns.command == "qualification-prepare":
         # An isolated synthetic object graph exercises the same artifact path;
         # its phase cannot be consumed by any publisher command.
+        # This is operator-approved EXPECTED state, not an API observation.
+        controls = {"maintenance_plan": {"administrator_after": p.load_object(root / "qualification-expected.json")}}
+        expected_snapshot({"controls": controls}, phase)
         with tempfile.TemporaryDirectory(prefix="qualification-source-") as temporary:
             repo = Path(temporary) / "source.git"
             bundle.init_repo(repo)
@@ -259,7 +267,8 @@ def main() -> None:
             commit = p.git(repo, "commit-tree", empty_tree, "-m", "Candidate transport qualification", env=env).strip()
             refs = {"refs/heads/main": commit}
             manifest = {"harness_sha": sha, "harness_tree": tree, "selected_refs": refs, "output_refs": refs,
-                        "selected_refs_sha256": p.digest(refs), "output_refs_sha256": p.digest(refs), "proof_digests": {}}
+                        "selected_refs_sha256": p.digest(refs), "output_refs_sha256": p.digest(refs), "proof_digests": {},
+                        "controls": controls}
             bundle.export_candidate(repo, manifest, root / "prepared", phase=phase, run_id=run_id, attempt=attempt)
         return
     if ns.command == "prepare":
