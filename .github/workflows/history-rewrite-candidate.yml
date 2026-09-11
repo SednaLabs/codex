@@ -486,8 +486,37 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$proof_workflow" > "$api/proof-workflow.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$proof_run/artifacts?per_page=100" > "$api/proof-artifacts.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$proof_artifact_id/zip" > "$api/proof.zip"
-          jq -r '.controls.active_writer_workflows[], .controls.mirror_workflow_id' "$manifest" | sort -nu | while read -r workflow_id; do
+          for workflow_id in 231747419 250252266 250252269; do
             gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id" > "$api/workflow-$workflow_id.json"
+            if test "$workflow_id" != 250252269; then
+              for status in in_progress pending queued requested waiting; do
+                gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?status=$status&per_page=100" \
+                  | jq --arg requested_status "$status" '{requested_status: $requested_status, response: .}' \
+                  > "$api/writer-runs-$workflow_id-$status.json"
+              done
+              jq -s . "$api"/writer-runs-"$workflow_id"-*.json > "$api/writer-runs-$workflow_id.json"
+            fi
+          done
+          protection_query='query($owner: String!, $name: String!) {
+            repository(owner: $owner, name: $name) {
+              branchProtectionRules(first: 100) {
+                totalCount
+                nodes {
+                  id pattern allowsForcePushes isAdminEnforced requiresStatusChecks
+                  requiredStatusCheckContexts requiresApprovingReviews requiredApprovingReviewCount
+                  requiresConversationResolution restrictsPushes
+                  bypassForcePushAllowances(first: 100) {
+                    totalCount
+                    nodes { actor { __typename ... on App { id databaseId slug } } }
+                  }
+                }
+              }
+            }
+          }'
+          gh api graphql -f owner=sednalabs -f name=codex -f query="$protection_query" > "$api/branch-protection-rules.json"
+          gh api "repos/$GITHUB_REPOSITORY/rulesets?includes_parents=true&per_page=100" > "$api/rulesets.json"
+          jq -er '.[].id' "$api/rulesets.json" | while read -r ruleset_id; do
+            gh api "repos/$GITHUB_REPOSITORY/rulesets/$ruleset_id" > "$api/ruleset-$ruleset_id.json"
           done
           python3 scripts/history-rewrite/publication.py preflight "$manifest" \
             --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" \
@@ -511,6 +540,8 @@ jobs:
           set -euo pipefail; umask 077
           root="$RUNNER_TEMP/history-rewrite-publication"
           python3 scripts/history-rewrite/publication.py prepare "$root/manifest.json" \
+            --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" --manifest-sha256 "$MANIFEST_SHA256" \
+            --preflight "$root/preflight/preflight.json" \
             --remote-url "$REPO_URL" --work-root "$root/candidate" \
             --proof-dir "$root/preflight/approved-proof" --control-plan "$root/preflight/control-plan.json" \
             --intent "$root/publication-restoration-intent.json"
@@ -520,6 +551,7 @@ jobs:
           name: history-rewrite-publication-intent-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/history-rewrite-publication/publication-restoration-intent.json
+            ${{ runner.temp }}/history-rewrite-publication/manifest.json
             ${{ runner.temp }}/history-rewrite-publication/preflight/control-plan.json
             ${{ runner.temp }}/history-rewrite-publication/preflight/preflight.json
           if-no-files-found: error
@@ -558,23 +590,20 @@ jobs:
           set -euo pipefail
           root="$RUNNER_TEMP/history-rewrite-publication"
           python3 scripts/history-rewrite/publication.py controls suppress "$root/manifest.json" \
-            --plan "$root/preflight/control-plan.json" --receipt "$root/control-suppression.json"
-      - name: Drain active writer runs with one blocking helper invocation
-        env:
-          GH_TOKEN: ${{ steps.release_publisher_token.outputs.token }}
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/history-rewrite-publication"
-          python3 scripts/history-rewrite/publication.py wait-writers "$root/manifest.json" \
-            --plan "$root/preflight/control-plan.json" --current-run-id "$GITHUB_RUN_ID" \
-            --timeout-seconds 1800 --interval-seconds 15 --receipt "$root/writer-drain.json"
+            --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" --manifest-sha256 "$MANIFEST_SHA256" \
+            --preflight "$root/preflight/preflight.json" --control-plan "$root/preflight/control-plan.json" \
+            --intent "$root/publication-restoration-intent.json" --receipt "$root/control-suppression.json"
       - name: Publish explicit refs once with atomic per-ref leases
         env:
           GH_TOKEN: ${{ steps.release_publisher_token.outputs.token }}
+          HISTORY_REWRITE_READ_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail; umask 077
           root="$RUNNER_TEMP/history-rewrite-publication"
           python3 scripts/history-rewrite/publication.py publish "$root/manifest.json" \
+            --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" --manifest-sha256 "$MANIFEST_SHA256" \
+            --preflight "$root/preflight/preflight.json" --control-plan "$root/preflight/control-plan.json" \
+            --intent "$root/publication-restoration-intent.json" --current-run-id "$GITHUB_RUN_ID" \
             --repo "$root/candidate/repo.git" --remote-url "$REPO_URL" \
             --receipt "$root/publication-receipt.json"
       - name: Restore captured release workflow states
@@ -586,7 +615,9 @@ jobs:
           root="$RUNNER_TEMP/history-rewrite-publication"
           test -s "$root/preflight/control-plan.json"
           python3 scripts/history-rewrite/publication.py controls restore "$root/manifest.json" \
-            --plan "$root/preflight/control-plan.json" --receipt "$root/control-restoration.json"
+            --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" --manifest-sha256 "$MANIFEST_SHA256" \
+            --preflight "$root/preflight/preflight.json" --control-plan "$root/preflight/control-plan.json" \
+            --intent "$root/publication-restoration-intent.json" --receipt "$root/control-restoration.json"
       - name: Persist publication and restoration receipts
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
@@ -598,7 +629,6 @@ jobs:
             ${{ runner.temp }}/history-rewrite-publication/control-suppression.json
             ${{ runner.temp }}/history-rewrite-publication/publisher-installation.json
             ${{ runner.temp }}/history-rewrite-publication/publisher-app.json
-            ${{ runner.temp }}/history-rewrite-publication/writer-drain.json
             ${{ runner.temp }}/history-rewrite-publication/publication-receipt.json
             ${{ runner.temp }}/history-rewrite-publication/control-restoration.json
           if-no-files-found: warn

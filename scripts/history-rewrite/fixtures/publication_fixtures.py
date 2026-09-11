@@ -5,14 +5,45 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import publication
 from publication import PublicationError, digest
+
+
+def protection_snapshot() -> dict:
+    rules = []
+    for ref in publication.PROTECTED_REFS:
+        branch = ref.removeprefix("refs/heads/")
+        rules.append({
+            "id": "rule-" + hashlib.sha256(branch.encode()).hexdigest()[:12],
+            "pattern": branch,
+            "allows_force_pushes": True,
+            "is_admin_enforced": True,
+            "requires_status_checks": True,
+            "required_status_check_contexts": ["fixture"],
+            "requires_approving_reviews": True,
+            "required_approving_review_count": 0,
+            "requires_conversation_resolution": True,
+            "restricts_pushes": False,
+            "bypass_force_push_allowances": [{
+                "__typename": "App", "id": publication.PUBLISHER_APP_NODE_ID,
+                "databaseId": publication.PUBLISHER_APP_ID, "slug": "fixture-publisher",
+            }],
+        })
+    rules.sort(key=lambda item: (item["pattern"], item["id"]))
+    return {
+        "schema": "history-rewrite-protection-snapshot-v1",
+        "protected_refs": list(publication.PROTECTED_REFS),
+        "branch_protection_rules": rules,
+        "repository_rulesets": [],
+    }
 
 
 def git(repo: Path, *args: str) -> str:
@@ -44,11 +75,13 @@ def base_manifest(selected: dict[str, str] | None = None, output: dict[str, str]
             "environment": publication.ENVIRONMENT_NAME,
             "reviewer_id": publication.REVIEWER_ID,
             "reviewer_login": publication.REVIEWER_LOGIN,
-            "suppress_workflows": [".github/workflows/rust-release.yml", ".github/workflows/sedna-release.yml"],
-            "active_writer_workflows": [101, 102],
+            "writer_workflows": publication.WRITER_WORKFLOWS,
             "mirror_workflow_id": publication.MIRROR_WORKFLOW_ID,
+            "protected_refs": list(publication.PROTECTED_REFS),
+            "protection_snapshot": protection_snapshot(),
         },
     }
+    manifest["controls"]["protection_snapshot_sha256"] = digest(manifest["controls"]["protection_snapshot"])
     return manifest
 
 
@@ -87,23 +120,50 @@ def expect_failure(name: str, function) -> str:
 
 
 class MockApi:
-    def __init__(self, states: dict[int, str], runs: dict[int, list[dict]] | None = None):
+    def __init__(self, states: dict[int, str], runs: dict[int, list[dict]] | None = None, protection: dict | None = None):
         self.states = dict(states)
         self.runs = runs or {}
+        self.protection = protection or protection_snapshot()
         self.mutations: list[tuple[int, str]] = []
 
     def get(self, path: str) -> object:
+        if path == "/installation":
+            return {"app_id": publication.PUBLISHER_APP_ID, "app_slug": "fixture-publisher"}
+        if path == "/apps/fixture-publisher":
+            return {"id": publication.PUBLISHER_APP_ID, "node_id": publication.PUBLISHER_APP_NODE_ID}
+        if path.startswith(f"/repos/{publication.REPOSITORY}/rulesets?"):
+            return []
         parts = path.split("?")[0].split("/")
         workflow_id = int(parts[6])
         if parts[-1] == "runs":
-            return {"workflow_runs": self.runs.get(workflow_id, [])}
-        return {"id": workflow_id, "state": self.states[workflow_id]}
+            status = path.split("status=", 1)[1].split("&", 1)[0]
+            runs = [run for run in self.runs.get(workflow_id, []) if run.get("status") == status]
+            return {"total_count": len(runs), "workflow_runs": runs}
+        paths = {**{value: key for key, value in publication.WRITER_WORKFLOWS.items()}, publication.MIRROR_WORKFLOW_ID: ".github/workflows/sedna-sync-upstream.yml"}
+        return {"id": workflow_id, "path": paths[workflow_id], "state": self.states[workflow_id]}
 
     def put(self, path: str) -> None:
         parts = path.split("/")
         workflow_id, action = int(parts[6]), parts[7]
         self.states[workflow_id] = "active" if action == "enable" else "disabled_manually"
         self.mutations.append((workflow_id, action))
+
+    def post_graphql(self, query: str, variables: dict[str, str]) -> object:
+        nodes = []
+        for item in self.protection["branch_protection_rules"]:
+            nodes.append({
+                "id": item["id"], "pattern": item["pattern"], "allowsForcePushes": item["allows_force_pushes"],
+                "isAdminEnforced": item["is_admin_enforced"], "requiresStatusChecks": item["requires_status_checks"],
+                "requiredStatusCheckContexts": item["required_status_check_contexts"],
+                "requiresApprovingReviews": item["requires_approving_reviews"],
+                "requiredApprovingReviewCount": item["required_approving_review_count"],
+                "requiresConversationResolution": item["requires_conversation_resolution"],
+                "restrictsPushes": item["restricts_pushes"],
+                "bypassForcePushAllowances": {"totalCount": len(item["bypass_force_push_allowances"]), "nodes": [
+                    {"actor": actor} for actor in item["bypass_force_push_allowances"]
+                ]},
+            })
+        return {"data": {"repository": {"branchProtectionRules": {"totalCount": len(nodes), "nodes": nodes}}}}
 
 
 def control_plan(manifest: dict) -> dict:
@@ -112,12 +172,43 @@ def control_plan(manifest: dict) -> dict:
         "repository": publication.REPOSITORY,
         "manifest_sha256": digest(manifest),
         "suppression": [
-            {"id": 101, "path": ".github/workflows/rust-release.yml", "state": "active"},
-            {"id": 102, "path": ".github/workflows/sedna-release.yml", "state": "disabled_manually"},
+            {"id": 231747419, "path": ".github/workflows/rust-release.yml", "state": "active"},
+            {"id": 250252266, "path": ".github/workflows/sedna-release.yml", "state": "disabled_manually"},
         ],
-        "active_writer_workflow_ids": [101, 102],
+        "writer_workflows": publication.WRITER_WORKFLOWS,
         "mirror": {"id": publication.MIRROR_WORKFLOW_ID, "path": ".github/workflows/sedna-sync-upstream.yml", "state": "disabled_manually"},
+        "protection_snapshot_sha256": manifest["controls"]["protection_snapshot_sha256"],
     }
+
+
+def phase_files(root: Path, manifest: dict) -> tuple[Path, Path, Path, Path]:
+    manifest_path = root / "manifest.json"
+    preflight = root / "preflight.json"
+    plan_path = root / "control-plan.json"
+    intent = root / "publication-restoration-intent.json"
+    manifest_path.write_bytes(publication.canonical_json(manifest))
+    publication.write_json(preflight, {
+        "schema": "history-rewrite-publication-preflight-v1", "repository": publication.REPOSITORY,
+        "manifest_sha256": digest(manifest), "harness_sha": manifest["harness_sha"],
+        "harness_tree": manifest["harness_tree"], "selected_refs_sha256": manifest["selected_refs_sha256"],
+        "output_refs_sha256": manifest["output_refs_sha256"], "backup_run_id": manifest["backup"]["run_id"],
+        "proof_run_id": manifest["proof"]["run_id"],
+        "approval": {"id": publication.REVIEWER_ID, "login": publication.REVIEWER_LOGIN},
+        "writer_check": {"schema": "history-rewrite-writer-check-v1", "active": [], "status": "drained-at-single-read"},
+        "protection_snapshot_sha256": manifest["controls"]["protection_snapshot_sha256"],
+        "status": "verified-before-app-token",
+    })
+    publication.write_json(plan_path, control_plan(manifest))
+    publication.write_json(intent, {
+        "schema": "history-rewrite-restoration-intent-v1", "repository": publication.REPOSITORY,
+        "manifest_sha256": digest(manifest), "harness_sha": manifest["harness_sha"],
+        "harness_tree": manifest["harness_tree"], "preflight_sha256": publication.file_digest(preflight),
+        "control_plan_sha256": publication.file_digest(plan_path), "before_refs_sha256": digest(manifest["selected_refs"]),
+        "output_refs_sha256": digest(manifest["output_refs"]),
+        "regenerated_proof_digests_sha256": digest(manifest["proof_digests"]),
+        "status": "ready-no-write-credential-accessed",
+    })
+    return manifest_path, preflight, plan_path, intent
 
 
 def git_adapter_fixture(root: Path) -> tuple[str, str]:
@@ -135,7 +226,13 @@ def git_adapter_fixture(root: Path) -> tuple[str, str]:
     selected = {"refs/heads/main": old, "refs/tags/v1": old}
     output = {"refs/heads/main": new, "refs/tags/v1": new}
     manifest = base_manifest(selected, output)
-    result = publication.publish_repository(manifest, repo=source / ".git", remote_url=str(remote))
+    _, preflight, plan, intent = phase_files(root, manifest)
+    api = MockApi({231747419: "disabled_manually", 250252266: "disabled_manually", publication.MIRROR_WORKFLOW_ID: "disabled_manually"})
+    result = publication.publish_repository(
+        manifest, frozen_sha=manifest["harness_sha"], frozen_tree=manifest["harness_tree"],
+        manifest_sha256=digest(manifest), preflight_path=preflight, control_plan=plan, intent_path=intent,
+        read_api=api, current_run_id=99, repo=source / ".git", remote_url=str(remote),
+    )
     if result.outcome != "success" or publication.advertised_refs(str(remote)) != output:
         raise SystemExit("production Git adapter did not publish the exact disposable ref map")
     positive = hashlib.sha256((old + new + result.reason).encode()).hexdigest()
@@ -145,7 +242,11 @@ def git_adapter_fixture(root: Path) -> tuple[str, str]:
     git(rejected, "update-ref", "refs/heads/main", old); git(rejected, "update-ref", "refs/tags/v1", old)
     hook = rejected / "hooks" / "pre-receive"
     hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8"); hook.chmod(0o700)
-    rejected_result = publication.publish_repository(manifest, repo=source / ".git", remote_url=str(rejected))
+    rejected_result = publication.publish_repository(
+        manifest, frozen_sha=manifest["harness_sha"], frozen_tree=manifest["harness_tree"],
+        manifest_sha256=digest(manifest), preflight_path=preflight, control_plan=plan, intent_path=intent,
+        read_api=api, current_run_id=99, repo=source / ".git", remote_url=str(rejected),
+    )
     if rejected_result.outcome != "ambiguous" or publication.advertised_refs(str(rejected)) != selected:
         raise SystemExit("atomic rejection fixture changed a disposable remote ref")
     negative = hashlib.sha256(rejected_result.reason.encode()).hexdigest()
@@ -165,7 +266,8 @@ def main() -> None:
         "proof_digest": lambda value: value["proof_digests"].update({"commit-map.txt": "f" * 40}),
         "stale_backup": lambda value: value["proof"].update(run_id=value["backup"]["run_id"]),
         "wrong_branch": lambda value: value["controls"].update(publication_branch="main"),
-        "unauthorised_suppression": lambda value: value["controls"]["suppress_workflows"].append(".github/workflows/other.yml"),
+        "missing_mandatory_writer": lambda value: value["controls"]["writer_workflows"].pop(".github/workflows/sedna-release.yml"),
+        "arbitrary_writer": lambda value: value["controls"]["writer_workflows"].update({".github/workflows/other.yml": 999}),
     }
     for name, mutate in cases.items():
         candidate = copy.deepcopy(manifest); mutate(candidate)
@@ -177,18 +279,91 @@ def main() -> None:
     evidence.append(expect_failure("environment", lambda: publication.validate_environment(bad_environment, policies)))
     bad_approval = approval_fixture(); bad_approval[0]["user"]["id"] = 1
     evidence.append(expect_failure("approval", lambda: publication.validate_approval(bad_approval)))
+    bad_protection = copy.deepcopy(manifest)
+    bad_protection["controls"]["protection_snapshot"]["branch_protection_rules"][0]["bypass_force_push_allowances"] = []
+    bad_protection["controls"]["protection_snapshot_sha256"] = digest(bad_protection["controls"]["protection_snapshot"])
+    evidence.append(expect_failure("publisher_app_exception", lambda: publication.validate_manifest(
+        bad_protection, frozen_sha="5" * 40, frozen_tree="6" * 40,
+    )))
+    bad_ruleset_bypass = copy.deepcopy(manifest)
+    bad_ruleset_bypass["controls"]["protection_snapshot"]["repository_rulesets"].append({
+        "id": 900, "name": "fixture-main", "target": "branch", "enforcement": "active",
+        "bypass_actors": [{"actor_id": publication.PUBLISHER_APP_ID, "actor_type": "Integration", "bypass_mode": "pull_request"}],
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}}, "rules": [],
+    })
+    bad_ruleset_bypass["controls"]["protection_snapshot_sha256"] = digest(bad_ruleset_bypass["controls"]["protection_snapshot"])
+    evidence.append(expect_failure("publisher_app_ruleset_bypass", lambda: publication.validate_manifest(
+        bad_ruleset_bypass, frozen_sha="5" * 40, frozen_tree="6" * 40,
+    )))
     plan = control_plan(manifest)
-    api = MockApi({101: "active", 102: "disabled_manually", publication.MIRROR_WORKFLOW_ID: "disabled_manually"})
+    api = MockApi({231747419: "active", 250252266: "disabled_manually", publication.MIRROR_WORKFLOW_ID: "disabled_manually"})
     suppression = publication.set_controls(plan, manifest, api, restore=False)
     restoration = publication.set_controls(plan, manifest, api, restore=True)
-    if api.states != {101: "active", 102: "disabled_manually", publication.MIRROR_WORKFLOW_ID: "disabled_manually"}:
+    if api.states != {231747419: "active", 250252266: "disabled_manually", publication.MIRROR_WORKFLOW_ID: "disabled_manually"}:
         raise SystemExit("control restoration did not reproduce the captured state")
     evidence.append("control_suppression_and_restoration")
-    drain = publication.wait_for_writers(plan, manifest, api, current_run_id=99, timeout_seconds=0, interval_seconds=0)
-    if drain["status"] != "drained" or suppression["operation"] != "suppress" or restoration["operation"] != "restore":
+    writer_check = publication.check_writers_once(api, current_run_id=99)
+    if writer_check["status"] != "drained-at-single-read" or suppression["operation"] != "suppress" or restoration["operation"] != "restore":
         raise SystemExit("control lifecycle receipt mismatch")
-    busy = MockApi(api.states, {101: [{"id": 100, "status": "in_progress", "head_sha": "a" * 40}]})
-    evidence.append(expect_failure("active_writer", lambda: publication.wait_for_writers(plan, manifest, busy, current_run_id=99, timeout_seconds=0, interval_seconds=0)))
+    busy = MockApi(api.states, {231747419: [{"id": 100, "status": "in_progress", "head_sha": "a" * 40}]})
+    evidence.append(expect_failure("active_writer_single_check", lambda: publication.check_writers_once(busy, current_run_id=99)))
+    with tempfile.TemporaryDirectory() as phase_temporary:
+        phase_root = Path(phase_temporary)
+        manifest_path, preflight, plan_path, intent = phase_files(phase_root, manifest)
+        publication.validate_phase_bindings(
+            manifest, frozen_sha="5" * 40, frozen_tree="6" * 40, manifest_sha256=digest(manifest),
+            preflight_path=preflight, control_plan=plan_path, intent_path=intent,
+        )
+        evidence.append(expect_failure("external_manifest_digest", lambda: publication.validate_phase_bindings(
+            manifest, frozen_sha="5" * 40, frozen_tree="6" * 40, manifest_sha256="0" * 64,
+            preflight_path=preflight, control_plan=plan_path, intent_path=intent,
+        )))
+        evidence.append(expect_failure("external_frozen_harness", lambda: publication.validate_phase_bindings(
+            manifest, frozen_sha="0" * 40, frozen_tree="6" * 40, manifest_sha256=digest(manifest),
+            preflight_path=preflight, control_plan=plan_path, intent_path=intent,
+        )))
+        artifact = phase_root / "intent.zip"
+        with zipfile.ZipFile(artifact, "w") as archive:
+            for path in (manifest_path, preflight, plan_path, intent):
+                archive.write(path, path.name)
+        artifact_digest = publication.file_digest(artifact)
+        metadata = phase_root / "artifact.json"
+        publication.write_json(metadata, {
+            "id": 700, "name": "history-rewrite-publication-intent-70", "digest": "sha256:" + artifact_digest,
+            "expired": False, "workflow_run": {"id": 70},
+        })
+        fixture_api = phase_root / "fixture-api.json"
+        publication.write_json(fixture_api, {
+            "installation": {"app_id": publication.PUBLISHER_APP_ID, "app_slug": "fixture-publisher"},
+            "app": {"id": publication.PUBLISHER_APP_ID, "node_id": publication.PUBLISHER_APP_NODE_ID},
+            "workflows": {
+                "231747419": {"id": 231747419, "path": ".github/workflows/rust-release.yml", "state": "disabled_manually"},
+                "250252266": {"id": 250252266, "path": ".github/workflows/sedna-release.yml", "state": "disabled_manually"},
+                str(publication.MIRROR_WORKFLOW_ID): {"id": publication.MIRROR_WORKFLOW_ID, "path": ".github/workflows/sedna-sync-upstream.yml", "state": "disabled_manually"},
+            },
+        })
+        receipt = phase_root / "independent-restoration.json"
+        command = [
+            sys.executable, str(Path(publication.__file__)), "restore-intent-artifact",
+            "--artifact-zip", str(artifact), "--artifact-api-json", str(metadata),
+            "--run-id", "70", "--artifact-id", "700", "--artifact-api-digest", artifact_digest,
+            "--frozen-sha", "5" * 40, "--frozen-tree", "6" * 40,
+            "--manifest-sha256", digest(manifest), "--receipt", str(receipt),
+            "--fixture-api", str(fixture_api),
+        ]
+        environment = dict(os.environ); environment["HISTORY_REWRITE_PUBLICATION_FIXTURE"] = "1"
+        rejected_command = list(command)
+        rejected_command[rejected_command.index(digest(manifest))] = "0" * 64
+        rejected = subprocess.run(rejected_command, text=True, capture_output=True, env=environment)
+        if rejected.returncode == 0:
+            raise SystemExit("independent restoration CLI accepted a changed external manifest digest")
+        recovered = subprocess.run(command, text=True, capture_output=True, env=environment)
+        if recovered.returncode != 0:
+            raise SystemExit("independent hard-kill restoration CLI failed: " + recovered.stderr.strip())
+        recovered_receipt = publication.load_object(receipt, "independent restoration receipt")
+        if recovered_receipt.get("restoration", {}).get("operation") != "restore":
+            raise SystemExit("independent hard-kill restoration CLI did not restore captured states")
+        evidence.extend(["independent_restoration_rejects_changed_manifest", "independent_uploaded_intent_restoration_cli"])
     with tempfile.TemporaryDirectory() as temporary:
         positive, rejected = git_adapter_fixture(Path(temporary))
         evidence.extend(["real_git_atomic_leases:" + positive, "real_git_atomic_rejection:" + rejected])

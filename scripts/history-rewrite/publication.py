@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fnmatch
 import hashlib
 import json
 import os
@@ -20,13 +21,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Protocol
+from typing import Mapping, Protocol, Sequence
 
 
 REPOSITORY = "sednalabs/codex"
@@ -38,10 +38,17 @@ REVIEW_RULE_ID = 65216203
 BRANCH_RULE_PROTECTION_ID = 65216204
 BRANCH_POLICY_ID = 59660428
 MIRROR_WORKFLOW_ID = 250252269
-SUPPRESSIBLE_WORKFLOWS = {
-    ".github/workflows/rust-release.yml",
-    ".github/workflows/sedna-release.yml",
+PUBLISHER_APP_ID = 3520391
+PUBLISHER_APP_NODE_ID = "A_kwHODOdWjM4ANbeH"
+WRITER_WORKFLOWS = {
+    ".github/workflows/rust-release.yml": 231747419,
+    ".github/workflows/sedna-release.yml": 250252266,
 }
+PROTECTED_REFS = (
+    "refs/heads/main",
+    "refs/heads/upstream-main",
+    "refs/heads/integration/app-server-delivery-train-20260824",
+)
 PROOF_FILES = {
     "annotated-tag-ref-transport.json",
     "commit-map.txt",
@@ -78,6 +85,7 @@ class PublicationError(RuntimeError):
 class Api(Protocol):
     def get(self, path: str) -> object: ...
     def put(self, path: str) -> None: ...
+    def post_graphql(self, query: str, variables: Mapping[str, str]) -> object: ...
 
 
 def canonical_json(value: object) -> bytes:
@@ -197,16 +205,14 @@ def validate_manifest(manifest: Mapping[str, object], *, frozen_sha: str, frozen
         raise PublicationError("publication branch or environment binding mismatch")
     if controls.get("reviewer_id") != REVIEWER_ID or controls.get("reviewer_login") != REVIEWER_LOGIN:
         raise PublicationError("required reviewer binding mismatch")
-    suppress = controls.get("suppress_workflows")
-    if not isinstance(suppress, list) or not suppress or len(suppress) != len(set(suppress)):
-        raise PublicationError("suppressed workflow list is empty or duplicated")
-    if not set(suppress).issubset(SUPPRESSIBLE_WORKFLOWS):
-        raise PublicationError("manifest attempts to suppress an unauthorised workflow")
-    writers = controls.get("active_writer_workflows")
-    if not isinstance(writers, list) or not writers or any(not isinstance(item, int) or item <= 0 for item in writers):
-        raise PublicationError("active writer workflow IDs are incomplete")
-    if len(writers) != len(set(writers)) or controls.get("mirror_workflow_id") != MIRROR_WORKFLOW_ID:
-        raise PublicationError("active writer or mirror workflow binding mismatch")
+    if controls.get("writer_workflows") != WRITER_WORKFLOWS or controls.get("mirror_workflow_id") != MIRROR_WORKFLOW_ID:
+        raise PublicationError("mandatory writer or mirror workflow binding mismatch")
+    if controls.get("protected_refs") != list(PROTECTED_REFS):
+        raise PublicationError("protected ref domain mismatch")
+    snapshot = controls.get("protection_snapshot")
+    if not isinstance(snapshot, dict) or controls.get("protection_snapshot_sha256") != digest(snapshot):
+        raise PublicationError("approved protection snapshot is missing or has the wrong digest")
+    validate_protection_snapshot(snapshot)
     return selected, output
 
 
@@ -237,6 +243,144 @@ def validate_environment(environment: object, policies: object) -> None:
     policy = items[0]
     if not isinstance(policy, dict) or (policy.get("id"), policy.get("name"), policy.get("type", "branch")) != (BRANCH_POLICY_ID, PUBLICATION_BRANCH, "branch"):
         raise PublicationError("live deployment branch policy identity mismatch")
+
+
+BRANCH_PROTECTION_QUERY = """query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    branchProtectionRules(first: 100) {
+      totalCount
+      nodes {
+        id pattern allowsForcePushes isAdminEnforced requiresStatusChecks
+        requiredStatusCheckContexts requiresApprovingReviews requiredApprovingReviewCount
+        requiresConversationResolution restrictsPushes
+        bypassForcePushAllowances(first: 100) {
+          totalCount
+          nodes { actor { __typename ... on App { id databaseId slug } } }
+        }
+      }
+    }
+  }
+}"""
+
+
+def normalize_protection_snapshot(branch_document: object, ruleset_documents: Sequence[object]) -> dict:
+    try:
+        branch_rules = branch_document["data"]["repository"]["branchProtectionRules"]
+        nodes = branch_rules["nodes"]
+    except (KeyError, TypeError) as exc:
+        raise PublicationError("branch protection GraphQL evidence is malformed") from exc
+    if not isinstance(nodes, list) or branch_rules.get("totalCount") != len(nodes) or len(nodes) >= 100:
+        raise PublicationError("branch protection GraphQL result is incomplete")
+    normalized_rules = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            raise PublicationError("branch protection rule is malformed")
+        allowances = node.get("bypassForcePushAllowances")
+        allowance_nodes = allowances.get("nodes") if isinstance(allowances, dict) else None
+        if not isinstance(allowance_nodes, list) or allowances.get("totalCount") != len(allowance_nodes) or len(allowance_nodes) >= 100:
+            raise PublicationError("force-push allowance result is incomplete")
+        actors = []
+        for allowance in allowance_nodes:
+            actor = allowance.get("actor") if isinstance(allowance, dict) else None
+            if not isinstance(actor, dict):
+                raise PublicationError("force-push allowance actor is malformed")
+            actors.append({key: actor.get(key) for key in ("__typename", "id", "databaseId", "slug")})
+        normalized_rules.append({
+            "id": node.get("id"),
+            "pattern": node.get("pattern"),
+            "allows_force_pushes": node.get("allowsForcePushes"),
+            "is_admin_enforced": node.get("isAdminEnforced"),
+            "requires_status_checks": node.get("requiresStatusChecks"),
+            "required_status_check_contexts": node.get("requiredStatusCheckContexts"),
+            "requires_approving_reviews": node.get("requiresApprovingReviews"),
+            "required_approving_review_count": node.get("requiredApprovingReviewCount"),
+            "requires_conversation_resolution": node.get("requiresConversationResolution"),
+            "restricts_pushes": node.get("restrictsPushes"),
+            "bypass_force_push_allowances": sorted(actors, key=lambda item: canonical_json(item)),
+        })
+    normalized_rules.sort(key=lambda item: (str(item["pattern"]), str(item["id"])))
+    rulesets = []
+    for document in ruleset_documents:
+        if not isinstance(document, dict) or not isinstance(document.get("id"), int):
+            raise PublicationError("repository ruleset evidence is malformed")
+        rulesets.append({key: document.get(key) for key in ("id", "name", "target", "enforcement", "bypass_actors", "conditions", "rules")})
+    rulesets.sort(key=lambda item: item["id"])
+    return {
+        "schema": "history-rewrite-protection-snapshot-v1",
+        "protected_refs": list(PROTECTED_REFS),
+        "branch_protection_rules": normalized_rules,
+        "repository_rulesets": rulesets,
+    }
+
+
+def validate_protection_snapshot(snapshot: object) -> None:
+    if not isinstance(snapshot, dict) or snapshot.get("schema") != "history-rewrite-protection-snapshot-v1" or snapshot.get("protected_refs") != list(PROTECTED_REFS):
+        raise PublicationError("protection snapshot schema or protected ref domain mismatch")
+    branch_rules = snapshot.get("branch_protection_rules")
+    rulesets = snapshot.get("repository_rulesets")
+    if not isinstance(branch_rules, list) or not isinstance(rulesets, list):
+        raise PublicationError("protection snapshot rule domains are malformed")
+    def matches_ref(ref: str, pattern: object) -> bool:
+        if pattern == "~ALL":
+            return True
+        if pattern == "~DEFAULT_BRANCH":
+            return ref == "refs/heads/main"
+        return isinstance(pattern, str) and fnmatch.fnmatchcase(ref, pattern)
+
+    for ref in PROTECTED_REFS:
+        branch = ref.removeprefix("refs/heads/")
+        matches = [item for item in branch_rules if isinstance(item, dict) and item.get("pattern") == branch]
+        if len(matches) != 1 or matches[0].get("allows_force_pushes") is not True:
+            raise PublicationError(f"protected ref lacks an exact temporary force-push rule: {ref}")
+        allowances = matches[0].get("bypass_force_push_allowances")
+        if not isinstance(allowances, list) or not any(
+            isinstance(item, dict)
+            and item.get("__typename") == "App"
+            and item.get("id") == PUBLISHER_APP_NODE_ID
+            and item.get("databaseId") == PUBLISHER_APP_ID
+            and isinstance(item.get("slug"), str)
+            for item in allowances if isinstance(item, dict)
+        ):
+            raise PublicationError(f"protected ref lacks the exact publisher App allowance: {ref}")
+    for ruleset in rulesets:
+        if not isinstance(ruleset, dict) or ruleset.get("target") != "branch" or ruleset.get("enforcement") != "active":
+            continue
+        conditions = ruleset.get("conditions")
+        ref_names = conditions.get("ref_name") if isinstance(conditions, dict) else None
+        includes = ref_names.get("include") if isinstance(ref_names, dict) else None
+        excludes = ref_names.get("exclude") if isinstance(ref_names, dict) else []
+        if includes is None:
+            applicable = list(PROTECTED_REFS)
+        elif not isinstance(includes, list) or not isinstance(excludes, list):
+            raise PublicationError(f"ruleset has malformed ref conditions: {ruleset.get('id')}")
+        else:
+            applicable = [
+                ref for ref in PROTECTED_REFS
+                if any(matches_ref(ref, pattern) for pattern in includes)
+                and not any(matches_ref(ref, pattern) for pattern in excludes)
+            ]
+        if not applicable:
+            continue
+        bypass = ruleset.get("bypass_actors")
+        if not isinstance(bypass, list) or not any(
+            isinstance(item, dict)
+            and item.get("actor_type") == "Integration"
+            and item.get("actor_id") == PUBLISHER_APP_ID
+            and item.get("bypass_mode") == "always"
+            for item in bypass
+        ):
+            raise PublicationError(f"applicable ruleset lacks the publisher App bypass: {ruleset.get('id')}")
+
+
+def protection_snapshot_from_api(api: Api) -> dict:
+    branch_document = api.post_graphql(BRANCH_PROTECTION_QUERY, {"owner": "sednalabs", "name": "codex"})
+    listing = api.get(f"/repos/{REPOSITORY}/rulesets?includes_parents=true&per_page=100")
+    if not isinstance(listing, list) or len(listing) >= 100:
+        raise PublicationError("repository ruleset listing is malformed or incomplete")
+    documents = [api.get(f"/repos/{REPOSITORY}/rulesets/{item.get('id')}") for item in listing if isinstance(item, dict)]
+    if len(documents) != len(listing):
+        raise PublicationError("repository ruleset listing contains a malformed identity")
+    return normalize_protection_snapshot(branch_document, documents)
 
 
 def validate_approval(approvals: object) -> None:
@@ -307,6 +451,49 @@ def verify_proof_zip(path: Path, expected: Mapping[str, str], api_digest: str, o
         raise PublicationError(f"invalid proof artifact zip: {exc}") from exc
 
 
+def protection_snapshot_from_files(api_dir: Path) -> dict:
+    branch_document = load_object(api_dir / "branch-protection-rules.json")
+    try:
+        listing = json.loads((api_dir / "rulesets.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublicationError(f"invalid repository ruleset listing: {exc}") from exc
+    if not isinstance(listing, list) or len(listing) >= 100:
+        raise PublicationError("repository ruleset listing is malformed or incomplete")
+    documents = []
+    for item in listing:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), int):
+            raise PublicationError("repository ruleset listing contains a malformed identity")
+        documents.append(load_object(api_dir / f"ruleset-{item['id']}.json"))
+    return normalize_protection_snapshot(branch_document, documents)
+
+
+def check_writer_documents(documents: Mapping[int, object], *, current_run_id: int) -> dict:
+    active = []
+    for workflow_id in WRITER_WORKFLOWS.values():
+        responses = documents.get(workflow_id)
+        if not isinstance(responses, list) or len(responses) != len(ACTIVE_RUN_STATES):
+            raise PublicationError("active writer state response domain is incomplete")
+        if {item.get("requested_status") for item in responses if isinstance(item, dict)} != ACTIVE_RUN_STATES:
+            raise PublicationError("active writer status-filter domain is incomplete")
+        for item in responses:
+            requested_status = item.get("requested_status") if isinstance(item, dict) else None
+            value = item.get("response") if isinstance(item, dict) else None
+            runs = value.get("workflow_runs") if isinstance(value, dict) else None
+            if not isinstance(runs, list) or value.get("total_count") != len(runs) or len(runs) >= 100:
+                raise PublicationError("active writer run listing is malformed or exceeds its bounded state page")
+            if any(not isinstance(run, dict) or run.get("status") != requested_status for run in runs):
+                raise PublicationError("active writer response contains a run outside its requested status")
+            active.extend(
+                {"workflow_id": workflow_id, "run_id": run.get("id"), "status": run.get("status"), "head_sha": run.get("head_sha")}
+                for run in runs
+                if isinstance(run, dict) and run.get("id") != current_run_id and run.get("status") in ACTIVE_RUN_STATES
+            )
+    if active:
+        identities = ",".join(str(item["run_id"]) for item in active)
+        raise PublicationError(f"active writer runs require external blocking-watcher drain before a fresh dispatch: {identities}")
+    return {"schema": "history-rewrite-writer-check-v1", "active": [], "status": "drained-at-single-read"}
+
+
 def validate_preflight(manifest: dict, *, frozen_sha: str, frozen_tree: str, manifest_sha256: str, api_dir: Path, output: Path) -> None:
     selected, _ = validate_manifest(manifest, frozen_sha=frozen_sha, frozen_tree=frozen_tree)
     if not HEX64.fullmatch(manifest_sha256) or digest(manifest) != manifest_sha256:
@@ -356,9 +543,12 @@ def validate_preflight(manifest: dict, *, frozen_sha: str, frozen_tree: str, man
         raise PublicationError("proof artifact binding differs from the manifest and verified backup")
     if load_object(proof_output / "verified-backup.json") != verified:
         raise PublicationError("proof run and current preflight verified different backup receipts")
+    live_protection = protection_snapshot_from_files(api_dir)
+    if live_protection != manifest["controls"]["protection_snapshot"]:
+        raise PublicationError("live branch protection, ruleset, or publisher App allowance differs from the approved manifest")
     workflow_snapshots = {}
     controls = manifest["controls"]
-    expected_ids = set(controls["active_writer_workflows"]) | {MIRROR_WORKFLOW_ID}
+    expected_ids = set(WRITER_WORKFLOWS.values()) | {MIRROR_WORKFLOW_ID}
     for workflow_id in sorted(expected_ids):
         snapshot = load_object(api_dir / f"workflow-{workflow_id}.json")
         if snapshot.get("id") != workflow_id or not isinstance(snapshot.get("path"), str):
@@ -369,11 +559,15 @@ def validate_preflight(manifest: dict, *, frozen_sha: str, frozen_tree: str, man
         raise PublicationError("mirror workflow is not in its required continuing pause")
     paths = {item["path"]: item for item in workflow_snapshots.values()}
     suppress_plan = []
-    for path in controls["suppress_workflows"]:
+    for path, workflow_id in WRITER_WORKFLOWS.items():
         item = paths.get(path)
-        if item is None or item["state"] not in {"active", "disabled_manually"}:
+        if item is None or item["id"] != workflow_id or item["state"] not in {"active", "disabled_manually"}:
             raise PublicationError("suppressed workflow live state is unavailable or unsupported")
         suppress_plan.append(item)
+    writer_check = check_writer_documents(
+        {workflow_id: load_object(api_dir / f"writer-runs-{workflow_id}.json") for workflow_id in WRITER_WORKFLOWS.values()},
+        current_run_id=0,
+    )
     output.mkdir(parents=True, exist_ok=True)
     write_json(output / "manifest.json", manifest)
     write_json(output / "control-plan.json", {
@@ -381,8 +575,9 @@ def validate_preflight(manifest: dict, *, frozen_sha: str, frozen_tree: str, man
         "repository": REPOSITORY,
         "manifest_sha256": manifest_sha256,
         "suppression": suppress_plan,
-        "active_writer_workflow_ids": controls["active_writer_workflows"],
+        "writer_workflows": WRITER_WORKFLOWS,
         "mirror": mirror,
+        "protection_snapshot_sha256": digest(live_protection),
     })
     write_json(output / "preflight.json", {
         "schema": "history-rewrite-publication-preflight-v1",
@@ -390,9 +585,13 @@ def validate_preflight(manifest: dict, *, frozen_sha: str, frozen_tree: str, man
         "manifest_sha256": manifest_sha256,
         "harness_sha": frozen_sha,
         "harness_tree": frozen_tree,
+        "selected_refs_sha256": manifest["selected_refs_sha256"],
+        "output_refs_sha256": manifest["output_refs_sha256"],
         "backup_run_id": backup["run_id"],
         "proof_run_id": proof["run_id"],
         "approval": {"id": REVIEWER_ID, "login": REVIEWER_LOGIN},
+        "writer_check": writer_check,
+        "protection_snapshot_sha256": digest(live_protection),
         "status": "verified-before-app-token",
     })
 
@@ -432,9 +631,62 @@ def _object_types(repo: Path, refs: Mapping[str, str]) -> dict[str, str]:
     return result
 
 
-def prepare_candidate(manifest: dict, *, remote_url: str, work_root: Path, proof_dir: Path, intent_path: Path,
+def validate_phase_bindings(manifest: dict, *, frozen_sha: str, frozen_tree: str, manifest_sha256: str,
+                            preflight_path: Path, control_plan: Path, intent_path: Path | None = None) -> tuple[dict[str, str], dict[str, str]]:
+    selected, output = validate_manifest(manifest, frozen_sha=frozen_sha, frozen_tree=frozen_tree)
+    if not HEX64.fullmatch(manifest_sha256) or digest(manifest) != manifest_sha256:
+        raise PublicationError("phase manifest differs from the externally approved digest")
+    preflight = load_object(preflight_path, "durable preflight")
+    expected_writer_check = {
+        "schema": "history-rewrite-writer-check-v1",
+        "active": [],
+        "status": "drained-at-single-read",
+    }
+    if (
+        preflight.get("schema") != "history-rewrite-publication-preflight-v1"
+        or preflight.get("repository") != REPOSITORY
+        or preflight.get("manifest_sha256") != manifest_sha256
+        or preflight.get("harness_sha") != frozen_sha
+        or preflight.get("harness_tree") != frozen_tree
+        or preflight.get("selected_refs_sha256") != manifest["selected_refs_sha256"]
+        or preflight.get("output_refs_sha256") != manifest["output_refs_sha256"]
+        or preflight.get("backup_run_id") != manifest["backup"]["run_id"]
+        or preflight.get("proof_run_id") != manifest["proof"]["run_id"]
+        or preflight.get("approval") != {"id": REVIEWER_ID, "login": REVIEWER_LOGIN}
+        or preflight.get("writer_check") != expected_writer_check
+        or preflight.get("protection_snapshot_sha256") != manifest["controls"]["protection_snapshot_sha256"]
+        or preflight.get("status") != "verified-before-app-token"
+    ):
+        raise PublicationError("durable preflight binding mismatch")
+    plan = load_object(control_plan, "control plan")
+    validate_control_plan(plan, manifest)
+    if intent_path is not None:
+        intent = load_object(intent_path, "durable restoration intent")
+        expected = {
+            "schema": "history-rewrite-restoration-intent-v1",
+            "repository": REPOSITORY,
+            "manifest_sha256": manifest_sha256,
+            "harness_sha": frozen_sha,
+            "harness_tree": frozen_tree,
+            "preflight_sha256": file_digest(preflight_path),
+            "control_plan_sha256": file_digest(control_plan),
+            "before_refs_sha256": digest(selected),
+            "output_refs_sha256": digest(output),
+            "regenerated_proof_digests_sha256": digest(manifest["proof_digests"]),
+            "status": "ready-no-write-credential-accessed",
+        }
+        if intent != expected:
+            raise PublicationError("durable restoration intent binding mismatch")
+    return selected, output
+
+
+def prepare_candidate(manifest: dict, *, frozen_sha: str, frozen_tree: str, manifest_sha256: str,
+                      preflight_path: Path, remote_url: str, work_root: Path, proof_dir: Path, intent_path: Path,
                       control_plan: Path, fixture_policy: Path | None = None) -> None:
-    selected, output = validate_manifest(manifest, frozen_sha=manifest["harness_sha"], frozen_tree=manifest["harness_tree"])
+    selected, output = validate_phase_bindings(
+        manifest, frozen_sha=frozen_sha, frozen_tree=frozen_tree, manifest_sha256=manifest_sha256,
+        preflight_path=preflight_path, control_plan=control_plan,
+    )
     if fixture_policy is not None:
         if os.environ.get("HISTORY_REWRITE_PUBLICATION_FIXTURE") != "1" or remote_url.startswith(("http://", "https://")):
             raise PublicationError("fixture policy override is restricted to an explicit local-remote fixture")
@@ -489,7 +741,10 @@ def prepare_candidate(manifest: dict, *, remote_url: str, work_root: Path, proof
     write_json(intent_path, {
         "schema": "history-rewrite-restoration-intent-v1",
         "repository": REPOSITORY,
-        "manifest_sha256": digest(manifest),
+        "manifest_sha256": manifest_sha256,
+        "harness_sha": frozen_sha,
+        "harness_tree": frozen_tree,
+        "preflight_sha256": file_digest(preflight_path),
         "control_plan_sha256": plan_digest,
         "before_refs_sha256": digest(before),
         "output_refs_sha256": digest(output),
@@ -515,6 +770,7 @@ class PublicationResult:
     outcome: str
     reason: str
     after_refs: Mapping[str, str]
+    final_state: Mapping[str, object] | None = None
 
 
 def resolve_push_failure(output: Mapping[str, str], error: PublicationError, readback) -> PublicationResult:
@@ -528,8 +784,14 @@ def resolve_push_failure(output: Mapping[str, str], error: PublicationError, rea
     return PublicationResult("success", "transport exception resolved by exact full-namespace readback", after)
 
 
-def publish_repository(manifest: dict, *, repo: Path, remote_url: str, token: str | None = None) -> PublicationResult:
-    selected, output = validate_manifest(manifest, frozen_sha=manifest["harness_sha"], frozen_tree=manifest["harness_tree"])
+def publish_repository(manifest: dict, *, frozen_sha: str, frozen_tree: str, manifest_sha256: str,
+                       preflight_path: Path, control_plan: Path, intent_path: Path, read_api: Api,
+                       current_run_id: int, repo: Path, remote_url: str, token: str | None = None) -> PublicationResult:
+    selected, output = validate_phase_bindings(
+        manifest, frozen_sha=frozen_sha, frozen_tree=frozen_tree, manifest_sha256=manifest_sha256,
+        preflight_path=preflight_path, control_plan=control_plan, intent_path=intent_path,
+    )
+    final_state = verify_live_publication_state(manifest, read_api, current_run_id=current_run_id)
     env, credential_root = credential_environment(remote_url, token)
     try:
         before = advertised_refs(remote_url, env=env)
@@ -545,7 +807,7 @@ def publish_repository(manifest: dict, *, repo: Path, remote_url: str, token: st
         except PublicationError as push_error:
             resolved = resolve_push_failure(output, push_error, lambda: advertised_refs(remote_url, env=env))
             if resolved.outcome != "success":
-                return resolved
+                return PublicationResult(resolved.outcome, resolved.reason, resolved.after_refs, final_state)
             after, reason = dict(resolved.after_refs), resolved.reason
         else:
             after = advertised_refs(remote_url, env=env)
@@ -567,7 +829,7 @@ def publish_repository(manifest: dict, *, repo: Path, remote_url: str, token: st
         final = advertised_refs(remote_url, env=env)
         if final != output:
             raise PublicationError("remote changed during clean-fetch verification")
-        return PublicationResult("success", reason + "; full readback and clean fetch verified", final)
+        return PublicationResult("success", reason + "; full readback and clean fetch verified", final, final_state)
     finally:
         if credential_root is not None:
             shutil.rmtree(credential_root, ignore_errors=True)
@@ -579,11 +841,13 @@ class GitHubApi:
             raise PublicationError("GitHub API token is unavailable")
         self.token, self.base_url = token, base_url.rstrip("/")
 
-    def _request(self, method: str, path: str) -> object:
+    def _request(self, method: str, path: str, body: object | None = None) -> object:
+        data = None if body is None else canonical_json(body)
         request = urllib.request.Request(
             self.base_url + path,
             method=method,
-            headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}", "X-GitHub-Api-Version": "2022-11-28"},
+            data=data,
+            headers={"Accept": "application/vnd.github+json", "Content-Type": "application/json", "Authorization": f"Bearer {self.token}", "X-GitHub-Api-Version": "2022-11-28"},
         )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
@@ -603,6 +867,42 @@ class GitHubApi:
     def put(self, path: str) -> None:
         self._request("PUT", path)
 
+    def post_graphql(self, query: str, variables: Mapping[str, str]) -> object:
+        return self._request("POST", "/graphql", {"query": query, "variables": dict(variables)})
+
+
+class FixtureApi:
+    """File-backed API restricted to the hosted disposable-remote fixture."""
+    def __init__(self, state: dict):
+        self.state = state
+
+    def get(self, path: str) -> object:
+        if path == "/installation":
+            return self.state["installation"]
+        if path.startswith("/apps/"):
+            return self.state["app"]
+        if path.startswith(f"/repos/{REPOSITORY}/rulesets?"):
+            return self.state["rulesets"]
+        if f"/repos/{REPOSITORY}/rulesets/" in path:
+            ruleset_id = path.rsplit("/", 1)[1]
+            return self.state["ruleset_documents"][ruleset_id]
+        parts = path.split("?")[0].split("/")
+        workflow_id = parts[6]
+        if parts[-1] == "runs":
+            return self.state["writer_runs"][workflow_id]
+        return self.state["workflows"][workflow_id]
+
+    def put(self, path: str) -> None:
+        parts = path.split("/")
+        workflow_id, action = parts[6], parts[7]
+        workflow = self.state["workflows"].get(workflow_id)
+        if not isinstance(workflow, dict) or action not in {"enable", "disable"}:
+            raise PublicationError("fixture workflow mutation is malformed")
+        workflow["state"] = "active" if action == "enable" else "disabled_manually"
+
+    def post_graphql(self, query: str, variables: Mapping[str, str]) -> object:
+        return self.state["branch_protection_document"]
+
 
 def validate_control_plan(plan: dict, manifest: dict) -> None:
     if (
@@ -614,14 +914,15 @@ def validate_control_plan(plan: dict, manifest: dict) -> None:
     ):
         raise PublicationError("control plan binding mismatch")
     suppression = plan.get("suppression")
-    if not isinstance(suppression, list) or {item.get("path") for item in suppression if isinstance(item, dict)} != set(manifest["controls"]["suppress_workflows"]):
+    if not isinstance(suppression, list) or {item.get("path") for item in suppression if isinstance(item, dict)} != set(WRITER_WORKFLOWS):
         raise PublicationError("control plan suppression domain mismatch")
     if (
-        len(suppression) != len(manifest["controls"]["suppress_workflows"])
+        len(suppression) != len(WRITER_WORKFLOWS)
         or any(not isinstance(item, dict) or not isinstance(item.get("id"), int) or item["id"] <= 0 or item.get("state") not in {"active", "disabled_manually"} for item in suppression)
         or len({item["id"] for item in suppression}) != len(suppression)
-        or not {item["id"] for item in suppression}.issubset(set(manifest["controls"]["active_writer_workflows"]))
-        or plan.get("active_writer_workflow_ids") != manifest["controls"]["active_writer_workflows"]
+        or {item["path"]: item["id"] for item in suppression} != WRITER_WORKFLOWS
+        or plan.get("writer_workflows") != WRITER_WORKFLOWS
+        or plan.get("protection_snapshot_sha256") != manifest["controls"]["protection_snapshot_sha256"]
     ):
         raise PublicationError("control plan workflow identity or captured state mismatch")
 
@@ -632,7 +933,7 @@ def set_controls(plan: dict, manifest: dict, api: Api, *, restore: bool) -> dict
     for item in plan["suppression"]:
         workflow_id, original = item["id"], item["state"]
         live = api.get(f"/repos/{REPOSITORY}/actions/workflows/{workflow_id}")
-        if not isinstance(live, dict) or live.get("id") != workflow_id:
+        if not isinstance(live, dict) or live.get("id") != workflow_id or live.get("path") != item["path"]:
             raise PublicationError("workflow control readback identity mismatch")
         if not restore and live.get("state") != original:
             raise PublicationError("workflow state changed after the captured preflight")
@@ -643,37 +944,110 @@ def set_controls(plan: dict, manifest: dict, api: Api, *, restore: bool) -> dict
             action = "enable" if target == "active" else "disable"
             api.put(f"/repos/{REPOSITORY}/actions/workflows/{workflow_id}/{action}")
         after = api.get(f"/repos/{REPOSITORY}/actions/workflows/{workflow_id}")
-        if not isinstance(after, dict) or after.get("id") != workflow_id or after.get("state") != target:
+        if not isinstance(after, dict) or after.get("id") != workflow_id or after.get("path") != item["path"] or after.get("state") != target:
             raise PublicationError("workflow control mutation did not reach its exact target state")
         results.append({"id": workflow_id, "path": item["path"], "before": live.get("state"), "after": target})
     mirror = api.get(f"/repos/{REPOSITORY}/actions/workflows/{MIRROR_WORKFLOW_ID}")
-    if not isinstance(mirror, dict) or mirror.get("state") != "disabled_manually":
+    if (
+        not isinstance(mirror, dict)
+        or mirror.get("id") != MIRROR_WORKFLOW_ID
+        or mirror.get("path") != ".github/workflows/sedna-sync-upstream.yml"
+        or mirror.get("state") != "disabled_manually"
+    ):
         raise PublicationError("mirror workflow pause changed during publication")
     return {"schema": "history-rewrite-control-receipt-v1", "operation": "restore" if restore else "suppress", "results": results, "mirror_state": "disabled_manually"}
 
 
-def wait_for_writers(plan: dict, manifest: dict, api: Api, *, current_run_id: int, timeout_seconds: int, interval_seconds: int) -> dict:
-    validate_control_plan(plan, manifest)
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        active = []
-        for workflow_id in plan["active_writer_workflow_ids"]:
-            value = api.get(f"/repos/{REPOSITORY}/actions/workflows/{workflow_id}/runs?per_page=100")
-            runs = value.get("workflow_runs") if isinstance(value, dict) else None
-            if not isinstance(runs, list):
-                raise PublicationError("active writer run listing is malformed")
-            if isinstance(value.get("total_count"), int) and value["total_count"] > len(runs):
-                raise PublicationError("active writer run listing exceeds the single bounded API page")
-            active.extend(
-                {"workflow_id": workflow_id, "run_id": run.get("id"), "status": run.get("status"), "head_sha": run.get("head_sha")}
-                for run in runs
-                if isinstance(run, dict) and run.get("id") != current_run_id and run.get("status") in ACTIVE_RUN_STATES
+def validate_publisher_identity(api: Api) -> dict:
+    installation = api.get("/installation")
+    if not isinstance(installation, dict) or installation.get("app_id") != PUBLISHER_APP_ID or not isinstance(installation.get("app_slug"), str):
+        raise PublicationError("publisher token installation identity mismatch")
+    app = api.get(f"/apps/{installation['app_slug']}")
+    if not isinstance(app, dict) or app.get("id") != PUBLISHER_APP_ID or app.get("node_id") != PUBLISHER_APP_NODE_ID:
+        raise PublicationError("publisher App identity mismatch")
+    return {"app_id": PUBLISHER_APP_ID, "app_node_id": PUBLISHER_APP_NODE_ID, "app_slug": installation["app_slug"]}
+
+
+def restore_from_intent_artifact(*, artifact_zip: Path, artifact_api_json: Path, run_id: int, artifact_id: int,
+                                 artifact_api_digest: str, frozen_sha: str, frozen_tree: str, manifest_sha256: str,
+                                 api: Api) -> dict:
+    metadata = load_object(artifact_api_json, "intent artifact API evidence")
+    if (
+        metadata.get("id") != artifact_id
+        or metadata.get("name") != f"history-rewrite-publication-intent-{run_id}"
+        or metadata.get("digest") != f"sha256:{artifact_api_digest}"
+        or metadata.get("expired") is not False
+        or metadata.get("workflow_run", {}).get("id") != run_id
+        or file_digest(artifact_zip) != artifact_api_digest
+    ):
+        raise PublicationError("uploaded restoration-intent artifact identity or digest mismatch")
+    expected_names = {"manifest.json", "control-plan.json", "preflight.json", "publication-restoration-intent.json"}
+    try:
+        with zipfile.ZipFile(artifact_zip) as archive, tempfile.TemporaryDirectory(prefix="history-rewrite-restore-") as temporary:
+            files = [name for name in archive.namelist() if not name.endswith("/")]
+            basenames = [Path(name).name for name in files]
+            if set(basenames) != expected_names or len(basenames) != len(expected_names):
+                raise PublicationError("restoration-intent artifact has an unexpected or duplicate file domain")
+            root = Path(temporary)
+            for name in files:
+                info = archive.getinfo(name)
+                if info.file_size <= 0 or info.file_size > 1024 * 1024:
+                    raise PublicationError("restoration-intent artifact member size is invalid")
+                (root / Path(name).name).write_bytes(archive.read(info))
+            manifest = load_object(root / "manifest.json", "manifest")
+            validate_phase_bindings(
+                manifest, frozen_sha=frozen_sha, frozen_tree=frozen_tree, manifest_sha256=manifest_sha256,
+                preflight_path=root / "preflight.json", control_plan=root / "control-plan.json",
+                intent_path=root / "publication-restoration-intent.json",
             )
-        if not active:
-            return {"schema": "history-rewrite-writer-drain-v1", "active": [], "status": "drained"}
-        if time.monotonic() >= deadline:
-            raise PublicationError(f"active writer drain timed out with {len(active)} run(s)")
-        time.sleep(interval_seconds)
+            publisher = validate_publisher_identity(api)
+            receipt = set_controls(load_object(root / "control-plan.json"), manifest, api, restore=True)
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise PublicationError(f"invalid restoration-intent artifact zip: {exc}") from exc
+    return {
+        "schema": "history-rewrite-independent-restoration-v1",
+        "intent_artifact": {"run_id": run_id, "artifact_id": artifact_id, "api_digest": f"sha256:{artifact_api_digest}"},
+        "manifest_sha256": manifest_sha256,
+        "publisher": publisher,
+        "restoration": receipt,
+    }
+
+
+def check_writers_once(api: Api, *, current_run_id: int) -> dict:
+    documents = {
+        workflow_id: [
+            {
+                "requested_status": status,
+                "response": api.get(f"/repos/{REPOSITORY}/actions/workflows/{workflow_id}/runs?status={status}&per_page=100"),
+            }
+            for status in sorted(ACTIVE_RUN_STATES)
+        ]
+        for workflow_id in WRITER_WORKFLOWS.values()
+    }
+    return check_writer_documents(documents, current_run_id=current_run_id)
+
+
+def verify_live_publication_state(manifest: dict, api: Api, *, current_run_id: int) -> dict:
+    states = {}
+    for path, workflow_id in WRITER_WORKFLOWS.items():
+        live = api.get(f"/repos/{REPOSITORY}/actions/workflows/{workflow_id}")
+        if not isinstance(live, dict) or live.get("id") != workflow_id or live.get("path") != path or live.get("state") != "disabled_manually":
+            raise PublicationError(f"mandatory release writer is not exactly paused: {path}")
+        states[path] = {"id": workflow_id, "state": "disabled_manually"}
+    mirror = api.get(f"/repos/{REPOSITORY}/actions/workflows/{MIRROR_WORKFLOW_ID}")
+    if not isinstance(mirror, dict) or mirror.get("id") != MIRROR_WORKFLOW_ID or mirror.get("state") != "disabled_manually":
+        raise PublicationError("mirror workflow is not in its required continuing pause")
+    writer_check = check_writers_once(api, current_run_id=current_run_id)
+    protection = protection_snapshot_from_api(api)
+    if protection != manifest["controls"]["protection_snapshot"]:
+        raise PublicationError("immediate pre-push protection or publisher App exception readback changed")
+    return {
+        "schema": "history-rewrite-final-state-v1",
+        "writer_workflows": states,
+        "mirror": {"id": MIRROR_WORKFLOW_ID, "state": "disabled_manually"},
+        "writer_check": writer_check,
+        "protection_snapshot_sha256": digest(protection),
+    }
 
 
 def decode_manifest(output: Path, manifest_sha256: str) -> None:
@@ -700,6 +1074,15 @@ def decode_manifest(output: Path, manifest_sha256: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+    def phase_arguments(command: argparse.ArgumentParser, *, include_intent: bool) -> None:
+        command.add_argument("--frozen-sha", required=True)
+        command.add_argument("--frozen-tree", required=True)
+        command.add_argument("--manifest-sha256", required=True)
+        command.add_argument("--preflight", type=Path, required=True)
+        command.add_argument("--control-plan", type=Path, required=True)
+        if include_intent:
+            command.add_argument("--intent", type=Path, required=True)
+
     decode = sub.add_parser("decode")
     decode.add_argument("--output", type=Path, required=True); decode.add_argument("--manifest-sha256", required=True)
     preflight = sub.add_parser("preflight")
@@ -707,16 +1090,25 @@ def main() -> int:
     preflight.add_argument("--manifest-sha256", required=True); preflight.add_argument("--api-dir", type=Path, required=True); preflight.add_argument("--output", type=Path, required=True)
     prepare = sub.add_parser("prepare")
     prepare.add_argument("manifest", type=Path); prepare.add_argument("--remote-url", required=True); prepare.add_argument("--work-root", type=Path, required=True)
-    prepare.add_argument("--proof-dir", type=Path, required=True); prepare.add_argument("--intent", type=Path, required=True); prepare.add_argument("--control-plan", type=Path, required=True)
+    prepare.add_argument("--proof-dir", type=Path, required=True); prepare.add_argument("--intent", type=Path, required=True)
     prepare.add_argument("--fixture-policy", type=Path)
+    phase_arguments(prepare, include_intent=False)
     controls = sub.add_parser("controls")
-    controls.add_argument("operation", choices=("suppress", "restore")); controls.add_argument("manifest", type=Path); controls.add_argument("--plan", type=Path, required=True)
+    controls.add_argument("operation", choices=("suppress", "restore")); controls.add_argument("manifest", type=Path)
     controls.add_argument("--receipt", type=Path, required=True); controls.add_argument("--api-url", default="https://api.github.com")
-    writers = sub.add_parser("wait-writers")
-    writers.add_argument("manifest", type=Path); writers.add_argument("--plan", type=Path, required=True); writers.add_argument("--current-run-id", type=int, required=True)
-    writers.add_argument("--timeout-seconds", type=int, default=1800); writers.add_argument("--interval-seconds", type=int, default=15); writers.add_argument("--receipt", type=Path, required=True)
+    phase_arguments(controls, include_intent=True)
     publish = sub.add_parser("publish")
     publish.add_argument("manifest", type=Path); publish.add_argument("--repo", type=Path, required=True); publish.add_argument("--remote-url", required=True); publish.add_argument("--receipt", type=Path, required=True)
+    publish.add_argument("--current-run-id", type=int, required=True)
+    publish.add_argument("--fixture-api", type=Path)
+    phase_arguments(publish, include_intent=True)
+    restore_artifact = sub.add_parser("restore-intent-artifact")
+    restore_artifact.add_argument("--artifact-zip", type=Path, required=True); restore_artifact.add_argument("--artifact-api-json", type=Path, required=True)
+    restore_artifact.add_argument("--run-id", type=int, required=True); restore_artifact.add_argument("--artifact-id", type=int, required=True)
+    restore_artifact.add_argument("--artifact-api-digest", required=True); restore_artifact.add_argument("--frozen-sha", required=True)
+    restore_artifact.add_argument("--frozen-tree", required=True); restore_artifact.add_argument("--manifest-sha256", required=True)
+    restore_artifact.add_argument("--receipt", type=Path, required=True); restore_artifact.add_argument("--api-url", default="https://api.github.com")
+    restore_artifact.add_argument("--fixture-api", type=Path)
     ns = parser.parse_args()
     try:
         if ns.command == "decode":
@@ -725,31 +1117,64 @@ def main() -> int:
             validate_preflight(load_object(ns.manifest, "manifest"), frozen_sha=ns.frozen_sha, frozen_tree=ns.frozen_tree,
                                manifest_sha256=ns.manifest_sha256, api_dir=ns.api_dir, output=ns.output)
         elif ns.command == "prepare":
-            prepare_candidate(load_object(ns.manifest, "manifest"), remote_url=ns.remote_url, work_root=ns.work_root,
+            prepare_candidate(load_object(ns.manifest, "manifest"), frozen_sha=ns.frozen_sha, frozen_tree=ns.frozen_tree,
+                              manifest_sha256=ns.manifest_sha256, preflight_path=ns.preflight,
+                              remote_url=ns.remote_url, work_root=ns.work_root,
                               proof_dir=ns.proof_dir, intent_path=ns.intent, control_plan=ns.control_plan,
                               fixture_policy=ns.fixture_policy)
         elif ns.command == "controls":
-            manifest, plan = load_object(ns.manifest, "manifest"), load_object(ns.plan, "control plan")
-            receipt = set_controls(plan, manifest, GitHubApi(os.environ.get("GH_TOKEN", ""), ns.api_url), restore=ns.operation == "restore")
+            manifest, plan = load_object(ns.manifest, "manifest"), load_object(ns.control_plan, "control plan")
+            validate_phase_bindings(manifest, frozen_sha=ns.frozen_sha, frozen_tree=ns.frozen_tree,
+                                    manifest_sha256=ns.manifest_sha256, preflight_path=ns.preflight,
+                                    control_plan=ns.control_plan, intent_path=ns.intent)
+            api = GitHubApi(os.environ.get("GH_TOKEN", ""), ns.api_url)
+            publisher = validate_publisher_identity(api)
+            receipt = set_controls(plan, manifest, api, restore=ns.operation == "restore")
+            receipt["publisher"] = publisher
             write_json(ns.receipt, receipt)
-        elif ns.command == "wait-writers":
-            manifest, plan = load_object(ns.manifest, "manifest"), load_object(ns.plan, "control plan")
-            receipt = wait_for_writers(plan, manifest, GitHubApi(os.environ.get("GH_TOKEN", "")), current_run_id=ns.current_run_id,
-                                       timeout_seconds=ns.timeout_seconds, interval_seconds=ns.interval_seconds)
-            write_json(ns.receipt, receipt)
-        else:
+        elif ns.command == "publish":
             manifest = load_object(ns.manifest, "manifest")
             try:
-                result = publish_repository(manifest, repo=ns.repo, remote_url=ns.remote_url, token=os.environ.get("GH_TOKEN"))
+                if ns.fixture_api is not None:
+                    if os.environ.get("HISTORY_REWRITE_PUBLICATION_FIXTURE") != "1" or ns.remote_url.startswith(("http://", "https://")):
+                        raise PublicationError("fixture API is restricted to an explicit local-remote fixture")
+                    publisher_api = read_api = FixtureApi(load_object(ns.fixture_api, "fixture API state"))
+                else:
+                    publisher_api = GitHubApi(os.environ.get("GH_TOKEN", ""))
+                    read_api = GitHubApi(os.environ.get("HISTORY_REWRITE_READ_TOKEN", ""))
+                publisher = validate_publisher_identity(publisher_api)
+                result = publish_repository(
+                    manifest, frozen_sha=ns.frozen_sha, frozen_tree=ns.frozen_tree,
+                    manifest_sha256=ns.manifest_sha256, preflight_path=ns.preflight,
+                    control_plan=ns.control_plan, intent_path=ns.intent, read_api=read_api,
+                    current_run_id=ns.current_run_id, repo=ns.repo, remote_url=ns.remote_url,
+                    token=os.environ.get("GH_TOKEN"),
+                )
                 write_json(ns.receipt, {"schema": "history-rewrite-publication-receipt-v1", "outcome": result.outcome,
-                                       "reason": result.reason, "manifest_sha256": digest(manifest), "after_refs": result.after_refs,
-                                       "after_refs_sha256": digest(result.after_refs)})
+                                       "reason": result.reason, "manifest_sha256": ns.manifest_sha256, "after_refs": result.after_refs,
+                                       "after_refs_sha256": digest(result.after_refs), "final_state": result.final_state,
+                                       "publisher": publisher,
+                                       "external_administrator_intervention_risk": "controls or refs may still change after final readback; atomic ref leases prevent stale ref updates but do not lock administrative controls"})
                 if result.outcome != "success":
                     raise PublicationError("atomic push outcome is ambiguous")
             except PublicationError as exc:
                 write_json(ns.receipt, {"schema": "history-rewrite-publication-receipt-v1", "outcome": "failed-or-ambiguous",
-                                       "reason_sha256": hashlib.sha256(str(exc).encode()).hexdigest(), "manifest_sha256": digest(manifest)})
+                                       "reason_sha256": hashlib.sha256(str(exc).encode()).hexdigest(), "manifest_sha256": ns.manifest_sha256})
                 raise
+        else:
+            if ns.fixture_api is not None:
+                if os.environ.get("HISTORY_REWRITE_PUBLICATION_FIXTURE") != "1":
+                    raise PublicationError("restoration fixture API requires the explicit fixture boundary")
+                api = FixtureApi(load_object(ns.fixture_api, "fixture API state"))
+            else:
+                api = GitHubApi(os.environ.get("GH_TOKEN", ""), ns.api_url)
+            receipt = restore_from_intent_artifact(
+                artifact_zip=ns.artifact_zip, artifact_api_json=ns.artifact_api_json,
+                run_id=ns.run_id, artifact_id=ns.artifact_id, artifact_api_digest=ns.artifact_api_digest,
+                frozen_sha=ns.frozen_sha, frozen_tree=ns.frozen_tree,
+                manifest_sha256=ns.manifest_sha256, api=api,
+            )
+            write_json(ns.receipt, receipt)
     except PublicationError as exc:
         print(f"history rewrite publication: {exc}", file=sys.stderr)
         return 1

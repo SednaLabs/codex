@@ -623,6 +623,21 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
     proof_digests = {}
     for name in publication_module.ARTIFACT_FILES:
         proof_digests[name] = hashlib.sha256((approved / name).read_bytes()).hexdigest()
+    branch_nodes = []
+    for ref in publication_module.PROTECTED_REFS:
+        branch = ref.removeprefix("refs/heads/")
+        branch_nodes.append({
+            "id": "fixture-" + hashlib.sha256(branch.encode()).hexdigest()[:12], "pattern": branch,
+            "allowsForcePushes": True, "isAdminEnforced": True, "requiresStatusChecks": True,
+            "requiredStatusCheckContexts": ["fixture"], "requiresApprovingReviews": True,
+            "requiredApprovingReviewCount": 0, "requiresConversationResolution": True, "restrictsPushes": False,
+            "bypassForcePushAllowances": {"totalCount": 1, "nodes": [{"actor": {
+                "__typename": "App", "id": publication_module.PUBLISHER_APP_NODE_ID,
+                "databaseId": publication_module.PUBLISHER_APP_ID, "slug": "fixture-publisher",
+            }}]},
+        })
+    branch_document = {"data": {"repository": {"branchProtectionRules": {"totalCount": len(branch_nodes), "nodes": branch_nodes}}}}
+    protection = publication_module.normalize_protection_snapshot(branch_document, [])
     manifest = {
         "schema": "history-rewrite-publication-v1",
         "repository": publication_module.REPOSITORY,
@@ -644,9 +659,11 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
             "environment": publication_module.ENVIRONMENT_NAME,
             "reviewer_id": publication_module.REVIEWER_ID,
             "reviewer_login": publication_module.REVIEWER_LOGIN,
-            "suppress_workflows": [".github/workflows/rust-release.yml"],
-            "active_writer_workflows": [101],
+            "writer_workflows": publication_module.WRITER_WORKFLOWS,
             "mirror_workflow_id": publication_module.MIRROR_WORKFLOW_ID,
+            "protected_refs": list(publication_module.PROTECTED_REFS),
+            "protection_snapshot": protection,
+            "protection_snapshot_sha256": publication_module.digest(protection),
         },
     }
     manifest_path = root / "manifest.json"; write_json(manifest_path, manifest)
@@ -654,23 +671,60 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
         "schema": "history-rewrite-control-plan-v1",
         "repository": publication_module.REPOSITORY,
         "manifest_sha256": publication_module.digest(manifest),
-        "suppression": [{"id": 101, "path": ".github/workflows/rust-release.yml", "state": "active"}],
-        "active_writer_workflow_ids": [101],
+        "suppression": [
+            {"id": 231747419, "path": ".github/workflows/rust-release.yml", "state": "active"},
+            {"id": 250252266, "path": ".github/workflows/sedna-release.yml", "state": "active"},
+        ],
+        "writer_workflows": publication_module.WRITER_WORKFLOWS,
         "mirror": {"id": publication_module.MIRROR_WORKFLOW_ID, "path": ".github/workflows/sedna-sync-upstream.yml", "state": "disabled_manually"},
+        "protection_snapshot_sha256": publication_module.digest(protection),
     }
     control_path = root / "control-plan.json"; write_json(control_path, control_plan)
+    preflight_path = root / "preflight.json"
+    write_json(preflight_path, {
+        "schema": "history-rewrite-publication-preflight-v1", "repository": publication_module.REPOSITORY,
+        "manifest_sha256": publication_module.digest(manifest), "harness_sha": manifest["harness_sha"],
+        "harness_tree": manifest["harness_tree"], "selected_refs_sha256": manifest["selected_refs_sha256"],
+        "output_refs_sha256": manifest["output_refs_sha256"], "backup_run_id": manifest["backup"]["run_id"],
+        "proof_run_id": manifest["proof"]["run_id"],
+        "approval": {"id": publication_module.REVIEWER_ID, "login": publication_module.REVIEWER_LOGIN},
+        "writer_check": {"schema": "history-rewrite-writer-check-v1", "active": [], "status": "drained-at-single-read"},
+        "protection_snapshot_sha256": manifest["controls"]["protection_snapshot_sha256"],
+        "status": "verified-before-app-token",
+    })
+    fixture_api = root / "fixture-api.json"
+    workflows = {
+        str(workflow_id): {"id": workflow_id, "path": path, "state": "disabled_manually"}
+        for path, workflow_id in publication_module.WRITER_WORKFLOWS.items()
+    }
+    workflows[str(publication_module.MIRROR_WORKFLOW_ID)] = {
+        "id": publication_module.MIRROR_WORKFLOW_ID, "path": ".github/workflows/sedna-sync-upstream.yml", "state": "disabled_manually",
+    }
+    write_json(fixture_api, {
+        "installation": {"app_id": publication_module.PUBLISHER_APP_ID, "app_slug": "fixture-publisher"},
+        "app": {"id": publication_module.PUBLISHER_APP_ID, "node_id": publication_module.PUBLISHER_APP_NODE_ID},
+        "workflows": workflows,
+        "writer_runs": {str(workflow_id): {"total_count": 0, "workflow_runs": []} for workflow_id in publication_module.WRITER_WORKFLOWS.values()},
+        "branch_protection_document": branch_document, "rulesets": [], "ruleset_documents": {},
+    })
     work = root / "candidate"
     environment = dict(os.environ); environment["HISTORY_REWRITE_PUBLICATION_FIXTURE"] = "1"
     prepared = subprocess.run([
         "python3", str(PUBLICATION), "prepare", str(manifest_path), "--remote-url", str(remote),
+        "--frozen-sha", manifest["harness_sha"], "--frozen-tree", manifest["harness_tree"],
+        "--manifest-sha256", publication_module.digest(manifest), "--preflight", str(preflight_path),
         "--work-root", str(work), "--proof-dir", str(approved), "--control-plan", str(control_path),
         "--intent", str(root / "intent.json"), "--fixture-policy", str(policy),
     ], text=True, capture_output=True, env=environment)
     require_driver_success("production_publication_prepare", prepared)
     published = subprocess.run([
         "python3", str(PUBLICATION), "publish", str(manifest_path), "--repo", str(work / "repo.git"),
+        "--frozen-sha", manifest["harness_sha"], "--frozen-tree", manifest["harness_tree"],
+        "--manifest-sha256", publication_module.digest(manifest), "--preflight", str(preflight_path),
+        "--control-plan", str(control_path), "--intent", str(root / "intent.json"), "--current-run-id", "99",
+        "--fixture-api", str(fixture_api),
         "--remote-url", str(remote), "--receipt", str(root / "publication-receipt.json"),
-    ], text=True, capture_output=True)
+    ], text=True, capture_output=True, env=environment)
     require_driver_success("production_publication_push", published)
     if publication_module.advertised_refs(str(remote)) != output:
         raise SystemExit("production publication CLI did not produce the approved complete remote map")

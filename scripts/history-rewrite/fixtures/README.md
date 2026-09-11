@@ -48,9 +48,44 @@ pre-receive hook proves that an atomic failure leaves every ref unchanged.
 
 The companion API-shaped fixtures cover immutable manifest and SHA-256 proof
 binding, empty/extra/missing/zero-ref rejection, stale backup ordering, exact
-environment and approval identities, credential-independent active-writer
-draining, authorised control suppression and restoration, ambiguous transport
-readback, and readback failure. They use no GitHub credential and never contact
-GitHub. Passing these fixtures proves that the same executable CLI used by the
-workflow works against a controlled Git transport; it does not prove that a
-real repository publication or live control mutation occurred.
+environment and approval identities, mandatory writer identities, one-read
+active-writer rejection, exact protected-ref and publisher-App exceptions,
+authorised control suppression and restoration, durable phase binding,
+ambiguous transport readback, and readback failure. They use no GitHub
+credential and never contact GitHub. Passing these fixtures proves that the
+same executable CLI used by the workflow works against a controlled Git
+transport; it does not prove that a real repository publication or live
+control mutation occurred.
+
+If the publication runner is hard-killed after writer suppression, an operator
+can independently restore the captured writer states from the uploaded
+`history-rewrite-publication-intent-<run-id>` artifact. First read the artifact
+metadata from the GitHub API and download its zip without extracting it. Then,
+in a trusted environment with a freshly minted release-publisher App token in
+`GH_TOKEN`, run:
+
+```text
+python3 scripts/history-rewrite/publication.py restore-intent-artifact \
+  --artifact-zip INTENT.zip --artifact-api-json INTENT-api.json \
+  --run-id RUN_ID --artifact-id ARTIFACT_ID \
+  --artifact-api-digest DIGEST_WITHOUT_SHA256_PREFIX \
+  --frozen-sha HARNESS_SHA --frozen-tree HARNESS_TREE \
+  --manifest-sha256 APPROVED_MANIFEST_SHA256 \
+  --receipt independent-restoration-receipt.json
+```
+
+The command verifies the API artifact ID, run binding, API SHA-256, exact
+four-file archive domain, external harness and manifest identities, durable
+preflight, restoration intent, control plan, and publisher App identity before
+restoring each captured state and reading it back. This is the hard-kill
+recovery path; the workflow's ordinary `always()` step is not claimed to
+survive runner termination.
+
+Immediately before the atomic ref update, the publisher performs one fresh,
+finite state snapshot of both mandatory writer workflows, their active runs, the continuing
+mirror pause, all three protected branch rules, force-push App allowances, and
+all applicable repository rulesets. An active writer fails the attempt and
+must be drained externally with the approved blocking watcher before a wholly
+fresh dispatch. Per-ref atomic leases protect the approved old ref map, but do
+not prevent an external administrator from changing controls after that final
+read; the publication receipt records this remaining operational-window risk.
