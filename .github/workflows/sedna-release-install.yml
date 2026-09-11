@@ -171,40 +171,31 @@ jobs:
         run: |
           set -euo pipefail
 
-          allow_prerelease_arg=()
+          set --
           if [[ "${ALLOW_PRERELEASE}" == "true" ]]; then
-            allow_prerelease_arg+=(--allow-prerelease)
+            set -- "$@" --allow-prerelease
           fi
 
-          macos_preview_arg=()
           if [[ "${MACOS_RELEASE_MODE}" == "preview" ]]; then
-            macos_preview_arg+=(--macos-preview)
+            set -- "$@" --macos-preview
           fi
-          macos_unnotarized_arg=()
           if [[ "${MACOS_RELEASE_MODE}" == "unnotarized" ]]; then
-            macos_unnotarized_arg+=(--macos-unnotarized)
+            set -- "$@" --macos-unnotarized
           fi
 
-          attestation_arg=()
           if [[ "${REQUIRE_LINUX_ARM64}" == "true" && "${TARGET}" == *-unknown-linux-gnu ]]; then
-            attestation_arg+=(--verify-signatures)
-            attestation_arg+=(--verify-attestation)
+            set -- "$@" --verify-signatures --verify-attestation
           fi
 
-          historical_x86_arg=()
           if [[ "${REQUIRE_LINUX_ARM64}" != "true" && "${TARGET}" == "x86_64-unknown-linux-gnu" ]]; then
-            historical_x86_arg+=(--allow-historical-x86)
+            set -- "$@" --allow-historical-x86
           fi
 
           scripts/install_sedna_release_asset \
             --repository "${GITHUB_REPOSITORY}" \
             --release-tag "${RELEASE_TAG}" \
             --dry-run \
-            "${allow_prerelease_arg[@]}" \
-            "${attestation_arg[@]}" \
-            "${historical_x86_arg[@]}" \
-            "${macos_preview_arg[@]}" \
-            "${macos_unnotarized_arg[@]}"
+            "$@"
 
       - name: Summarize
         if: ${{ always() }}
