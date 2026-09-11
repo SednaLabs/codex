@@ -696,22 +696,27 @@ jobs:
         with:
           client-id: ${{ vars.SEDNA_RELEASE_PUBLISHER_APP_CLIENT_ID }}
           private-key: ${{ secrets.SEDNA_RELEASE_PUBLISHER_APP_PRIVATE_KEY }}
+          owner: sednalabs
+          repositories: codex
           permission-actions: write
           permission-contents: write
+          permission-metadata: read
+          skip-token-revoke: false
       - name: Verify minted publisher App identity
         env:
           GH_TOKEN: ${{ steps.release_publisher_token.outputs.token }}
+          HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID: ${{ steps.release_publisher_token.outputs.installation-id }}
+          HISTORY_REWRITE_PUBLISHER_APP_SLUG: ${{ steps.release_publisher_token.outputs.app-slug }}
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/history-rewrite-publication"
-          gh api installation > "$root/publisher-installation.json"
-          jq -e '.app_id == 3520391' "$root/publisher-installation.json" >/dev/null
-          app_slug=$(jq -er .app_slug "$root/publisher-installation.json")
-          gh api "apps/$app_slug" > "$root/publisher-app.json"
-          jq -e '.id == 3520391 and .node_id == "A_kwHODOdWjM4ANbeH"' "$root/publisher-app.json" >/dev/null
+          python3 scripts/history-rewrite/publication.py publisher-identity \
+            --output "$root/publisher-identity.json"
       - name: Suppress only manifest-authorised release writers
         env:
           GH_TOKEN: ${{ steps.release_publisher_token.outputs.token }}
+          HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID: ${{ steps.release_publisher_token.outputs.installation-id }}
+          HISTORY_REWRITE_PUBLISHER_APP_SLUG: ${{ steps.release_publisher_token.outputs.app-slug }}
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/history-rewrite-publication"
@@ -722,6 +727,8 @@ jobs:
       - name: Publish explicit refs once with atomic per-ref leases
         env:
           GH_TOKEN: ${{ steps.release_publisher_token.outputs.token }}
+          HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID: ${{ steps.release_publisher_token.outputs.installation-id }}
+          HISTORY_REWRITE_PUBLISHER_APP_SLUG: ${{ steps.release_publisher_token.outputs.app-slug }}
           HISTORY_REWRITE_READ_TOKEN: ${{ github.token }}
           HISTORY_REWRITE_OBSERVER_TOKEN: ${{ steps.protection_observer.outputs.token }}
           HISTORY_REWRITE_OBSERVER_INSTALLATION_ID: ${{ steps.protection_observer.outputs.installation-id }}
@@ -739,6 +746,8 @@ jobs:
         if: ${{ always() && steps.release_publisher_token.outputs.token != '' }}
         env:
           GH_TOKEN: ${{ steps.release_publisher_token.outputs.token }}
+          HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID: ${{ steps.release_publisher_token.outputs.installation-id }}
+          HISTORY_REWRITE_PUBLISHER_APP_SLUG: ${{ steps.release_publisher_token.outputs.app-slug }}
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/history-rewrite-publication"
@@ -756,8 +765,7 @@ jobs:
             ${{ runner.temp }}/history-rewrite-publication/publication-restoration-intent.json
             ${{ runner.temp }}/history-rewrite-publication/preflight/preflight.json
             ${{ runner.temp }}/history-rewrite-publication/control-suppression.json
-            ${{ runner.temp }}/history-rewrite-publication/publisher-installation.json
-            ${{ runner.temp }}/history-rewrite-publication/publisher-app.json
+            ${{ runner.temp }}/history-rewrite-publication/publisher-identity.json
             ${{ runner.temp }}/history-rewrite-publication/publication-receipt.json
             ${{ runner.temp }}/history-rewrite-publication/control-restoration.json
           if-no-files-found: warn

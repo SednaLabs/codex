@@ -61,8 +61,11 @@ If the publication runner is hard-killed after writer suppression, an operator
 can independently restore the captured writer states from the uploaded
 `history-rewrite-publication-intent-<run-id>` artifact. First read the artifact
 metadata from the GitHub API and download its zip without extracting it. Then,
-in a trusted environment with a freshly minted release-publisher App token in
-`GH_TOKEN`, run:
+in a trusted environment with a freshly minted, repository-scoped
+release-publisher App token in `GH_TOKEN`, run the command below. Bind that
+token's trusted issuer outputs as `HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID`
+and `HISTORY_REWRITE_PUBLISHER_APP_SLUG`, exactly as the workflow does. A missing
+or mismatched binding fails closed; an operator token is not a replacement.
 
 ```text
 python3 scripts/history-rewrite/publication.py restore-intent-artifact \
@@ -80,6 +83,25 @@ preflight, restoration intent, control plan, and publisher App identity before
 restoring each captured state and reading it back. This is the hard-kill
 recovery path; the workflow's ordinary `always()` step is not claimed to
 survive runner termination.
+
+The publisher's pinned token action explicitly selects only `sednalabs/codex`
+and requests `actions:write`, `contents:write`, and `metadata:read`. The
+`publisher-identity` CLI and every control, publication and recovery consumer
+share one validator. It verifies the authenticated `viewer.login`, exact App
+ID/node/slug and grant ceiling, and the complete one-repository result of
+`GET /installation/repositories`. These are documented installation-token
+operations; the unsupported bare `GET /installation` is never a credential
+identity source. The receipt records the App's observed global grants
+separately from the action's exact requested token permissions. It does not
+pretend that App metadata directly introspects an issued token's permissions.
+
+Production-shaped fixtures execute the identity CLI through its actual HTTP
+request and JSON handling. Wrong principals, App identity/grants, repository
+domains, issuer outputs, and denied or expired responses cannot produce a
+successful receipt or trigger a credential fallback. The disposable-remote
+publication CLI also rejects wrong-principal and wrong-repository evidence
+without changing refs. Its fixture transport no longer invents a successful
+response for the unsupported endpoint.
 
 Immediately before the atomic ref update, the publisher performs one fresh,
 finite state snapshot of both mandatory writer workflows, their active runs,

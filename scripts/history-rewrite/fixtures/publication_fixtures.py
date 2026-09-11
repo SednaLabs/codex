@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
 import os
 import re
@@ -172,6 +173,15 @@ def observer_fixture_documents() -> dict:
     }
 
 
+def publisher_fixture_documents() -> dict:
+    return {
+        "publisher_viewer": {"data": {"viewer": {"login": f"{publication.PUBLISHER_APP_SLUG}[bot]"}}},
+        "publisher_app": {"id": publication.PUBLISHER_APP_ID, "node_id": publication.PUBLISHER_APP_NODE_ID,
+                          "slug": publication.PUBLISHER_APP_SLUG, "permissions": dict(publication.PUBLISHER_PERMISSIONS)},
+        "publisher_repositories": {"total_count": 1, "repositories": [{"id": publication.REPOSITORY_ID, "full_name": publication.REPOSITORY}]},
+    }
+
+
 class MockApi:
     def __init__(self, states: dict[int, str], runs: dict[int, list[dict]] | None = None, protection: dict | None = None):
         self.states = dict(states)
@@ -179,16 +189,18 @@ class MockApi:
         self.protection = protection or protection_snapshot()
         self.mutations: list[tuple[int, str]] = []
         self.observer = observer_fixture_documents()
+        self.publisher = publisher_fixture_documents()
+        self.principal = "observer"
 
     def get(self, path: str) -> object:
         if path == publication.OBSERVER_REPOSITORIES_PATH:
-            return self.observer["observer_repositories"]
+            return getattr(self, self.principal)[f"{self.principal}_repositories"]
         if path == f"/apps/{publication.OBSERVER_APP_SLUG}":
             return self.observer["observer_app"]
         if path == "/installation":
-            return {"app_id": publication.PUBLISHER_APP_ID, "app_slug": "fixture-publisher"}
-        if path == "/apps/fixture-publisher":
-            return {"id": publication.PUBLISHER_APP_ID, "node_id": publication.PUBLISHER_APP_NODE_ID}
+            raise SystemExit("fixture must not fabricate a bare installation endpoint")
+        if path == f"/apps/{publication.PUBLISHER_APP_SLUG}":
+            return self.publisher["publisher_app"]
         if path.startswith(f"/repos/{publication.REPOSITORY}/rulesets?"):
             return [{"id": item["id"]} for item in self.protection["repository_rulesets"]]
         if path.startswith(f"/repos/{publication.REPOSITORY}/rulesets/"):
@@ -215,7 +227,7 @@ class MockApi:
 
     def post_graphql(self, query: str, variables: dict[str, str]) -> object:
         if query == publication.OBSERVER_VIEWER_QUERY:
-            return self.observer["observer_viewer"]
+            return getattr(self, self.principal)[f"{self.principal}_viewer"]
         nodes = []
         for item in self.protection["branch_protection_rules"]:
             nodes.append({
@@ -254,6 +266,25 @@ class ObserverOnlyApi(MockApi):
 
     def put(self, path):
         raise SystemExit("observer received a mutation")
+
+
+class PublisherIdentityApi(MockApi):
+    def __init__(self):
+        super().__init__({})
+        self.principal = "publisher"
+
+    def get(self, path):
+        if path in {publication.PUBLISHER_REPOSITORIES_PATH, f"/apps/{publication.PUBLISHER_APP_SLUG}"}:
+            return super().get(path)
+        raise SystemExit("publisher identity used an unsupported or unrelated endpoint")
+
+    def post_graphql(self, query, variables):
+        if query != publication.PUBLISHER_VIEWER_QUERY or variables != {}:
+            raise SystemExit("publisher identity issued an unrelated GraphQL operation")
+        return super().post_graphql(query, variables)
+
+    def put(self, path):
+        raise SystemExit("publisher identity attempted mutation")
 
 
 class WorkflowOnlyApi(MockApi):
@@ -513,6 +544,113 @@ def observer_fixtures() -> list[str]:
     return evidence
 
 
+def publisher_fixtures() -> list[str]:
+    evidence = []
+    good_environment = {
+        "GH_TOKEN": "fixture-publisher-token",
+        "HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID": str(publication.PUBLISHER_INSTALLATION_ID),
+        "HISTORY_REWRITE_PUBLISHER_APP_SLUG": publication.PUBLISHER_APP_SLUG,
+        "HISTORY_REWRITE_OBSERVER_TOKEN": "fixture-observer-token",
+        "HISTORY_REWRITE_READ_TOKEN": "fixture-workflow-token",
+    }
+    api = PublisherIdentityApi()
+    identity = publication.validate_publisher_identity(api)
+    if (identity["authenticated_login"] != "sedna-release-publisher[bot]"
+            or identity["requested_token_permissions"] != publication.PUBLISHER_PERMISSIONS
+            or identity["app_grants"] != publication.PUBLISHER_PERMISSIONS
+            or "token_permissions" in identity):
+        raise SystemExit("publisher receipt confuses requested token scope with direct permission introspection")
+    evidence.append("publisher_authenticated_identity_exact_app_grants_and_repository")
+    changes = {
+        "workflow_token": lambda value: value["publisher_viewer"]["data"]["viewer"].update(login="github-actions[bot]"),
+        "observer_token": lambda value: value["publisher_viewer"]["data"]["viewer"].update(login="sedna-codex-delivery-coordinator[bot]"),
+        "operator_token": lambda value: value["publisher_viewer"]["data"]["viewer"].update(login="operator-fixture"),
+        "viewer_null": lambda value: value.update(publisher_viewer={"data": None}),
+        "viewer_errors": lambda value: value["publisher_viewer"].update(errors=[{"type": "FORBIDDEN"}]),
+        "wrong_app_id": lambda value: value["publisher_app"].update(id=1),
+        "wrong_app_node": lambda value: value["publisher_app"].update(node_id="other"),
+        "wrong_app_slug": lambda value: value["publisher_app"].update(slug="other"),
+        "extra_administration": lambda value: value["publisher_app"]["permissions"].update(administration="read"),
+        "extra_permission": lambda value: value["publisher_app"]["permissions"].update(issues="write"),
+        "missing_permission": lambda value: value["publisher_app"]["permissions"].pop("contents"),
+        "changed_permission": lambda value: value["publisher_app"]["permissions"].update(contents="read"),
+        "wrong_repository_id": lambda value: value["publisher_repositories"]["repositories"][0].update(id=1),
+        "wrong_repository_name": lambda value: value["publisher_repositories"]["repositories"][0].update(full_name="other/repository"),
+        "missing_repository": lambda value: value["publisher_repositories"].update(repositories=[]),
+        "multiple_repositories": lambda value: value["publisher_repositories"].update(total_count=2),
+        "hidden_extra_repository": lambda value: value["publisher_repositories"]["repositories"].append({"id": 2}),
+        "repository_count_boolean": lambda value: value["publisher_repositories"].update(total_count=True),
+    }
+    for name, change in changes.items():
+        invalid = PublisherIdentityApi(); change(invalid.publisher)
+        evidence.append(expect_failure(f"publisher_{name}", lambda value=invalid: publication.validate_publisher_identity(value)))
+    with patch.dict(os.environ, good_environment, clear=True):
+        publication.publisher_api_from_environment()
+    for name, field, value in (
+        ("missing_token", "GH_TOKEN", ""),
+        ("observer_alias", "GH_TOKEN", "fixture-observer-token"),
+        ("workflow_alias", "GH_TOKEN", "fixture-workflow-token"),
+        ("wrong_installation_output", "HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID", "1"),
+        ("missing_installation_output", "HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID", ""),
+        ("wrong_app_output", "HISTORY_REWRITE_PUBLISHER_APP_SLUG", "other"),
+        ("missing_app_output", "HISTORY_REWRITE_PUBLISHER_APP_SLUG", ""),
+    ):
+        with patch.dict(os.environ, {**good_environment, field: value}, clear=True):
+            evidence.append(expect_failure(f"publisher_{name}", publication.publisher_api_from_environment))
+
+    # Exercise the actual CLI, HTTP request construction and JSON parser without
+    # contacting GitHub or inventing an installation endpoint in the transport.
+    paths = ["/graphql", f"/apps/{publication.PUBLISHER_APP_SLUG}", publication.PUBLISHER_REPOSITORIES_PATH]
+    fields = ["publisher_viewer", "publisher_app", "publisher_repositories"]
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+
+        def run_cli(documents, output, *, failure_path=None, status=None):
+            calls = []
+
+            def response(request, timeout):
+                path = request.full_url.removeprefix("https://api.github.com")
+                calls.append(path)
+                if calls != paths[:len(calls)] or path not in paths:
+                    raise SystemExit("publisher CLI retried, fell back, or used an unsupported endpoint")
+                if request.get_header("Authorization") != "Bearer fixture-publisher-token":
+                    raise SystemExit("publisher CLI replaced its bound credential")
+                if path == "/graphql":
+                    if request.get_method() != "POST" or json.loads(request.data) != {"query": publication.PUBLISHER_VIEWER_QUERY, "variables": {}}:
+                        raise SystemExit("publisher CLI changed its identity-only GraphQL query")
+                elif request.get_method() != "GET":
+                    raise SystemExit("publisher identity CLI attempted a mutation")
+                if path == failure_path:
+                    raise publication.urllib.error.HTTPError(request.full_url, status, "fixture denial", {}, None)
+                return io.BytesIO(publication.canonical_json(documents[fields[paths.index(path)]]))
+
+            with patch.dict(os.environ, good_environment, clear=True), patch.object(sys, "argv", [
+                    "publication.py", "publisher-identity", "--output", str(output)]), patch.object(
+                    publication.urllib.request, "urlopen", side_effect=response):
+                result = publication.main()
+            return result, calls
+
+        positive = root / "identity.json"
+        result, calls = run_cli(publisher_fixture_documents(), positive)
+        if result != 0 or calls != paths or publication.load_object(positive) != identity:
+            raise SystemExit("publisher identity CLI diverges from the common validator")
+        evidence.append("publisher_identity_cli_uses_documented_authenticated_operations")
+        for name, change in changes.items():
+            documents = publisher_fixture_documents(); change(documents)
+            output = root / f"{name}.json"
+            result, _ = run_cli(documents, output)
+            if result == 0 or output.exists():
+                raise SystemExit(f"publisher identity CLI emitted success for {name}")
+        for path in paths:
+            for status in (401, 403, 404):
+                output = root / f"denied-{status}.json"
+                result, calls = run_cli(publisher_fixture_documents(), output, failure_path=path, status=status)
+                if result == 0 or output.exists() or calls[-1] != path:
+                    raise SystemExit("publisher denial did not stop before receipt or fallback")
+        evidence.append("publisher_cli_negative_identity_and_http_denial_without_fallback")
+    return evidence
+
+
 def main() -> None:
     manifest = base_manifest()
     evidence = []
@@ -689,7 +827,25 @@ def main() -> None:
         if re.findall(r"permission-([a-z-]+): ([a-z]+)", block) != [("administration", "read"), ("metadata", "read")]:
             raise SystemExit("observer token permission request escaped its exact two-read boundary")
     evidence.append("observer_mint_repository_permission_and_revocation_contract")
+    publisher_block = workflow.split("      - name: Mint release publisher App token after environment approval and preflight\n", 1)[1].split("      - name:", 1)[0]
+    for required in ("actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+                     "owner: sednalabs", "repositories: codex", "skip-token-revoke: false"):
+        if required not in publisher_block:
+            raise SystemExit(f"publisher token action omitted its exact scope: {required}")
+    if re.findall(r"permission-([a-z-]+): ([a-z]+)", publisher_block) != [("actions", "write"), ("contents", "write"), ("metadata", "read")]:
+        raise SystemExit("publisher token request differs from its admitted exact permissions")
+    for step_name in ("Verify minted publisher App identity", "Suppress only manifest-authorised release writers",
+                      "Publish explicit refs once with atomic per-ref leases", "Restore captured release workflow states"):
+        block = workflow.split(f"      - name: {step_name}\n", 1)[1].split("      - name:", 1)[0]
+        for key, output in (("GH_TOKEN", "token"), ("HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID", "installation-id"),
+                            ("HISTORY_REWRITE_PUBLISHER_APP_SLUG", "app-slug")):
+            if f"{key}: ${{{{ steps.release_publisher_token.outputs.{output} }}}}" not in block:
+                raise SystemExit("publisher consumer lost its pinned action output binding")
+    if "gh api installation " in workflow or "publication.py publisher-identity" not in workflow:
+        raise SystemExit("workflow bypasses the common documented publisher identity validator")
+    evidence.append("publisher_token_scope_and_all_consumer_bindings")
     evidence.extend(observer_fixtures())
+    evidence.extend(publisher_fixtures())
     evidence.extend(custody_fixtures())
     queue_rule_type_drift = copy.deepcopy(manifest)
     queue_rule_type_drift["controls"]["protection_snapshot"]["repository_rulesets"][0]["rules"].append({
@@ -738,8 +894,7 @@ def main() -> None:
         })
         fixture_api = phase_root / "fixture-api.json"
         publication.write_json(fixture_api, {
-            "installation": {"app_id": publication.PUBLISHER_APP_ID, "app_slug": "fixture-publisher"},
-            "app": {"id": publication.PUBLISHER_APP_ID, "node_id": publication.PUBLISHER_APP_NODE_ID},
+            **publisher_fixture_documents(),
             "workflows": {
                 "231747419": {"id": 231747419, "path": ".github/workflows/rust-release.yml", "state": "disabled_manually"},
                 "250252266": {"id": 250252266, "path": ".github/workflows/sedna-release.yml", "state": "disabled_manually"},

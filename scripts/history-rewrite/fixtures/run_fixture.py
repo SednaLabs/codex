@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Hosted-only synthetic execution of the production rewrite candidate."""
+import copy
 import csv
 import hashlib
 import json
@@ -623,7 +624,7 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
     proof_digests = {}
     for name in publication_module.ARTIFACT_FILES:
         proof_digests[name] = hashlib.sha256((approved / name).read_bytes()).hexdigest()
-    from publication_fixtures import MockApi, base_manifest, observer_fixture_documents
+    from publication_fixtures import MockApi, base_manifest, observer_fixture_documents, publisher_fixture_documents
     fixture_manifest = base_manifest()
     controls = fixture_manifest["controls"]
     protection = controls["protection_snapshot"]
@@ -681,17 +682,17 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
     workflows[str(publication_module.MIRROR_WORKFLOW_ID)] = {
         "id": publication_module.MIRROR_WORKFLOW_ID, "path": ".github/workflows/sedna-sync-upstream.yml", "state": "disabled_manually",
     }
-    write_json(fixture_api, {
+    api_documents = {
         **observer_fixture_documents(),
-        "installation": {"app_id": publication_module.PUBLISHER_APP_ID, "app_slug": "fixture-publisher"},
-        "app": {"id": publication_module.PUBLISHER_APP_ID, "node_id": publication_module.PUBLISHER_APP_NODE_ID},
+        **publisher_fixture_documents(),
         "workflows": workflows,
         "writer_runs": {str(workflow_id): {"total_count": 0, "workflow_runs": []} for workflow_id in publication_module.WRITER_WORKFLOWS.values()},
         "branch_protection_document": branch_document,
         "rulesets": [{"id": publication_module.QUEUE_ONLY_RULESET_ID}],
         "ruleset_documents": {str(publication_module.QUEUE_ONLY_RULESET_ID): protection_api.get(
             f"/repos/{publication_module.REPOSITORY}/rulesets/{publication_module.QUEUE_ONLY_RULESET_ID}")},
-    })
+    }
+    write_json(fixture_api, api_documents)
     work = root / "candidate"
     environment = dict(os.environ); environment["HISTORY_REWRITE_PUBLICATION_FIXTURE"] = "1"
     prepared = subprocess.run([
@@ -702,14 +703,25 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
         "--intent", str(root / "intent.json"), "--fixture-policy", str(policy),
     ], text=True, capture_output=True, env=environment)
     require_driver_success("production_publication_prepare", prepared)
-    published = subprocess.run([
+    publish_command = [
         "python3", str(PUBLICATION), "publish", str(manifest_path), "--repo", str(work / "repo.git"),
         "--frozen-sha", manifest["harness_sha"], "--frozen-tree", manifest["harness_tree"],
         "--manifest-sha256", publication_module.digest(manifest), "--preflight", str(preflight_path),
         "--control-plan", str(control_path), "--intent", str(root / "intent.json"), "--current-run-id", "99",
         "--fixture-api", str(fixture_api),
         "--remote-url", str(remote), "--receipt", str(root / "publication-receipt.json"),
-    ], text=True, capture_output=True, env=environment)
+    ]
+    for change in (
+        lambda state: state["publisher_viewer"]["data"]["viewer"].update(login="github-actions[bot]"),
+        lambda state: state["publisher_repositories"]["repositories"][0].update(full_name="other/repository"),
+    ):
+        invalid = copy.deepcopy(api_documents); change(invalid)
+        write_json(fixture_api, invalid)
+        rejected = subprocess.run(publish_command, text=True, capture_output=True, env=environment)
+        if rejected.returncode == 0 or publication_module.advertised_refs(str(remote)) != selected:
+            raise SystemExit("publisher identity rejection failed to preserve the disposable remote")
+    write_json(fixture_api, api_documents)
+    published = subprocess.run(publish_command, text=True, capture_output=True, env=environment)
     require_driver_success("production_publication_push", published)
     if publication_module.advertised_refs(str(remote)) != output:
         raise SystemExit("production publication CLI did not produce the approved complete remote map")

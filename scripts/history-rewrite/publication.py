@@ -42,6 +42,11 @@ BRANCH_POLICY_ID = 59660428
 MIRROR_WORKFLOW_ID = 250252269
 PUBLISHER_APP_ID = 3520391
 PUBLISHER_APP_NODE_ID = "A_kwHODOdWjM4ANbeH"
+PUBLISHER_APP_SLUG = "sedna-release-publisher"
+PUBLISHER_INSTALLATION_ID = 127511662
+PUBLISHER_PERMISSIONS = {"actions": "write", "contents": "write", "metadata": "read"}
+PUBLISHER_VIEWER_QUERY = "query { viewer { login } }"
+PUBLISHER_REPOSITORIES_PATH = "/installation/repositories?per_page=100"
 OBSERVER_APP_ID = 4838068
 OBSERVER_APP_NODE_ID = "A_kwHODOdWjM4ASdK0"
 OBSERVER_APP_SLUG = "sedna-codex-delivery-coordinator"
@@ -1110,20 +1115,33 @@ def observer_api_from_environment() -> GitHubApi:
     return GitHubApi(token)
 
 
+def publisher_api_from_environment(api_url: str = "https://api.github.com") -> GitHubApi:
+    token = os.environ.get("GH_TOKEN", "")
+    if not token or token in {os.environ.get("HISTORY_REWRITE_OBSERVER_TOKEN"), os.environ.get("HISTORY_REWRITE_READ_TOKEN")}:
+        raise PublicationError("a distinct publisher token is required; no credential fallback is allowed")
+    if (os.environ.get("HISTORY_REWRITE_PUBLISHER_INSTALLATION_ID") != str(PUBLISHER_INSTALLATION_ID)
+            or os.environ.get("HISTORY_REWRITE_PUBLISHER_APP_SLUG") != PUBLISHER_APP_SLUG):
+        raise PublicationError("pinned token-action publisher installation or App output mismatched")
+    return GitHubApi(token, api_url)
+
+
 class FixtureApi:
     """File-backed API restricted to the hosted disposable-remote fixture."""
-    def __init__(self, state: dict):
+    def __init__(self, state: dict, *, principal: str = "publisher"):
+        if principal not in {"publisher", "observer", "workflow"}:
+            raise PublicationError("unknown fixture principal")
         self.state = state
+        self.principal = principal
 
     def get(self, path: str) -> object:
         if path == OBSERVER_REPOSITORIES_PATH:
-            return self.state["observer_repositories"]
+            return self.state[f"{self.principal}_repositories"]
         if path == f"/apps/{OBSERVER_APP_SLUG}":
             return self.state["observer_app"]
         if path == "/installation":
-            return self.state["installation"]
-        if path.startswith("/apps/"):
-            return self.state["app"]
+            raise PublicationError("unsupported bare installation endpoint")
+        if path == f"/apps/{PUBLISHER_APP_SLUG}":
+            return self.state["publisher_app"]
         if path.startswith(f"/repos/{REPOSITORY}/rulesets?"):
             return self.state["rulesets"]
         if f"/repos/{REPOSITORY}/rulesets/" in path:
@@ -1145,7 +1163,7 @@ class FixtureApi:
 
     def post_graphql(self, query: str, variables: Mapping[str, str]) -> object:
         if query == OBSERVER_VIEWER_QUERY:
-            return self.state["observer_viewer"]
+            return self.state[f"{self.principal}_viewer"]
         return self.state["branch_protection_document"]
 
 
@@ -1204,13 +1222,33 @@ def set_controls(plan: dict, manifest: dict, api: Api, *, restore: bool) -> dict
 
 
 def validate_publisher_identity(api: Api) -> dict:
-    installation = api.get("/installation")
-    if not isinstance(installation, dict) or installation.get("app_id") != PUBLISHER_APP_ID or not isinstance(installation.get("app_slug"), str):
-        raise PublicationError("publisher token installation identity mismatch")
-    app = api.get(f"/apps/{installation['app_slug']}")
-    if not isinstance(app, dict) or app.get("id") != PUBLISHER_APP_ID or app.get("node_id") != PUBLISHER_APP_NODE_ID:
-        raise PublicationError("publisher App identity mismatch")
-    return {"app_id": PUBLISHER_APP_ID, "app_node_id": PUBLISHER_APP_NODE_ID, "app_slug": installation["app_slug"]}
+    # These documented operations accept installation tokens; App metadata alone
+    # is not proof that the calling credential belongs to that App.
+    viewer = api.post_graphql(PUBLISHER_VIEWER_QUERY, {})
+    data = viewer.get("data") if isinstance(viewer, dict) else None
+    actor = data.get("viewer") if isinstance(data, dict) else None
+    if (not isinstance(viewer, dict) or viewer.get("errors") or not isinstance(actor, dict)
+            or actor.get("login") != f"{PUBLISHER_APP_SLUG}[bot]"):
+        raise PublicationError("publisher is not the expected authenticated App bot")
+    app = api.get(f"/apps/{PUBLISHER_APP_SLUG}")
+    if (not isinstance(app, dict) or app.get("id") != PUBLISHER_APP_ID
+            or app.get("node_id") != PUBLISHER_APP_NODE_ID or app.get("slug") != PUBLISHER_APP_SLUG
+            or app.get("permissions") != PUBLISHER_PERMISSIONS):
+        raise PublicationError("publisher App identity or grant ceiling changed")
+    selected = api.get(PUBLISHER_REPOSITORIES_PATH)
+    repositories = selected.get("repositories") if isinstance(selected, dict) else None
+    if (not isinstance(selected, dict) or type(selected.get("total_count")) is not int or selected["total_count"] != 1
+            or not isinstance(repositories, list) or len(repositories) != 1
+            or not isinstance(repositories[0], dict) or repositories[0].get("id") != REPOSITORY_ID
+            or repositories[0].get("full_name") != REPOSITORY):
+        raise PublicationError("publisher token is not scoped to exactly the selected repository")
+    return {"schema": "history-rewrite-publisher-identity-v1", "app_id": PUBLISHER_APP_ID,
+            "app_node_id": PUBLISHER_APP_NODE_ID, "app_slug": PUBLISHER_APP_SLUG,
+            "installation_id": PUBLISHER_INSTALLATION_ID,
+            "repository": REPOSITORY, "repository_id": REPOSITORY_ID,
+            "authenticated_login": actor["login"], "app_grants": app["permissions"],
+            "requested_token_permissions": dict(PUBLISHER_PERMISSIONS),
+            "token_scope_source": "pinned token action with explicit repository and permission inputs; authenticated bot and repository readback"}
 
 
 def restore_from_intent_artifact(*, artifact_zip: Path, artifact_api_json: Path, run_id: int, artifact_id: int,
@@ -1437,6 +1475,8 @@ def main() -> int:
     observer_snapshot.add_argument("--output", type=Path, required=True)
     observer_snapshot.add_argument("--identity-output", type=Path, required=True)
     observer_snapshot.add_argument("--api-dir", type=Path)
+    publisher_identity = sub.add_parser("publisher-identity")
+    publisher_identity.add_argument("--output", type=Path, required=True)
     planning = sub.add_parser("plan-maintenance")
     planning.add_argument("--administrator-before", type=Path, required=True)
     planning.add_argument("--read-token-before", type=Path, required=True)
@@ -1490,6 +1530,8 @@ def main() -> int:
             validate_snapshot_shape(value)
             write_json(ns.output, value)
             write_json(ns.identity_output, identity)
+        elif ns.command == "publisher-identity":
+            write_json(ns.output, validate_publisher_identity(publisher_api_from_environment()))
         elif ns.command == "plan-maintenance":
             write_json(ns.output, plan_maintenance(load_object(ns.administrator_before), load_object(ns.read_token_before)))
         elif ns.command == "custody":
@@ -1514,7 +1556,7 @@ def main() -> int:
             validate_phase_bindings(manifest, frozen_sha=ns.frozen_sha, frozen_tree=ns.frozen_tree,
                                     manifest_sha256=ns.manifest_sha256, preflight_path=ns.preflight,
                                     control_plan=ns.control_plan, intent_path=ns.intent)
-            api = GitHubApi(os.environ.get("GH_TOKEN", ""), ns.api_url)
+            api = publisher_api_from_environment(ns.api_url)
             publisher = validate_publisher_identity(api)
             receipt = set_controls(plan, manifest, api, restore=ns.operation == "restore")
             receipt["publisher"] = publisher
@@ -1526,10 +1568,11 @@ def main() -> int:
                     if os.environ.get("HISTORY_REWRITE_PUBLICATION_FIXTURE") != "1" or ns.remote_url.startswith(("http://", "https://")):
                         raise PublicationError("fixture API is restricted to an explicit local-remote fixture")
                     fixture_state = load_object(ns.fixture_api, "fixture API state")
-                    publisher_api = read_api = FixtureApi(fixture_state)
-                    observer_api = FixtureApi(fixture_state)
+                    publisher_api = FixtureApi(fixture_state)
+                    read_api = FixtureApi(fixture_state, principal="workflow")
+                    observer_api = FixtureApi(fixture_state, principal="observer")
                 else:
-                    publisher_api = GitHubApi(os.environ.get("GH_TOKEN", ""))
+                    publisher_api = publisher_api_from_environment()
                     read_api = GitHubApi(os.environ.get("HISTORY_REWRITE_READ_TOKEN", ""))
                     observer_api = observer_api_from_environment()
                 publisher = validate_publisher_identity(publisher_api)
@@ -1557,7 +1600,7 @@ def main() -> int:
                     raise PublicationError("restoration fixture API requires the explicit fixture boundary")
                 api = FixtureApi(load_object(ns.fixture_api, "fixture API state"))
             else:
-                api = GitHubApi(os.environ.get("GH_TOKEN", ""), ns.api_url)
+                api = publisher_api_from_environment(ns.api_url)
             receipt = restore_from_intent_artifact(
                 artifact_zip=ns.artifact_zip, artifact_api_json=ns.artifact_api_json,
                 run_id=ns.run_id, artifact_id=ns.artifact_id, artifact_api_digest=ns.artifact_api_digest,
