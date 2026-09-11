@@ -42,6 +42,17 @@ BRANCH_POLICY_ID = 59660428
 MIRROR_WORKFLOW_ID = 250252269
 PUBLISHER_APP_ID = 3520391
 PUBLISHER_APP_NODE_ID = "A_kwHODOdWjM4ANbeH"
+OBSERVER_APP_ID = 4838068
+OBSERVER_APP_NODE_ID = "A_kwHODOdWjM4ASdK0"
+OBSERVER_APP_SLUG = "sedna-codex-delivery-coordinator"
+OBSERVER_INSTALLATION_ID = 159211338
+REPOSITORY_ID = 1152496647
+OBSERVER_PERMISSIONS = {"administration": "read", "metadata": "read"}
+OBSERVER_APP_GRANTS = {name: "read" for name in (
+    "actions", "administration", "checks", "contents", "merge_queues", "metadata", "pull_requests", "statuses",
+)}
+OBSERVER_VIEWER_QUERY = "query { viewer { login } }"
+OBSERVER_REPOSITORIES_PATH = "/installation/repositories?per_page=100"
 PUBLISHER_ACTOR = {"__typename": "App", "id": PUBLISHER_APP_NODE_ID,
                    "databaseId": PUBLISHER_APP_ID, "slug": "sedna-release-publisher"}
 QUEUE_MAINTENANCE_ACTORS = [{"actor_id": PUBLISHER_APP_ID, "actor_type": "Integration", "bypass_mode": "always"}]
@@ -548,7 +559,35 @@ def plan_maintenance(administrator_before: object, read_token_before: object) ->
     }
 
 
-def protection_snapshot_from_api(api: Api) -> dict:
+def validate_observer_identity(api: Api) -> dict:
+    viewer = api.post_graphql(OBSERVER_VIEWER_QUERY, {})
+    data = viewer.get("data") if isinstance(viewer, dict) else None
+    actor = data.get("viewer") if isinstance(data, dict) else None
+    if (not isinstance(viewer, dict) or viewer.get("errors") or not isinstance(actor, dict)
+            or actor.get("login") != f"{OBSERVER_APP_SLUG}[bot]"):
+        raise PublicationError("protection observer is not the expected authenticated App bot")
+    app = api.get(f"/apps/{OBSERVER_APP_SLUG}")
+    if (not isinstance(app, dict) or app.get("id") != OBSERVER_APP_ID
+            or app.get("node_id") != OBSERVER_APP_NODE_ID or app.get("slug") != OBSERVER_APP_SLUG
+            or app.get("permissions") != OBSERVER_APP_GRANTS):
+        raise PublicationError("protection observer App identity or read-only grant ceiling changed")
+    selected = api.get(OBSERVER_REPOSITORIES_PATH)
+    repositories = selected.get("repositories") if isinstance(selected, dict) else None
+    if (not isinstance(selected, dict) or type(selected.get("total_count")) is not int or selected["total_count"] != 1
+            or not isinstance(repositories, list) or len(repositories) != 1
+            or not isinstance(repositories[0], dict) or repositories[0].get("id") != REPOSITORY_ID
+            or repositories[0].get("full_name") != REPOSITORY):
+        raise PublicationError("protection observer token is not scoped to exactly the selected repository")
+    return {"schema": "history-rewrite-protection-observer-v1", "app_id": OBSERVER_APP_ID,
+            "app_slug": OBSERVER_APP_SLUG, "installation_id": OBSERVER_INSTALLATION_ID,
+            "repository": REPOSITORY, "repository_id": REPOSITORY_ID,
+            "authenticated_login": viewer["data"]["viewer"]["login"],
+            "requested_token_permissions": OBSERVER_PERMISSIONS,
+            "token_scope_source": "pinned token action with explicit repository and permission inputs; authenticated bot and repository readback",
+            "app_grants": app["permissions"]}
+
+
+def protection_snapshot_from_api(api: Api, *, api_dir: Path | None = None) -> dict:
     branch_document = api.post_graphql(BRANCH_PROTECTION_QUERY, {"owner": "sednalabs", "name": "codex"})
     if isinstance(branch_document, dict) and branch_document.get("errors"):
         # Partial data is not an empty inventory. Do not retry with another
@@ -563,7 +602,14 @@ def protection_snapshot_from_api(api: Api) -> dict:
     documents = [api.get(f"/repos/{REPOSITORY}/rulesets/{item.get('id')}") for item in listing if isinstance(item, dict)]
     if len(documents) != len(listing):
         raise PublicationError("repository ruleset listing contains a malformed identity")
-    return normalize_protection_snapshot(branch_document, documents)
+    result = normalize_protection_snapshot(branch_document, documents)
+    if api_dir is not None:
+        api_dir.mkdir(parents=True, exist_ok=True)
+        write_json(api_dir / "branch-protection-rules.json", branch_document)
+        write_json(api_dir / "rulesets.json", listing)
+        for document in documents:
+            write_json(api_dir / f"ruleset-{document['id']}.json", document)
+    return result
 
 
 def validate_approval(approvals: object) -> None:
@@ -775,7 +821,7 @@ def validate_preflight(manifest: dict, *, frozen_sha: str, frozen_tree: str, man
         "approval": {"id": REVIEWER_ID, "login": REVIEWER_LOGIN},
         "writer_check": writer_check,
         "protection_snapshot_sha256": digest(live_protection),
-        "status": "verified-before-app-token",
+        "status": "verified-before-publisher-token",
     })
 
 
@@ -838,7 +884,7 @@ def validate_phase_bindings(manifest: dict, *, frozen_sha: str, frozen_tree: str
         or preflight.get("approval") != {"id": REVIEWER_ID, "login": REVIEWER_LOGIN}
         or preflight.get("writer_check") != expected_writer_check
         or preflight.get("protection_snapshot_sha256") != manifest["controls"]["protection_snapshot_sha256"]
-        or preflight.get("status") != "verified-before-app-token"
+        or preflight.get("status") != "verified-before-publisher-token"
     ):
         raise PublicationError("durable preflight binding mismatch")
     plan = load_object(control_plan, "control plan")
@@ -968,13 +1014,13 @@ def resolve_push_failure(output: Mapping[str, str], error: PublicationError, rea
 
 
 def publish_repository(manifest: dict, *, frozen_sha: str, frozen_tree: str, manifest_sha256: str,
-                       preflight_path: Path, control_plan: Path, intent_path: Path, read_api: Api,
+                       preflight_path: Path, control_plan: Path, intent_path: Path, read_api: Api, observer_api: Api,
                        current_run_id: int, repo: Path, remote_url: str, token: str | None = None) -> PublicationResult:
     selected, output = validate_phase_bindings(
         manifest, frozen_sha=frozen_sha, frozen_tree=frozen_tree, manifest_sha256=manifest_sha256,
         preflight_path=preflight_path, control_plan=control_plan, intent_path=intent_path,
     )
-    final_state = verify_live_publication_state(manifest, read_api, current_run_id=current_run_id)
+    final_state = verify_live_publication_state(manifest, read_api, observer_api=observer_api, current_run_id=current_run_id)
     env, credential_root = credential_environment(remote_url, token)
     try:
         before = advertised_refs(remote_url, env=env)
@@ -1054,12 +1100,26 @@ class GitHubApi:
         return self._request("POST", "/graphql", {"query": query, "variables": dict(variables)})
 
 
+def observer_api_from_environment() -> GitHubApi:
+    token = os.environ.get("HISTORY_REWRITE_OBSERVER_TOKEN", "")
+    if not token or token in {os.environ.get("GH_TOKEN"), os.environ.get("HISTORY_REWRITE_READ_TOKEN")}:
+        raise PublicationError("a distinct protection observer token is required; no credential fallback is allowed")
+    if (os.environ.get("HISTORY_REWRITE_OBSERVER_INSTALLATION_ID") != str(OBSERVER_INSTALLATION_ID)
+            or os.environ.get("HISTORY_REWRITE_OBSERVER_APP_SLUG") != OBSERVER_APP_SLUG):
+        raise PublicationError("pinned token-action observer installation or App output mismatched")
+    return GitHubApi(token)
+
+
 class FixtureApi:
     """File-backed API restricted to the hosted disposable-remote fixture."""
     def __init__(self, state: dict):
         self.state = state
 
     def get(self, path: str) -> object:
+        if path == OBSERVER_REPOSITORIES_PATH:
+            return self.state["observer_repositories"]
+        if path == f"/apps/{OBSERVER_APP_SLUG}":
+            return self.state["observer_app"]
         if path == "/installation":
             return self.state["installation"]
         if path.startswith("/apps/"):
@@ -1084,6 +1144,8 @@ class FixtureApi:
         workflow["state"] = "active" if action == "enable" else "disabled_manually"
 
     def post_graphql(self, query: str, variables: Mapping[str, str]) -> object:
+        if query == OBSERVER_VIEWER_QUERY:
+            return self.state["observer_viewer"]
         return self.state["branch_protection_document"]
 
 
@@ -1210,7 +1272,8 @@ def check_writers_once(api: Api, *, current_run_id: int) -> dict:
     return check_writer_documents(documents, current_run_id=current_run_id)
 
 
-def verify_live_publication_state(manifest: dict, api: Api, *, current_run_id: int) -> dict:
+def verify_live_publication_state(manifest: dict, api: Api, *, observer_api: Api, current_run_id: int) -> dict:
+    observer = validate_observer_identity(observer_api)
     states = {}
     for path, workflow_id in WRITER_WORKFLOWS.items():
         live = api.get(f"/repos/{REPOSITORY}/actions/workflows/{workflow_id}")
@@ -1221,7 +1284,7 @@ def verify_live_publication_state(manifest: dict, api: Api, *, current_run_id: i
     if not isinstance(mirror, dict) or mirror.get("id") != MIRROR_WORKFLOW_ID or mirror.get("state") != "disabled_manually":
         raise PublicationError("mirror workflow is not in its required continuing pause")
     writer_check = check_writers_once(api, current_run_id=current_run_id)
-    protection = protection_snapshot_from_api(api)
+    protection = protection_snapshot_from_api(observer_api)
     if protection != manifest["controls"]["protection_snapshot"]:
         raise PublicationError("immediate pre-push protection or publisher App exception readback changed")
     return {
@@ -1230,6 +1293,7 @@ def verify_live_publication_state(manifest: dict, api: Api, *, current_run_id: i
         "mirror": {"id": MIRROR_WORKFLOW_ID, "state": "disabled_manually"},
         "writer_check": writer_check,
         "protection_snapshot_sha256": digest(protection),
+        "protection_observer": observer,
     }
 
 
@@ -1369,6 +1433,10 @@ def main() -> int:
     decode.add_argument("--output", type=Path, required=True); decode.add_argument("--manifest-sha256", required=True)
     snapshot = sub.add_parser("snapshot")
     snapshot.add_argument("--output", type=Path, required=True)
+    observer_snapshot = sub.add_parser("observer-snapshot")
+    observer_snapshot.add_argument("--output", type=Path, required=True)
+    observer_snapshot.add_argument("--identity-output", type=Path, required=True)
+    observer_snapshot.add_argument("--api-dir", type=Path)
     planning = sub.add_parser("plan-maintenance")
     planning.add_argument("--administrator-before", type=Path, required=True)
     planning.add_argument("--read-token-before", type=Path, required=True)
@@ -1415,6 +1483,13 @@ def main() -> int:
             value = protection_snapshot_from_api(GitHubApi(os.environ.get("GH_TOKEN", "")))
             validate_snapshot_shape(value)
             write_json(ns.output, value)
+        elif ns.command == "observer-snapshot":
+            api = observer_api_from_environment()
+            identity = validate_observer_identity(api)
+            value = protection_snapshot_from_api(api, api_dir=ns.api_dir)
+            validate_snapshot_shape(value)
+            write_json(ns.output, value)
+            write_json(ns.identity_output, identity)
         elif ns.command == "plan-maintenance":
             write_json(ns.output, plan_maintenance(load_object(ns.administrator_before), load_object(ns.read_token_before)))
         elif ns.command == "custody":
@@ -1450,15 +1525,18 @@ def main() -> int:
                 if ns.fixture_api is not None:
                     if os.environ.get("HISTORY_REWRITE_PUBLICATION_FIXTURE") != "1" or ns.remote_url.startswith(("http://", "https://")):
                         raise PublicationError("fixture API is restricted to an explicit local-remote fixture")
-                    publisher_api = read_api = FixtureApi(load_object(ns.fixture_api, "fixture API state"))
+                    fixture_state = load_object(ns.fixture_api, "fixture API state")
+                    publisher_api = read_api = FixtureApi(fixture_state)
+                    observer_api = FixtureApi(fixture_state)
                 else:
                     publisher_api = GitHubApi(os.environ.get("GH_TOKEN", ""))
                     read_api = GitHubApi(os.environ.get("HISTORY_REWRITE_READ_TOKEN", ""))
+                    observer_api = observer_api_from_environment()
                 publisher = validate_publisher_identity(publisher_api)
                 result = publish_repository(
                     manifest, frozen_sha=ns.frozen_sha, frozen_tree=ns.frozen_tree,
                     manifest_sha256=ns.manifest_sha256, preflight_path=ns.preflight,
-                    control_plan=ns.control_plan, intent_path=ns.intent, read_api=read_api,
+                    control_plan=ns.control_plan, intent_path=ns.intent, read_api=read_api, observer_api=observer_api,
                     current_run_id=ns.current_run_id, repo=ns.repo, remote_url=ns.remote_url,
                     token=os.environ.get("GH_TOKEN"),
                 )

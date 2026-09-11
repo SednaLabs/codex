@@ -623,7 +623,7 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
     proof_digests = {}
     for name in publication_module.ARTIFACT_FILES:
         proof_digests[name] = hashlib.sha256((approved / name).read_bytes()).hexdigest()
-    from publication_fixtures import MockApi, base_manifest
+    from publication_fixtures import MockApi, base_manifest, observer_fixture_documents
     fixture_manifest = base_manifest()
     controls = fixture_manifest["controls"]
     protection = controls["protection_snapshot"]
@@ -671,7 +671,7 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
         "approval": {"id": publication_module.REVIEWER_ID, "login": publication_module.REVIEWER_LOGIN},
         "writer_check": {"schema": "history-rewrite-writer-check-v1", "active": [], "status": "drained-at-single-read"},
         "protection_snapshot_sha256": manifest["controls"]["protection_snapshot_sha256"],
-        "status": "verified-before-app-token",
+        "status": "verified-before-publisher-token",
     })
     fixture_api = root / "fixture-api.json"
     workflows = {
@@ -682,6 +682,7 @@ def publication_pipeline_fixture(root: Path, remote: Path, source_sha: str, rewr
         "id": publication_module.MIRROR_WORKFLOW_ID, "path": ".github/workflows/sedna-sync-upstream.yml", "state": "disabled_manually",
     }
     write_json(fixture_api, {
+        **observer_fixture_documents(),
         "installation": {"app_id": publication_module.PUBLISHER_APP_ID, "app_slug": "fixture-publisher"},
         "app": {"id": publication_module.PUBLISHER_APP_ID, "node_id": publication_module.PUBLISHER_APP_NODE_ID},
         "workflows": workflows,

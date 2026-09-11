@@ -82,6 +82,8 @@ jobs:
     if: inputs.mode == 'snapshot'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment:
+      name: history-rewrite-publication
     permissions:
       contents: read
       actions: read
@@ -90,9 +92,33 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Verify the frozen observer workflow host
+        env:
+          HARNESS_SHA: ${{ inputs.workflow_harness_sha }}
+          HARNESS_TREE: ${{ inputs.workflow_harness_tree }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "sednalabs/codex"
+          test "$GITHUB_REF_NAME" = "repair/history-rewrite-publication-w13828"
+          test "$GITHUB_SHA" = "$HARNESS_SHA"
+          test "$(git rev-parse "$GITHUB_SHA^{tree}")" = "$HARNESS_TREE"
+      - name: Mint repository-scoped protection observer
+        id: protection_observer
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: Iv23liJxB0M5u6W3cehS
+          private-key: ${{ secrets.HISTORY_REWRITE_OBSERVER_APP_PRIVATE_KEY }}
+          owner: sednalabs
+          repositories: codex
+          permission-administration: read
+          permission-metadata: read
+          skip-token-revoke: false
       - name: Capture read-token protection observation without publication authority
         env:
           GH_TOKEN: ${{ github.token }}
+          HISTORY_REWRITE_OBSERVER_TOKEN: ${{ steps.protection_observer.outputs.token }}
+          HISTORY_REWRITE_OBSERVER_INSTALLATION_ID: ${{ steps.protection_observer.outputs.installation-id }}
+          HISTORY_REWRITE_OBSERVER_APP_SLUG: ${{ steps.protection_observer.outputs.app-slug }}
           HARNESS_SHA: ${{ inputs.workflow_harness_sha }}
           HARNESS_TREE: ${{ inputs.workflow_harness_tree }}
         run: |
@@ -103,9 +129,10 @@ jobs:
           test "$(git rev-parse "$GITHUB_SHA^{tree}")" = "$HARNESS_TREE"
           root="$RUNNER_TEMP/history-rewrite-snapshot"
           mkdir -m 700 "$root"
-          python3 scripts/history-rewrite/publication.py snapshot --output "$root/protection-snapshot.json"
+          python3 scripts/history-rewrite/publication.py observer-snapshot \
+            --output "$root/protection-snapshot.json" --identity-output "$root/observer-identity.json"
           jq -n --arg run_id "$GITHUB_RUN_ID" --arg head_sha "$GITHUB_SHA" --arg tree "$HARNESS_TREE" \
-            '{run_id:$run_id,head_sha:$head_sha,tree:$tree,principal:"GITHUB_TOKEN; contents/actions/deployments read",status:"observation only; no maintenance or publication authorization"}' > "$root/binding.json"
+            '{run_id:$run_id,head_sha:$head_sha,tree:$tree,principal:"protection observer App; administration/metadata read requested",status:"observation only; no maintenance or publication authorization"}' > "$root/binding.json"
           sha256sum "$root/protection-snapshot.json" > "$root/snapshot.sha256"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
@@ -547,7 +574,7 @@ jobs:
           python3 scripts/history-rewrite/publication.py decode \
             --output "$RUNNER_TEMP/history-rewrite-publication/manifest.json" \
             --manifest-sha256 "$MANIFEST_SHA256"
-      - name: Read live controls, approval, backup, and proof before App credentials
+      - name: Read workflow controls, approval, backup, and proof before publisher credentials
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -596,15 +623,30 @@ jobs:
               jq -s . "$api"/writer-runs-"$workflow_id"-*.json > "$api/writer-runs-$workflow_id.json"
             fi
           done
-          protection_query=$(python3 -c 'import sys; sys.path.insert(0,"scripts/history-rewrite"); from publication import BRANCH_PROTECTION_QUERY; print(BRANCH_PROTECTION_QUERY)')
-          gh api graphql -f owner=sednalabs -f name=codex -f query="$protection_query" > "$api/branch-protection-rules.json"
-          gh api "repos/$GITHUB_REPOSITORY/rulesets?includes_parents=true&per_page=100" > "$api/rulesets.json"
-          jq -er '.[].id' "$api/rulesets.json" | while read -r ruleset_id; do
-            gh api "repos/$GITHUB_REPOSITORY/rulesets/$ruleset_id" > "$api/ruleset-$ruleset_id.json"
-          done
-          python3 scripts/history-rewrite/publication.py preflight "$manifest" \
+      - name: Mint repository-scoped protection observer
+        id: protection_observer
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: Iv23liJxB0M5u6W3cehS
+          private-key: ${{ secrets.HISTORY_REWRITE_OBSERVER_APP_PRIVATE_KEY }}
+          owner: sednalabs
+          repositories: codex
+          permission-administration: read
+          permission-metadata: read
+          skip-token-revoke: false
+      - name: Observe protection state through the separate read-only App
+        env:
+          HISTORY_REWRITE_OBSERVER_TOKEN: ${{ steps.protection_observer.outputs.token }}
+          HISTORY_REWRITE_OBSERVER_INSTALLATION_ID: ${{ steps.protection_observer.outputs.installation-id }}
+          HISTORY_REWRITE_OBSERVER_APP_SLUG: ${{ steps.protection_observer.outputs.app-slug }}
+        run: |
+          set -euo pipefail; umask 077
+          root="$RUNNER_TEMP/history-rewrite-publication"
+          python3 scripts/history-rewrite/publication.py observer-snapshot \
+            --output "$root/api/protection-snapshot.json" --identity-output "$root/api/observer-identity.json" --api-dir "$root/api"
+          python3 scripts/history-rewrite/publication.py preflight "$root/manifest.json" \
             --frozen-sha "$HARNESS_SHA" --frozen-tree "$HARNESS_TREE" \
-            --manifest-sha256 "$MANIFEST_SHA256" --api-dir "$api" --output "$root/preflight"
+            --manifest-sha256 "$MANIFEST_SHA256" --api-dir "$root/api" --output "$root/preflight"
       - name: Install pinned git-filter-repo for deterministic regeneration
         run: |
           set -euo pipefail
@@ -640,7 +682,7 @@ jobs:
             ${{ runner.temp }}/history-rewrite-publication/preflight/preflight.json
           if-no-files-found: error
           retention-days: 30
-      - name: Check release publisher App configuration after all non-credential gates
+      - name: Check release publisher App configuration after all pre-publication gates
         env:
           APP_CLIENT_ID: ${{ vars.SEDNA_RELEASE_PUBLISHER_APP_CLIENT_ID }}
           APP_PRIVATE_KEY: ${{ secrets.SEDNA_RELEASE_PUBLISHER_APP_PRIVATE_KEY }}
@@ -681,6 +723,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.release_publisher_token.outputs.token }}
           HISTORY_REWRITE_READ_TOKEN: ${{ github.token }}
+          HISTORY_REWRITE_OBSERVER_TOKEN: ${{ steps.protection_observer.outputs.token }}
+          HISTORY_REWRITE_OBSERVER_INSTALLATION_ID: ${{ steps.protection_observer.outputs.installation-id }}
+          HISTORY_REWRITE_OBSERVER_APP_SLUG: ${{ steps.protection_observer.outputs.app-slug }}
         run: |
           set -euo pipefail; umask 077
           root="$RUNNER_TEMP/history-rewrite-publication"

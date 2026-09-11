@@ -6,12 +6,14 @@ import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import zipfile
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import publication
@@ -161,14 +163,28 @@ def expect_failure(name: str, function) -> str:
     raise SystemExit(f"negative publication fixture unexpectedly passed: {name}")
 
 
+def observer_fixture_documents() -> dict:
+    return {
+        "observer_viewer": {"data": {"viewer": {"login": f"{publication.OBSERVER_APP_SLUG}[bot]"}}},
+        "observer_app": {"id": publication.OBSERVER_APP_ID, "node_id": publication.OBSERVER_APP_NODE_ID,
+                         "slug": publication.OBSERVER_APP_SLUG, "permissions": dict(publication.OBSERVER_APP_GRANTS)},
+        "observer_repositories": {"total_count": 1, "repositories": [{"id": publication.REPOSITORY_ID, "full_name": publication.REPOSITORY}]},
+    }
+
+
 class MockApi:
     def __init__(self, states: dict[int, str], runs: dict[int, list[dict]] | None = None, protection: dict | None = None):
         self.states = dict(states)
         self.runs = runs or {}
         self.protection = protection or protection_snapshot()
         self.mutations: list[tuple[int, str]] = []
+        self.observer = observer_fixture_documents()
 
     def get(self, path: str) -> object:
+        if path == publication.OBSERVER_REPOSITORIES_PATH:
+            return self.observer["observer_repositories"]
+        if path == f"/apps/{publication.OBSERVER_APP_SLUG}":
+            return self.observer["observer_app"]
         if path == "/installation":
             return {"app_id": publication.PUBLISHER_APP_ID, "app_slug": "fixture-publisher"}
         if path == "/apps/fixture-publisher":
@@ -198,6 +214,8 @@ class MockApi:
         self.mutations.append((workflow_id, action))
 
     def post_graphql(self, query: str, variables: dict[str, str]) -> object:
+        if query == publication.OBSERVER_VIEWER_QUERY:
+            return self.observer["observer_viewer"]
         nodes = []
         for item in self.protection["branch_protection_rules"]:
             nodes.append({
@@ -226,6 +244,29 @@ class MockApi:
                 ]},
             })
         return {"data": {"repository": {"branchProtectionRules": {"totalCount": len(nodes), "nodes": nodes}}}}
+
+
+class ObserverOnlyApi(MockApi):
+    def get(self, path):
+        if path == publication.OBSERVER_REPOSITORIES_PATH or path == f"/apps/{publication.OBSERVER_APP_SLUG}" or path.startswith(f"/repos/{publication.REPOSITORY}/rulesets"):
+            return super().get(path)
+        raise SystemExit("observer received a non-protection API operation")
+
+    def put(self, path):
+        raise SystemExit("observer received a mutation")
+
+
+class WorkflowOnlyApi(MockApi):
+    def get(self, path):
+        if path.startswith(f"/repos/{publication.REPOSITORY}/actions/workflows/"):
+            return super().get(path)
+        raise SystemExit("workflow reader received an observer API operation")
+
+    def post_graphql(self, query, variables):
+        raise SystemExit("workflow reader received a protection GraphQL operation")
+
+    def put(self, path):
+        raise SystemExit("workflow reader received a mutation")
 
 
 def control_plan(manifest: dict) -> dict:
@@ -258,7 +299,7 @@ def phase_files(root: Path, manifest: dict) -> tuple[Path, Path, Path, Path]:
         "approval": {"id": publication.REVIEWER_ID, "login": publication.REVIEWER_LOGIN},
         "writer_check": {"schema": "history-rewrite-writer-check-v1", "active": [], "status": "drained-at-single-read"},
         "protection_snapshot_sha256": manifest["controls"]["protection_snapshot_sha256"],
-        "status": "verified-before-app-token",
+        "status": "verified-before-publisher-token",
     })
     publication.write_json(plan_path, control_plan(manifest))
     publication.write_json(intent, {
@@ -289,11 +330,12 @@ def git_adapter_fixture(root: Path) -> tuple[str, str]:
     output = {"refs/heads/main": new, "refs/tags/v1": new}
     manifest = base_manifest(selected, output)
     _, preflight, plan, intent = phase_files(root, manifest)
-    api = MockApi({231747419: "disabled_manually", 250252266: "disabled_manually", publication.MIRROR_WORKFLOW_ID: "disabled_manually"})
+    api = WorkflowOnlyApi({231747419: "disabled_manually", 250252266: "disabled_manually", publication.MIRROR_WORKFLOW_ID: "disabled_manually"})
+    observer_api = ObserverOnlyApi({})
     result = publication.publish_repository(
         manifest, frozen_sha=manifest["harness_sha"], frozen_tree=manifest["harness_tree"],
         manifest_sha256=digest(manifest), preflight_path=preflight, control_plan=plan, intent_path=intent,
-        read_api=api, current_run_id=99, repo=source / ".git", remote_url=str(remote),
+        read_api=api, observer_api=observer_api, current_run_id=99, repo=source / ".git", remote_url=str(remote),
     )
     if result.outcome != "success" or publication.advertised_refs(str(remote)) != output:
         raise SystemExit("production Git adapter did not publish the exact disposable ref map")
@@ -307,7 +349,7 @@ def git_adapter_fixture(root: Path) -> tuple[str, str]:
     rejected_result = publication.publish_repository(
         manifest, frozen_sha=manifest["harness_sha"], frozen_tree=manifest["harness_tree"],
         manifest_sha256=digest(manifest), preflight_path=preflight, control_plan=plan, intent_path=intent,
-        read_api=api, current_run_id=99, repo=source / ".git", remote_url=str(rejected),
+        read_api=api, observer_api=observer_api, current_run_id=99, repo=source / ".git", remote_url=str(rejected),
     )
     if rejected_result.outcome != "ambiguous" or publication.advertised_refs(str(rejected)) != selected:
         raise SystemExit("atomic rejection fixture changed a disposable remote ref")
@@ -407,6 +449,67 @@ def custody_fixtures() -> list[str]:
         ):
             changed = copy.deepcopy(destination); changed[key] = value
             evidence.append(expect_failure(name, lambda value=changed: verify_destination(value)))
+    return evidence
+
+
+def observer_fixtures() -> list[str]:
+    evidence = []
+    observer = ObserverOnlyApi({})
+    identity = publication.validate_observer_identity(observer)
+    if identity["app_id"] != publication.OBSERVER_APP_ID or identity["requested_token_permissions"] != {"administration": "read", "metadata": "read"}:
+        raise SystemExit("observer identity receipt is incomplete")
+    evidence.append("observer_exact_authenticated_identity_and_repository")
+    changes = {
+        "workflow_token_rejected": lambda value: value["observer_viewer"]["data"]["viewer"].update(login="github-actions[bot]"),
+        "publisher_token_rejected": lambda value: value["observer_viewer"]["data"]["viewer"].update(login="sedna-release-publisher[bot]"),
+        "operator_token_rejected": lambda value: value["observer_viewer"]["data"]["viewer"].update(login="operator-fixture"),
+        "viewer_null": lambda value: value.update(observer_viewer={"data": None}),
+        "viewer_errors": lambda value: value["observer_viewer"].update(errors=[{"type": "FORBIDDEN"}]),
+        "wrong_app_id": lambda value: value["observer_app"].update(id=1),
+        "wrong_app_node": lambda value: value["observer_app"].update(node_id="other"),
+        "app_write_grant": lambda value: value["observer_app"]["permissions"].update(administration="write"),
+        "app_extra_grant": lambda value: value["observer_app"]["permissions"].update(unknown="read"),
+        "app_missing_grant": lambda value: value["observer_app"]["permissions"].pop("administration"),
+        "wrong_repository_id": lambda value: value["observer_repositories"]["repositories"][0].update(id=1),
+        "wrong_repository_name": lambda value: value["observer_repositories"]["repositories"][0].update(full_name="other/repository"),
+        "multiple_repositories": lambda value: value["observer_repositories"].update(total_count=2),
+        "hidden_extra_repository": lambda value: value["observer_repositories"]["repositories"].append({"id": 2}),
+        "repository_count_boolean": lambda value: value["observer_repositories"].update(total_count=True),
+    }
+    for name, change in changes.items():
+        invalid = ObserverOnlyApi({}); change(invalid.observer)
+        evidence.append(expect_failure(f"observer_{name}", lambda api=invalid: publication.validate_observer_identity(api)))
+
+    class ExpiredObserver(ObserverOnlyApi):
+        def post_graphql(self, query, variables):
+            raise PublicationError("observer token expired or denied; HTTP 401")
+
+    workflow_reader = WorkflowOnlyApi({231747419: "disabled_manually", 250252266: "disabled_manually", publication.MIRROR_WORKFLOW_ID: "disabled_manually"})
+    evidence.append(expect_failure("observer_expiry_does_not_fallback_to_workflow_reader",
+                                   lambda: publication.verify_live_publication_state(base_manifest(), workflow_reader,
+                                   observer_api=ExpiredObserver({}), current_run_id=99)))
+    good_environment = {"HISTORY_REWRITE_OBSERVER_TOKEN": "fixture-observer-token",
+                        "HISTORY_REWRITE_OBSERVER_INSTALLATION_ID": str(publication.OBSERVER_INSTALLATION_ID),
+                        "HISTORY_REWRITE_OBSERVER_APP_SLUG": publication.OBSERVER_APP_SLUG,
+                        "GH_TOKEN": "fixture-publisher-token", "HISTORY_REWRITE_READ_TOKEN": "fixture-workflow-token"}
+    with patch.dict(os.environ, good_environment, clear=True):
+        publication.observer_api_from_environment()
+    for name, field, value in (
+        ("missing_token", "HISTORY_REWRITE_OBSERVER_TOKEN", ""),
+        ("publisher_alias", "HISTORY_REWRITE_OBSERVER_TOKEN", "fixture-publisher-token"),
+        ("workflow_alias", "HISTORY_REWRITE_OBSERVER_TOKEN", "fixture-workflow-token"),
+        ("wrong_installation_output", "HISTORY_REWRITE_OBSERVER_INSTALLATION_ID", "1"),
+        ("missing_installation_output", "HISTORY_REWRITE_OBSERVER_INSTALLATION_ID", ""),
+        ("wrong_app_output", "HISTORY_REWRITE_OBSERVER_APP_SLUG", "other"),
+    ):
+        with patch.dict(os.environ, {**good_environment, field: value}, clear=True):
+            evidence.append(expect_failure(f"observer_{name}", publication.observer_api_from_environment))
+    with tempfile.TemporaryDirectory() as temporary:
+        api_dir = Path(temporary)
+        captured = publication.protection_snapshot_from_api(observer, api_dir=api_dir)
+        if captured != publication.protection_snapshot_from_files(api_dir):
+            raise SystemExit("observer API capture changed the preflight protection evidence")
+    evidence.append("observer_capture_preserves_preflight_protection_evidence")
     return evidence
 
 
@@ -564,11 +667,29 @@ def main() -> None:
         block = workflow.split(f"\n  {job_name}:\n", 1)[1].split("\n  synthetic:\n", 1)[0]
         if job_name == "snapshot":
             block = block.split("\n  custody:\n", 1)[0]
-        if any(forbidden in block for forbidden in ("secrets.", "environment:", "contents: write", "actions: write", "create-github-app-token", " controls ", " publish ")):
+        forbidden = ("contents: write", "actions: write", " controls ", " publish ", "SEDNA_RELEASE_PUBLISHER")
+        if job_name == "custody":
+            forbidden += ("secrets.", "environment:", "create-github-app-token")
+        elif re.findall(r"secrets\.([A-Z_]+)", block) != ["HISTORY_REWRITE_OBSERVER_APP_PRIVATE_KEY"] or "name: history-rewrite-publication" not in block:
+            raise SystemExit("snapshot does not isolate its approved observer credential and environment")
+        if any(value in block for value in forbidden):
             raise SystemExit(f"{job_name} workflow acquired publication capability")
         if f"if: inputs.mode == '{job_name}'" not in block:
             raise SystemExit(f"{job_name} mode can enter through another dispatch")
     evidence.append("snapshot_and_custody_job_capability_exclusions")
+    token_blocks = workflow.split("      - name: Mint repository-scoped protection observer\n")[1:]
+    if len(token_blocks) != 2:
+        raise SystemExit("observer mint placement differs from the two admitted jobs")
+    for remainder in token_blocks:
+        block = remainder.split("      - name:", 1)[0]
+        for required in ("actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3", "client-id: Iv23liJxB0M5u6W3cehS",
+                         "owner: sednalabs", "repositories: codex", "permission-administration: read", "permission-metadata: read", "skip-token-revoke: false"):
+            if required not in block:
+                raise SystemExit(f"observer mint omitted its explicit binding: {required}")
+        if re.findall(r"permission-([a-z-]+): ([a-z]+)", block) != [("administration", "read"), ("metadata", "read")]:
+            raise SystemExit("observer token permission request escaped its exact two-read boundary")
+    evidence.append("observer_mint_repository_permission_and_revocation_contract")
+    evidence.extend(observer_fixtures())
     evidence.extend(custody_fixtures())
     queue_rule_type_drift = copy.deepcopy(manifest)
     queue_rule_type_drift["controls"]["protection_snapshot"]["repository_rulesets"][0]["rules"].append({

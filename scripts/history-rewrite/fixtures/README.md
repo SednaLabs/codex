@@ -107,21 +107,27 @@ read; the publication receipt records this remaining operational-window risk.
 ## Read-only preparation and finite encrypted custody
 
 Dispatch `mode=snapshot` on the exact admitted existing branch with
-`workflow_harness_sha` and `workflow_harness_tree`. Its job has only read
-permissions, no protected environment, no App secrets, and no publication or
-control-mutation path. This does not grant its token permission to enumerate
-classic protection rules: the default `GITHUB_TOKEN` may be denied that entire
-surface. Such a denial fails closed after one query; neither a narrower query,
-an empty inventory, nor an automatic credential fallback is accepted. A
-separately authorized protection-read observer must be provisioned and bound
-before publication can proceed. That observer should remain separate from the
-publisher and from the administrator who changes controls. This workflow does
-not provision it or silently increase the publisher's permissions.
+`workflow_harness_sha` and `workflow_harness_tree`. The job uses the existing
+`history-rewrite-publication` environment approval and exact branch restriction,
+but has no publication or control-mutation path. After checking the frozen
+workflow host, the pinned token action uses only the environment secret
+`HISTORY_REWRITE_OBSERVER_APP_PRIVATE_KEY`, requests only `administration:read`
+and `metadata:read`, and scopes the token to `sednalabs/codex`. The existing
+observer App and installation remain read-only; publisher permissions are not
+increased. Key provisioning is a separately authorized operation, not performed
+by this workflow.
 
-With an authorized observation principal, capture the normal,
-publication-blocked state. Capture a separate administrator snapshot with the
-same `snapshot` CLI under that separately authorized principal. Prepare
-expected state without changing GitHub:
+`observer-snapshot` requires its distinct token and the pinned action's expected
+installation and App outputs. It verifies the authenticated App bot, the App's
+exact read-only grant ceiling, and the token's complete single-repository
+selection before reading protections. The receipt distinguishes the requested
+token permissions from the broader existing App grant ceiling. Missing,
+misrouted, expired or denied credentials fail closed, without a workflow-token,
+publisher-token or operator-token fallback. Missing ruleset actor visibility
+still requires separate administrator readback; it is not invented by this
+observer. Capture the normal, publication-blocked state this way, and use the
+generic `snapshot` CLI under the separately authorized administrator for the
+full administrator snapshot. Prepare expected state without changing GitHub:
 
 ```text
 python3 scripts/history-rewrite/publication.py plan-maintenance \
@@ -139,6 +145,17 @@ precede publication. Restore exact original protections and remove the queue
 exception on success or failure. Administrative rollback is separate from
 the App's writer-restoration CLI, including after a killed runner. Never leave
 the maintenance window open while developing or repeating review.
+
+Publication keeps three credential roles separate: the workflow token reads
+artifacts, approvals and writer state; the observer reads protection state;
+the publisher changes only its existing authorized writer/ref surfaces. The
+immediate pre-push read repeats observer identity and protection verification.
+The pinned action revokes observer tokens at normal job completion. A killed
+runner relies on the provider's one-hour token expiry; an expired observer
+cannot be replaced by another principal. The operator removes the temporary
+environment-secret copy after completion, rollback or abandonment and verifies
+its absence. Do not revoke a shared original App key or uninstall its existing
+installation as part of that cleanup. Custody does not depend on this secret.
 
 `mode=custody` is a separate hosted, read-permission job. Its canonical
 `history-rewrite-custody-v1` manifest binds `repository`,
