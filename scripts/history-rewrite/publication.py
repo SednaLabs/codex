@@ -459,8 +459,10 @@ def validate_protection_snapshot(snapshot: object) -> None:
     for ref in PROTECTED_REFS:
         branch = ref.removeprefix("refs/heads/")
         matches = [item for item in branch_rules if isinstance(item, dict) and item.get("pattern") == branch]
-        if len(matches) != 1 or matches[0].get("allows_force_pushes") is not True:
-            raise PublicationError(f"protected ref lacks an exact temporary force-push rule: {ref}")
+        # The general force-push flag and actor-specific exceptions are distinct.
+        # Only the named publisher exception is admitted, never general access.
+        if len(matches) != 1 or matches[0].get("allows_force_pushes") is not False:
+            raise PublicationError(f"protected ref permits general force pushes: {ref}")
         allowances = matches[0].get("bypass_force_push_allowances")
         rule = matches[0]
         if allowances != [PUBLISHER_ACTOR] or rule["push_allowances"] != [PUBLISHER_ACTOR] or rule["restricts_pushes"] is not True:
@@ -537,7 +539,7 @@ def plan_maintenance(administrator_before: object, read_token_before: object) ->
     for rule in after["branch_protection_rules"]:
         if rule["allows_force_pushes"] or any(rule[key] for key in ("bypass_force_push_allowances", "bypass_pull_request_allowances", "push_allowances")) or rule["restricts_pushes"]:
             raise PublicationError("maintenance preimage differs from the admitted actor/force-push baseline")
-        rule.update(allows_force_pushes=True, restricts_pushes=True,
+        rule.update(allows_force_pushes=False, restricts_pushes=True,
                     bypass_force_push_allowances=[copy.deepcopy(PUBLISHER_ACTOR)], push_allowances=[copy.deepcopy(PUBLISHER_ACTOR)])
         if rule["pattern"] != "upstream-main":
             # Shape validation has already proved a one-to-one correspondence;
@@ -547,7 +549,13 @@ def plan_maintenance(administrator_before: object, read_token_before: object) ->
                     or any(check["app"] != {"databaseId": 15368, "slug": "github-actions"}
                            for check in rule["required_status_checks"])):
                 raise PublicationError("normal status gate/source differs from the admitted maintenance baseline")
-            rule.update(requires_status_checks=False, required_status_checks=[], required_status_check_contexts=[],
+            # GitHub's observed disabled-check representation reports strict=true
+            # (REST has required_status_checks=null). Preserve that raw value:
+            # do not erase it in normalization or accept arbitrary after-state.
+            # The exact live apply/read/restore transition must qualify this
+            # representation; it is not a guarantee for every provider version.
+            rule.update(requires_status_checks=False, requires_strict_status_checks=True,
+                        required_status_checks=[], required_status_check_contexts=[],
                         bypass_pull_request_allowances=[copy.deepcopy(PUBLISHER_ACTOR)])
     queue = [item for item in after["repository_rulesets"] if item["id"] == QUEUE_ONLY_RULESET_ID]
     if len(queue) != 1 or queue[0]["bypass_actors"] != []:

@@ -162,6 +162,39 @@ fresh dispatch. Per-ref atomic leases protect the approved old ref map, but do
 not prevent an external administrator from changing controls after that final
 read; the publication receipt records this remaining operational-window risk.
 
+## Actor-scoped maintenance control representation
+
+The general force-push flag must remain **false**. GitHub distinguishes that
+flag from named force-push exceptions: the REST `allow_force_pushes` field
+permits anyone with write access, while GraphQL `bypassForcePushActorIds` names
+the allowed users, teams or Apps. Maintenance requires exactly the publisher
+App in both the force exception and restricted push lists. A general `true`
+flag is rejected even when those exact lists are present. Pre-existing
+administrator enforcement settings are preserved, not silently broadened.
+See the [REST branch protection contract](https://docs.github.com/en/rest/branches/branch-protection)
+and [GraphQL branch protection types](https://docs.github.com/en/graphql/reference/branches).
+
+Required-check strictness is meaningful only while the check requirement is
+enabled. REST represents disabled required checks as `null`. The observed
+GraphQL disabled state reports `requiresStrictStatusChecks: true`, including
+after disabling previously loose checks. The planner predicts that exact raw
+representation; the normalizer does **not** erase strictness or accept either
+value. This is an observed platform representation, not a documented universal
+serialization guarantee. A bounded live apply/read/restore qualification must
+match the entire expected snapshot before expensive regeneration or any
+publication. Apply requests omit inactive strictness; rollback restores the
+exact enabled preimage, including its original strictness and check sources.
+
+`protection_api_states.json` contains independently authored, bounded API-shaped
+examples for the main rule, not responses generated from the planner or a raw
+production capture. Its before/after GraphQL fields reflect the observed
+transition; its REST projections express the documented contract and must also
+be checked against live probe evidence. Fixtures retain both enabled-loose and
+disabled-raw strictness, reject general force access and missing, foreign or
+extra App exceptions, and preserve unrelated fields and exact rollback state.
+Synthetic success alone does not establish a live control transition or ref
+publication.
+
 ## Read-only preparation and finite encrypted custody
 
 Dispatch `mode=snapshot` on the exact admitted existing branch with

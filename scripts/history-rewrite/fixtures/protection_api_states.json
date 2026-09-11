@@ -1,0 +1,90 @@
+{
+  "before": {
+    "graphql": {
+      "data": {"repository": {"branchProtectionRules": {"totalCount": 1, "nodes": [{
+        "id": "BPR_kwDORLG0B84Eb5kA",
+        "pattern": "main",
+        "allowsForcePushes": false,
+        "isAdminEnforced": true,
+        "requiresStatusChecks": true,
+        "requiredStatusCheckContexts": ["CI required", "CodeQL required gate"],
+        "requiredStatusChecks": [
+          {"context": "CI required", "app": {"databaseId": 15368, "slug": "github-actions"}},
+          {"context": "CodeQL required gate", "app": {"databaseId": 15368, "slug": "github-actions"}}
+        ],
+        "requiresStrictStatusChecks": false,
+        "requiresApprovingReviews": true,
+        "requiredApprovingReviewCount": 0,
+        "requiresConversationResolution": true,
+        "restrictsPushes": false,
+        "requiresCommitSignatures": false,
+        "requiresLinearHistory": false,
+        "lockBranch": false,
+        "requiresDeployments": false,
+        "requiredDeploymentEnvironments": [],
+        "requireLastPushApproval": false,
+        "requiresCodeOwnerReviews": false,
+        "allowsDeletions": false,
+        "blocksCreations": false,
+        "bypassForcePushAllowances": {"totalCount": 0, "nodes": []},
+        "bypassPullRequestAllowances": {"totalCount": 0, "nodes": []},
+        "pushAllowances": {"totalCount": 0, "nodes": []}
+      }]}}}
+    },
+    "rest": {
+      "allow_force_pushes": {"enabled": false},
+      "required_status_checks": {
+        "strict": false,
+        "contexts": ["CI required", "CodeQL required gate"],
+        "checks": [
+          {"context": "CI required", "app_id": 15368},
+          {"context": "CodeQL required gate", "app_id": 15368}
+        ]
+      },
+      "restrictions": null
+    }
+  },
+  "after": {
+    "graphql": {
+      "data": {"repository": {"branchProtectionRules": {"totalCount": 1, "nodes": [{
+        "id": "BPR_kwDORLG0B84Eb5kA",
+        "pattern": "main",
+        "allowsForcePushes": false,
+        "isAdminEnforced": true,
+        "requiresStatusChecks": false,
+        "requiredStatusCheckContexts": [],
+        "requiredStatusChecks": [],
+        "requiresStrictStatusChecks": true,
+        "requiresApprovingReviews": true,
+        "requiredApprovingReviewCount": 0,
+        "requiresConversationResolution": true,
+        "restrictsPushes": true,
+        "requiresCommitSignatures": false,
+        "requiresLinearHistory": false,
+        "lockBranch": false,
+        "requiresDeployments": false,
+        "requiredDeploymentEnvironments": [],
+        "requireLastPushApproval": false,
+        "requiresCodeOwnerReviews": false,
+        "allowsDeletions": false,
+        "blocksCreations": false,
+        "bypassForcePushAllowances": {"totalCount": 1, "nodes": [{"actor": {
+          "__typename": "App", "id": "A_kwHODOdWjM4ANbeH", "databaseId": 3520391, "slug": "sedna-release-publisher"
+        }}]},
+        "bypassPullRequestAllowances": {"totalCount": 1, "nodes": [{"actor": {
+          "__typename": "App", "id": "A_kwHODOdWjM4ANbeH", "databaseId": 3520391, "slug": "sedna-release-publisher"
+        }}]},
+        "pushAllowances": {"totalCount": 1, "nodes": [{"actor": {
+          "__typename": "App", "id": "A_kwHODOdWjM4ANbeH", "databaseId": 3520391, "slug": "sedna-release-publisher"
+        }}]}
+      }]}}}
+    },
+    "rest": {
+      "allow_force_pushes": {"enabled": false},
+      "required_status_checks": null,
+      "restrictions": {
+        "users": [], "teams": [], "apps": [{"id": 3520391, "slug": "sedna-release-publisher"}]
+      }
+    }
+  }
+}

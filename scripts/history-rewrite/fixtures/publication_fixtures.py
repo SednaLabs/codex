@@ -28,12 +28,12 @@ def protection_snapshot() -> dict:
         rules.append({
             "id": publication.PROTECTION_RULE_IDS[branch],
             "pattern": branch,
-            "allows_force_pushes": True,
+            "allows_force_pushes": False,
             "is_admin_enforced": branch != "upstream-main",
             "requires_status_checks": False,
             "required_status_check_contexts": [],
             "required_status_checks": [],
-            "requires_strict_status_checks": branch != "main",
+            "requires_strict_status_checks": True,
             "requires_approving_reviews": branch != "upstream-main",
             "required_approving_review_count": 0,
             "requires_conversation_resolution": True,
@@ -77,6 +77,7 @@ def before_snapshot(*, visible: bool) -> dict:
     for rule in snapshot["branch_protection_rules"]:
         rule.update(allows_force_pushes=False, restricts_pushes=False,
                     bypass_force_push_allowances=[], bypass_pull_request_allowances=[], push_allowances=[])
+        rule["requires_strict_status_checks"] = rule["pattern"] != "main"
         if rule["pattern"] != "upstream-main":
             rule.update(requires_status_checks=True, required_status_check_contexts=["CI required", "CodeQL required gate"],
                         required_status_checks=[{"context": context, "app": {"databaseId": 15368, "slug": "github-actions"}}
@@ -651,11 +652,72 @@ def publisher_fixtures() -> list[str]:
     return evidence
 
 
+def protection_api_contract_fixtures() -> list[str]:
+    """Independent API-shaped main-rule examples, not MockApi round trips."""
+    examples = json.loads(Path(__file__).with_name("protection_api_states.json").read_text())
+    before = before_snapshot(visible=True)
+    original = copy.deepcopy(before)
+    plan = publication.plan_maintenance(before, copy.deepcopy(before))
+    for phase, expected in (("before", plan["administrator_before"]), ("after", plan["administrator_after"])):
+        sample = examples[phase]
+        observed = publication.normalize_protection_snapshot(sample["graphql"], [])
+        rule = observed["branch_protection_rules"][0]
+        expected_main = next(item for item in expected["branch_protection_rules"] if item["pattern"] == "main")
+        if rule != expected_main:
+            raise SystemExit(f"independent API-shaped {phase} rule differs from the plan")
+        rest = sample["rest"]
+        if rest["allow_force_pushes"]["enabled"] is not rule["allows_force_pushes"]:
+            raise SystemExit("REST and GraphQL general force-push flags disagree")
+        if phase == "before":
+            if rest["required_status_checks"]["strict"] is not rule["requires_strict_status_checks"]:
+                raise SystemExit("enabled check strictness was not preserved")
+            if rest["restrictions"] is not None or rule["requires_status_checks"] is not True:
+                raise SystemExit("enabled baseline check/restriction representation changed")
+        else:
+            if rest["required_status_checks"] is not None or rule["requires_status_checks"] is not False:
+                raise SystemExit("disabled required checks were interpreted as an active strict gate")
+            restrictions = rest["restrictions"]
+            if (restrictions["users"] or restrictions["teams"]
+                    or restrictions["apps"] != [{"id": publication.PUBLISHER_APP_ID, "slug": publication.PUBLISHER_APP_SLUG}]):
+                raise SystemExit("REST push restriction is not exact publisher-only")
+            if rule["requires_strict_status_checks"] is not True:
+                raise SystemExit("observed inactive raw strictness was normalized away")
+    if before != original or plan["administrator_before"] != original or plan["read_token_before"] != original:
+        raise SystemExit("planning altered the exact rollback preimage")
+    admitted = {"restricts_pushes", "bypass_force_push_allowances", "push_allowances",
+                "requires_status_checks", "requires_strict_status_checks", "required_status_checks",
+                "required_status_check_contexts", "bypass_pull_request_allowances"}
+    for old, new in zip(original["branch_protection_rules"], plan["administrator_after"]["branch_protection_rules"], strict=True):
+        if {key: value for key, value in old.items() if key not in admitted} != {key: value for key, value in new.items() if key not in admitted}:
+            raise SystemExit("planning changed an unrelated classic protection field")
+        if old["pattern"] == "upstream-main" and old["requires_strict_status_checks"] != new["requires_strict_status_checks"]:
+            raise SystemExit("planning changed untouched disabled-check strictness")
+    changed = copy.deepcopy(examples["after"]["graphql"])
+    changed["data"]["repository"]["branchProtectionRules"]["nodes"][0]["requiresStrictStatusChecks"] = False
+    changed_rule = publication.normalize_protection_snapshot(changed, [])["branch_protection_rules"][0]
+    if changed_rule["requires_strict_status_checks"] is not False:
+        raise SystemExit("normalization concealed an inactive strictness mismatch")
+    return ["independent_api_general_force_vs_actor_allowance", "independent_api_disabled_check_representation",
+            "inactive_strictness_retained_for_exact_comparison", "unrelated_controls_and_exact_rollback_preserved"]
+
+
 def main() -> None:
     manifest = base_manifest()
     evidence = []
     publication.validate_manifest(manifest, frozen_sha="5" * 40, frozen_tree="6" * 40)
     evidence.extend(["manifest_complete", "queue_actor_visibility_is_not_invented"])
+    evidence.extend(protection_api_contract_fixtures())
+    for field in ("requires_strict_status_checks", "is_admin_enforced"):
+        changed = copy.deepcopy(manifest)
+        controls = changed["controls"]
+        plan = controls["maintenance_plan"]
+        for snapshot in (plan["administrator_after"], plan["read_token_after"], controls["protection_snapshot"]):
+            next(rule for rule in snapshot["branch_protection_rules"] if rule["pattern"] == "main")[field] = False
+        controls["maintenance_plan_sha256"] = digest(plan)
+        controls["protection_snapshot_sha256"] = digest(controls["protection_snapshot"])
+        evidence.append(expect_failure(f"self_consistent_after_state_drift_{field}", lambda value=changed: publication.validate_manifest(
+            value, frozen_sha="5" * 40, frozen_tree="6" * 40,
+        )))
     visible_queue_manifest = copy.deepcopy(manifest)
     visible_plan = publication.plan_maintenance(before_snapshot(visible=True), before_snapshot(visible=True))
     visible_queue_manifest["controls"].update(maintenance_plan=visible_plan, maintenance_plan_sha256=digest(visible_plan),
@@ -712,6 +774,10 @@ def main() -> None:
         visible_queue_actors, frozen_sha="5" * 40, frozen_tree="6" * 40,
     )))
     for name, field, value in (
+        ("general_force_pushes_rejected_even_with_exact_app", "allows_force_pushes", True),
+        ("force_exception_missing", "bypass_force_push_allowances", []),
+        ("force_exception_wrong_app", "bypass_force_push_allowances", [{**publication.PUBLISHER_ACTOR, "databaseId": 999}]),
+        ("force_exception_extra_app", "bypass_force_push_allowances", [publication.PUBLISHER_ACTOR, {**publication.PUBLISHER_ACTOR, "databaseId": 999}]),
         ("old_status_gate_blocks_publication", "requires_status_checks", True),
         ("pr_exception_absent", "bypass_pull_request_allowances", []),
         ("push_restriction_absent", "restricts_pushes", False),
